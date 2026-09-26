@@ -1,0 +1,583 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 005 knowledge and expected behaviour
+  version: 0.1.0
+  description: >
+    Draft contract for spec 005. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. Every mutation requires an Idempotency-Key.
+    Retrieval requires a declared questionType; there is no default ranking (FR-004).
+    Adoption in v1 happens **only** as a merge-request approval on the repository (C-06, R-16):
+    the in-product adopt endpoint is declared and explicitly deferred, and the knowledge:adopt
+    capability exists in the permission model with no endpoint serving it. Every adoption, by
+    whichever path, requires a human actor and refuses Healer's own service identity (FR-011, R-02).
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'carries tenantId and actor type',
+      }
+  parameters:
+    ExpectationId:
+      { name: expectationId, in: path, required: true, schema: { type: string, format: uuid } }
+    DocumentId:
+      { name: documentId, in: path, required: true, schema: { type: string, format: uuid } }
+    FindingId: { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+    SessionId: { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - RATE_LIMITED
+            - IDEMPOTENCY_CONFLICT
+            - QUESTION_TYPE_REQUIRED
+            - HUMAN_ACTOR_REQUIRED
+            - SELF_APPROVAL_REFUSED
+            - ANCHOR_NOT_ADOPTED
+            - CONSTRAINT_CONFLICT
+            - DOCUMENT_VERSION_STALE
+            - FRONT_MATTER_INVALID
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+    Freshness:
+      type: object
+      description: 'exposed on every retrieval result (FR-018); never an input to anchor state (R-09)'
+      properties:
+        sourceModifiedAt: { type: string, format: date-time, nullable: true }
+        lastSyncedAt: { type: string, format: date-time, nullable: true }
+        lastVerifiedAt: { type: string, format: date-time, nullable: true }
+    RetrievalResult:
+      description: >
+        Discriminated union on kind (FR-029, C-21). A document result pins a document version and a
+        section; an observation result carries an evidenceId and has neither — an observation has no
+        version to pin, no freshness to sync and no adoption to acquire. Without the union the top
+        trust tier of current_behavior has no expressible result.
+      oneOf:
+        - $ref: '#/components/schemas/DocumentResult'
+        - $ref: '#/components/schemas/ObservationResult'
+      discriminator:
+        propertyName: kind
+        mapping:
+          document: '#/components/schemas/DocumentResult'
+          observation: '#/components/schemas/ObservationResult'
+    DocumentResult:
+      type: object
+      required:
+        [
+          kind,
+          documentVersionId,
+          sectionId,
+          tier,
+          ruleId,
+          ruleSetVersion,
+          provenance,
+          originRef,
+          detached,
+        ]
+      properties:
+        kind: { type: string, enum: [document] }
+        documentVersionId: { type: string, format: uuid }
+        sectionId: { type: string, format: uuid }
+        documentId: { type: string, format: uuid }
+        title: { type: string }
+        sourceSystem: { type: string }
+        originRef: { type: string, description: 'resolvable in the source system (FR-002)' }
+        matchedSpan: { type: array, items: { type: integer }, minItems: 2, maxItems: 2 }
+        content: { type: string, description: 'UNTRUSTED — data, never instructions (FR-026)' }
+        tier: { type: integer, description: 'trust tier for the declared question type (FR-005)' }
+        ruleId: { type: string }
+        ruleSetVersion: { type: integer, description: 'makes the ranking reproducible (FR-006)' }
+        score: { type: number, format: double }
+        path: { type: string, enum: [structural, lexical, vector] }
+        provenance:
+          { type: string, enum: [human_authored, machine_generated, machine_generated_adopted] }
+        freshness: { $ref: '#/components/schemas/Freshness' }
+        detached:
+          {
+            type: boolean,
+            description: 'original deleted at source; resolves to the captured version (001 FR-010)',
+          }
+        anchorGrantId: { type: string, format: uuid, nullable: true }
+    ObservationResult:
+      type: object
+      description: >
+        An Evidence reference from the ObservedBehaviorQuery port into 001/003 evidence (C-21).
+        Deliberately carries no documentVersionId, sectionId, provenance or freshness — an
+        observation is not an authored claim, and giving it those fields would give it versioning,
+        freshness and adoption it has no meaning for.
+      required: [kind, evidenceId, evidenceType, observedAt, tier, ruleId, ruleSetVersion]
+      properties:
+        kind: { type: string, enum: [observation] }
+        evidenceId:
+          {
+            type: string,
+            format: uuid,
+            description: '001/003 evidence.id — the only identity it has',
+          }
+        evidenceType:
+          {
+            type: string,
+            description: 'error_signature, trace_shape, metric_delta, test_result, …',
+          }
+        observedAt: { type: string, format: date-time }
+        sourceSystem: { type: string }
+        content:
+          { type: string, description: 'UNTRUSTED excerpt — data, never instructions (FR-026)' }
+        tier: { type: integer, description: 'trust tier for the declared question type (FR-005)' }
+        ruleId: { type: string }
+        ruleSetVersion: { type: integer }
+        score: { type: number, format: double }
+        path: { type: string, enum: [observation] }
+    ExpectedBehavior:
+      type: object
+      required: [id, stableKey, state, currentVersion]
+      properties:
+        id: { type: string, format: uuid }
+        stableKey: { type: string, description: 'carried across edits and renames' }
+        featureNodeId:
+          { type: string, format: uuid, nullable: true, description: 'graph_node in 004' }
+        componentNodeId: { type: string, format: uuid, nullable: true }
+        state:
+          type: string
+          enum: [draft, adopted, superseded, retired]
+          description: 'display and lifecycle only — anchor eligibility is the grant, not this field (R-01)'
+        currentVersion:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            versionNo: { type: integer }
+            description: { type: string }
+            provenance: { type: string, enum: [human_authored, machine_generated] }
+            extractionRule: { type: string, nullable: true }
+            sourceArtifactRef: { type: string, nullable: true }
+        anchorGrant:
+          type: object
+          nullable: true
+          description: 'present only when a human adoption created it; absence is what refuses an anchor'
+          properties:
+            id: { type: string, format: uuid }
+            expectedBehaviorVersionId: { type: string, format: uuid }
+            adoptedBy: { type: string }
+            adoptedAt: { type: string, format: date-time }
+            revokedAt: { type: string, format: date-time, nullable: true }
+        constraints:
+          type: array
+          items: { $ref: '#/components/schemas/ConstraintValue' }
+    ConstraintValue:
+      type: object
+      required: [name, valueType, value, provenance]
+      properties:
+        name: { type: string }
+        valueType: { type: string, enum: [int, decimal, bool, duration, string, enum] }
+        value: {}
+        documentVersionId: { type: string, format: uuid }
+        provenance:
+          { type: string, enum: [human_authored, machine_generated, machine_generated_adopted] }
+        anchorGrantId:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: 'non-null makes it authoritative (FR-008)',
+          }
+    KnowledgeDriftFinding:
+      type: object
+      required: [id, kind, recordedSide, observedSide, evidenceIds, issueId, state]
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          type: string
+          enum:
+            [
+              document_contradicts_code,
+              document_contradicts_observation,
+              constraint_value_conflict,
+              expectation_references_missing_element,
+            ]
+        documentVersionId: { type: string, format: uuid, nullable: true }
+        expectedBehaviorVersionId: { type: string, format: uuid, nullable: true }
+        recordedSide: { type: object, additionalProperties: true }
+        observedSide: { type: object, additionalProperties: true }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        issueId:
+          { type: string, format: uuid, description: 'the knowledge_drift issue (001 FR-001)' }
+        state:
+          {
+            type: string,
+            enum: [open, resolved_document_updated, resolved_observation_rejected, dismissed],
+          }
+        detectedAt: { type: string, format: date-time }
+paths:
+  /knowledge/sources:
+    get:
+      summary: >
+        Connected knowledge sources with their connection, sync and freshness state (FR-001).
+        A declared but unimplemented kind is listed with implemented=false — in v1 hosted_wiki
+        is declared and not implemented (C-06).
+      responses:
+        '200': { description: OK }
+  /knowledge/retrieve:
+    post:
+      summary: >
+        The one retrieval surface (FR-002). questionType is required — a request without it is
+        refused rather than answered under a default ranking (FR-004). Functions with the vector
+        index disabled (FR-003, SC-004).
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [questionType, limit]
+              properties:
+                questionType:
+                  type: string
+                  enum: [current_behavior, intended_behavior]
+                  description: 'no default; omission is 400 QUESTION_TYPE_REQUIRED'
+                terms: { type: string }
+                scope:
+                  type: object
+                  properties:
+                    componentNodeId: { type: string, format: uuid }
+                    featureNodeId: { type: string, format: uuid }
+                    documentClass: { type: array, items: { type: string } }
+                limit: { type: integer, maximum: 100 }
+                issueId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [queryId, results, complete, pathsUsed]
+                properties:
+                  queryId: { type: string, format: uuid }
+                  ruleSetVersion: { type: integer }
+                  results: { type: array, items: { $ref: '#/components/schemas/RetrievalResult' } }
+                  complete:
+                    { type: boolean, description: 'false when a budget cut it short (FR-028)' }
+                  unconsultedSources: { type: array, items: { type: string } }
+                  pathsUsed:
+                    {
+                      type: array,
+                      items: { type: string, enum: [structural, observation, lexical, vector] },
+                    }
+        '400':
+          description: 'questionType missing (FR-004)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /knowledge/documents/{documentId}:
+    get:
+      summary: A document with its versions, freshness and duplicate group (FR-019, FR-020)
+      parameters:
+        - { $ref: '#/components/parameters/DocumentId' }
+        - {
+            name: versionId,
+            in: query,
+            schema: { type: string, format: uuid },
+            description: 'pin a version; a superseded pin returns the pinned content marked stale',
+          }
+      responses:
+        '200': { description: OK }
+        '404':
+          description: "not found, including another tenant's document (FR-027)"
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /expectations:
+    get:
+      summary: List expectations (FR-009)
+      parameters:
+        - {
+            name: state,
+            in: query,
+            schema: { type: string, enum: [draft, adopted, superseded, retired] },
+          }
+        - { name: featureNodeId, in: query, schema: { type: string, format: uuid } }
+        - { name: componentNodeId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ExpectedBehavior' } }
+  /expectations/{expectationId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/ExpectationId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ExpectedBehavior' } } },
+          }
+        '404':
+          {
+            description: 'not found',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    patch:
+      summary: >
+        Edit an expectation (FR-012). Creates a new version with no anchor grant; the previously
+        adopted version remains the anchor until the edit is itself adopted.
+      parameters:
+        - { $ref: '#/components/parameters/ExpectationId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [description, reason]
+              properties:
+                description: { type: string }
+                constraints:
+                  { type: array, items: { $ref: '#/components/schemas/ConstraintValue' } }
+                reason: { type: string }
+      responses:
+        '200': { description: 'OK — new version created, unadopted' }
+  /expectations/{expectationId}/adopt:
+    post:
+      deprecated: true
+      summary: >
+        **NOT IMPLEMENTED IN V1 — explicitly deferred (R-16).** No route serves this path; a request
+        to it returns 404 like any unknown path. Adoption in v1 happens only as a merge-request
+        approval on the repository markdown (C-06): the merge request is the review, the approval is
+        the adoption record, and the ingest of that approval writes the anchor_grant. An in-product
+        adopt button would be a second gate with weaker properties — no diff, no reviewer identity
+        from an existing system, no history — and it would become the path everyone uses because it
+        is easier. The knowledge:adopt capability exists in the permission model so the later path
+        needs no new capability; nothing serves it today. The shape below is the contract the
+        deferred endpoint will honour when it ships.
+      parameters:
+        - { $ref: '#/components/parameters/ExpectationId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedBehaviorVersionId]
+              properties:
+                expectedBehaviorVersionId:
+                  { type: string, format: uuid, description: 'the exact content version adopted' }
+                approvalRef: { type: string, description: 'merge request and approval identifiers' }
+                note: { type: string }
+      responses:
+        '404':
+          description: 'v1 — the endpoint is deferred and no route exists (R-16)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '201':
+          description: 'post-v1 only — would carry anchorGrantId, actorRef and adoptedAt'
+        '403':
+          description: 'post-v1 only — actor is not human (HUMAN_ACTOR_REQUIRED) or is Healer itself (SELF_APPROVAL_REFUSED)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /expectations/{expectationId}/revoke:
+    post:
+      summary: >
+        Revoke adoption (FR-013). Effective on the next anchor request; completed verifications and
+        their audit records stay intact.
+      parameters:
+        - { $ref: '#/components/parameters/ExpectationId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200': { description: OK }
+        '403': { description: 'actor is not human' }
+  /anchors:
+    get:
+      summary: >
+        Resolve anchors for a scope. Returns anchor grants — never expectation identifiers — so an
+        unadopted entry is absent rather than rejected (FR-010, SC-001). An empty result is what
+        008 FR-007 and 006 FR-011 read as NO_EXPECTATION, and the refusal is recorded.
+      parameters:
+        - {
+            name: componentNodeId,
+            in: query,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+        - { name: featureNodeId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  anchors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        anchorGrantId: { type: string, format: uuid }
+                        expectedBehaviorVersionId: { type: string, format: uuid }
+                        stableKey: { type: string }
+                        description: { type: string }
+                        adoptedBy: { type: string }
+                        adoptedAt: { type: string, format: date-time }
+                        constraints:
+                          { type: array, items: { $ref: '#/components/schemas/ConstraintValue' } }
+  /constraints/resolve:
+    get:
+      summary: >
+        Resolve a constraint by name and type for a deterministic predicate (FR-014, 002 FR-003).
+        0 model calls on this path. Two authoritative definitions return 409 CONSTRAINT_CONFLICT
+        naming both — never a tie-broken value (FR-015).
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string } }
+        - {
+            name: scopeKind,
+            in: query,
+            required: true,
+            schema: { type: string, enum: [feature, component, expected_behavior] },
+          }
+        - { name: scopeRef, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ConstraintValue' } } },
+          }
+        '404':
+          description: 'no authoritative definition — a machine_generated, unadopted value is not one (FR-008)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: 'conflicting definitions, all named in details'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /seeding/sessions:
+    post:
+      summary: >
+        Seed expectation drafts from existing artifacts (FR-022, D-20). Repeatable and incremental:
+        a re-run neither duplicates drafts nor touches adopted entries (FR-023, R-12).
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                featureNodeId: { type: string, format: uuid }
+                inputClasses:
+                  {
+                    type: array,
+                    items:
+                      {
+                        type: string,
+                        enum:
+                          [
+                            openapi,
+                            e2e_test_names,
+                            ticket_acceptance_criteria,
+                            repository_markdown,
+                          ],
+                      },
+                  }
+      responses:
+        '202': { description: 'accepted; runs as a workflow (012 FR-029)' }
+  /seeding/sessions/{sessionId}:
+    get:
+      summary: >
+        Onboarding metrics (FR-024, S0-5): proposed, adopted unchanged, edited, discarded, input
+        classes present and absent, elapsed review time.
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200': { description: OK }
+  /knowledge/drift:
+    get:
+      summary: Open knowledge drift findings (FR-016), each linked to its knowledge_drift issue
+      parameters:
+        - { name: state, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    { type: array, items: { $ref: '#/components/schemas/KnowledgeDriftFinding' } }
+  /knowledge/drift/{findingId}/resolve:
+    post:
+      summary: >
+        Human resolution (FR-017). No document is edited and no change proposal is opened by a
+        finding; this is the only path from one to a document change.
+      parameters:
+        - { $ref: '#/components/parameters/FindingId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution, reason]
+              properties:
+                resolution:
+                  { type: string, enum: [document_updated, observation_rejected, dismiss] }
+                reason: { type: string }
+      responses:
+        '200': { description: OK }
+        '403': { description: 'actor is not human' }
+  /knowledge/drafts:
+    post:
+      summary: >
+        Propose a generated document as a draft with a named human owner (FR-021, D-23). Opens a
+        merge request for repository-backed sources; never publishes to a customer system (SC-007).
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [documentClass, ownerRef, body]
+              properties:
+                documentClass: { type: string }
+                ownerRef:
+                  { type: string, description: 'named human owner — required, not defaulted' }
+                componentNodeId: { type: string, format: uuid }
+                body: { type: string }
+      responses:
+        '201':
+          {
+            description: 'draft created; response carries the merge request reference where applicable',
+          }

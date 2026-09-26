@@ -1,0 +1,414 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 007 reproduction and sandbox
+  version: 0.1.0
+  description: >
+    Draft contract for spec 007. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. Every mutation requires an Idempotency-Key.
+    The ladder vocabulary, directive and result semantics are owned by contracts/ladder.md; this
+    document exposes them over HTTP and does not redefine them.
+    There is no endpoint that sets change eligibility: it is a view over the latest attempt's
+    result and has no write path (research R-16).
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+    ciCallbackToken:
+      type: http
+      scheme: bearer
+      description: 'single-use callback token issued with the delegation; idempotent on replay'
+  parameters:
+    IssueId: { name: issueId, in: path, required: true, schema: { type: string, format: uuid } }
+    AttemptId: { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+    ExecutionId:
+      { name: executionId, in: path, required: true, schema: { type: string, format: uuid } }
+    DelegationId:
+      { name: delegationId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - NO_FAILING_REPRODUCTION
+            - NOT_FIX_ELIGIBLE
+            - BUDGET_EXHAUSTED
+            - RUNNER_UNAVAILABLE
+            - CAPABILITY_REFUSED
+            - GRANT_REQUIRED
+        message: { type: string }
+        detail: { type: object, additionalProperties: true }
+    RungKey:
+      type: string
+      description: 'frozen vocabulary — see contracts/ladder.md; 006 imports it'
+      enum: [unit, request, data, concurrency, load, external_state]
+    InconclusiveReason:
+      type: string
+      enum:
+        - no_rung_reproduced
+        - signature_mismatch
+        - build_failure
+        - environment_failure
+        - timeout
+        - unparseable_output
+        - no_test_command
+        - commit_unavailable
+        - budget_exhausted
+        - capability_refused
+    RungAttempt:
+      type: object
+      required: [rung, outcome]
+      properties:
+        rung: { $ref: '#/components/schemas/RungKey' }
+        outcome:
+          type: string
+          enum: [reproduced, not_reproduced, skipped, error]
+          description: 'only not_reproduced is evidence; skipped and error are gaps'
+        skipReason:
+          type: string
+          nullable: true
+          description: 'required when outcome is skipped (FR-003)'
+          enum:
+            - preconditions_unavailable
+            - above_max_rung
+            - no_entry_point
+            - no_harness
+            - grant_absent
+            - budget_exhausted
+        errorDetail: { type: object, nullable: true, additionalProperties: true }
+        observedRuns:
+          {
+            type: integer,
+            description: 'repeats run at this rung; the counters live here (research R-18)',
+          }
+        reproducedRuns: { type: integer, description: 'of those, how many reproduced' }
+        executionRunId:
+          { type: string, format: uuid, nullable: true, description: 'null for a skip' }
+        durationMs: { type: integer }
+        resourceCost: { type: object, additionalProperties: true }
+    TestResult:
+      type: object
+      required: [testId, filePath, status, durationMs]
+      properties:
+        testId: { type: string }
+        filePath: { type: string }
+        status: { type: string, enum: [passed, failed, skipped, errored] }
+        durationMs: { type: integer }
+        failureMessage:
+          { type: string, nullable: true, description: 'bounded at capture (001 FR-011)' }
+        failureSignature: { type: object, nullable: true, additionalProperties: true }
+        source: { type: string, enum: [sandbox, customer_ci] }
+        ciRunId: { type: string, nullable: true }
+    EgressDenial:
+      type: object
+      description: >
+        Only the prefetch proxy can deny a destination, because only the prefetch container has a
+        route. The run container has none and connect() is not intercepted (research R-19), so its
+        egress fact is ExecutionRun.egressPosture, not a denial record.
+      required: [phase, destination, attemptCount]
+      properties:
+        phase: { type: string, enum: [prefetch] }
+        destination: { type: string, description: 'host or address attempted — never a payload' }
+        protocol: { type: string }
+        attemptCount: { type: integer }
+        firstAt: { type: string, format: date-time }
+        lastAt: { type: string, format: date-time }
+    ExecutionRun:
+      type: object
+      required: [id, state, commitSha, baseImageDigest, sandboxProfileVersion, exitStatus]
+      properties:
+        id:
+          { type: string, format: uuid, description: 'immutable; a retry gets a new one (FR-013)' }
+        state: { type: string, enum: [queued, starting, running, completed, killed, failed] }
+        commitSha: { type: string }
+        baseImageDigest: { type: string }
+        lockfileDigest: { type: string, nullable: true }
+        resolvedDependencies: { type: object, additionalProperties: true }
+        sandboxProfileVersion: { type: integer }
+        declaredLimits: { type: object, additionalProperties: true }
+        observedUsage: { type: object, additionalProperties: true }
+        exitStatus:
+          type: string
+          enum: [ok, test_failure, build_failure, limit_breach, timeout, infrastructure]
+        credentialScanPre: { type: string, enum: [clean, hit] }
+        credentialScanPost: { type: string, enum: [clean, hit] }
+        egressPosture:
+          type: object
+          description: >
+            The run container's recorded posture — empty route table, absent resolver, allowlist
+            digest. This is what SC-003 is checked against; there is no route, so there is no denial
+            to capture (research R-19, FR-011).
+          properties:
+            defaultRoutePresent: { type: boolean }
+            resolverPresent: { type: boolean }
+            allowlistDigest: { type: string }
+            observed:
+              {
+                type: boolean,
+                description: 'false when the supervisor could not read the namespace — unverified, never assumed clean',
+              }
+        egressDenials:
+          type: array
+          description: 'prefetch-phase denials only (research R-19)'
+          items: { $ref: '#/components/schemas/EgressDenial' }
+        workspaceCreatedAt: { type: string, format: date-time }
+        workspaceDestroyedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: 'destroyed by container exit on every path, including timeout (research R-07)'
+        supersededBy: { type: string, format: uuid, nullable: true }
+    ReproductionAttempt:
+      type: object
+      required:
+        [id, issueId, diagnosisId, result, observedRuns, reproducedRuns, intermittent, ladder]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid }
+        diagnosisId: { type: string, format: uuid }
+        maxRung: { $ref: '#/components/schemas/RungKey' }
+        result:
+          type: string
+          enum: [PASS, FAIL, INCONCLUSIVE]
+          description: 'FAIL means the reported failure was reproduced — the success condition'
+        inconclusiveReason:
+          oneOf:
+            - $ref: '#/components/schemas/InconclusiveReason'
+            - type: 'null'
+        reproducingRung:
+          oneOf:
+            - $ref: '#/components/schemas/RungKey'
+            - type: 'null'
+        observedRuns:
+          type: integer
+          description: "copied from the reproducing rung's row, never summed across rungs (research R-18)"
+        reproducedRuns: { type: integer, description: 'copied from the same rung row' }
+        intermittent: { type: boolean }
+        observedRate:
+          type: number
+          description: 'carried to 008; 3-in-10 and 10-in-10 are different facts (FR-007)'
+        ladder: { type: array, items: { $ref: '#/components/schemas/RungAttempt' } }
+        budgetConsumed: { type: object, additionalProperties: true }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+    ChangeEligibility:
+      type: object
+      description: >
+        A projection of the view; there is no PUT or PATCH for this resource. The view is left-joined
+        from issue, so every issue has a row and `eligible` is never null (research R-16).
+      required: [issueId, eligible, blockedBy]
+      properties:
+        issueId: { type: string, format: uuid }
+        eligible: { type: boolean }
+        reproducingRung:
+          oneOf:
+            - $ref: '#/components/schemas/RungKey'
+            - type: 'null'
+        intermittent: { type: boolean }
+        observedRate: { type: number, nullable: true }
+        blockedBy:
+          type: array
+          description: >
+            A closed set, the same array shape 006's FixEligibility.blockedBy returns so a consumer
+            reading both views reads one shape. Carries at most one member: 'no_attempt' when no
+            reproduction exists, 'not_reproduced' for a PASS, or the attempt's inconclusive reason.
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/InconclusiveReason'
+              - type: string
+                enum: [not_reproduced, no_attempt]
+    Handoff:
+      type: object
+      description: 'what a human receives on INCONCLUSIVE (FR-006)'
+      required: [issueId, attempt, rejectedHypotheses]
+      properties:
+        issueId: { type: string, format: uuid }
+        attempt: { $ref: '#/components/schemas/ReproductionAttempt' }
+        rejectedHypotheses:
+          type: array
+          description: 'carried from diagnosis (006) — the engineer starts from the third hour'
+          items: { type: object, additionalProperties: true }
+        separateDefectFindings:
+          type: array
+          items:
+            type: object
+            properties:
+              observedSignature: { type: object, additionalProperties: true }
+              issueSignature: { type: object, additionalProperties: true }
+              raisedIssueId: { type: string, format: uuid, nullable: true }
+    CiDelegation:
+      type: object
+      required: [id, suiteScope, state, deadlineAt, receivedCount]
+      properties:
+        id: { type: string, format: uuid }
+        executionRunId: { type: string, format: uuid }
+        suiteScope: { type: string, enum: [full_suite, e2e] }
+        externalRunId: { type: string, nullable: true }
+        state: { type: string, enum: [requested, running, completed, timed_out] }
+        deadlineAt: { type: string, format: date-time }
+        receivedCount:
+          { type: integer, description: 'a duplicate callback increments this and nothing else' }
+paths:
+  /issues/{issueId}/reproduction:
+    get:
+      summary: Latest reproduction attempt for an issue
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReproductionAttempt' }
+        '404':
+          description: "no attempt, or another tenant's issue"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      summary: Start a reproduction from the current diagnosis directive (FR-002)
+      description: >
+        Refused when the issue is not fix-eligible under 006's view — sandbox time is not spent on
+        an issue the change path is already closed for.
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202':
+          { description: 'accepted; the climb is a sequence of short jobs over persisted state' }
+        '409':
+          description: 'NOT_FIX_ELIGIBLE, BUDGET_EXHAUSTED, or RUNNER_UNAVAILABLE'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /issues/{issueId}/reproduction/attempts:
+    get:
+      summary: Every attempt for this issue, oldest first
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    { type: array, items: { $ref: '#/components/schemas/ReproductionAttempt' } }
+  /issues/{issueId}/reproduction/handoff:
+    get:
+      summary: Human handoff for an INCONCLUSIVE result (FR-006)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Handoff' }
+  /issues/{issueId}/change-eligibility:
+    get:
+      summary: The structural fact 008 and policy read (FR-001) — read-only by construction
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChangeEligibility' }
+  /reproduction/attempts/{attemptId}/ladder:
+    get:
+      summary: The ladder record — every rung attempted, skipped or errored, with its reason (FR-003)
+      parameters: [{ $ref: '#/components/parameters/AttemptId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/RungAttempt' } }
+  /reproduction/executions/{executionId}:
+    get:
+      summary: One execution run — limits, usage, denials, workspace lifecycle
+      parameters: [{ $ref: '#/components/parameters/ExecutionId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecutionRun' }
+        '404':
+          description: "not found, including another tenant's execution (SC-012)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /reproduction/executions/{executionId}/test-results:
+    get:
+      summary: Structured test results for one execution — never aggregated across executions (FR-013)
+      parameters: [{ $ref: '#/components/parameters/ExecutionId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TestResult' } }
+  /reproduction/ci-delegations/{delegationId}:
+    get:
+      summary: Delegation state (FR-021, D-16) — a persisted wait, never a blocked job
+      parameters: [{ $ref: '#/components/parameters/DelegationId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CiDelegation' }
+  /reproduction/ci-delegations/{delegationId}/callback:
+    post:
+      summary: Inbound CI result (FR-022) — authenticated, idempotent, replayable
+      description: >
+        The only inbound path for a delegated suite. A duplicate delivery increments receivedCount
+        and changes nothing else. A callback that never arrives is resolved by the workflow run's
+        deadline tick, not by a waiting worker (ADR 0003).
+      security: [{ ciCallbackToken: [] }]
+      parameters: [{ $ref: '#/components/parameters/DelegationId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [externalRunId, outcome]
+              properties:
+                externalRunId: { type: string }
+                outcome: { type: string, enum: [passed, failed, errored, cancelled] }
+                results: { type: array, items: { $ref: '#/components/schemas/TestResult' } }
+      responses:
+        '202':
+          {
+            description: 'accepted; ingested as test_result evidence correlated to the execution (FR-023)',
+          }
+        '404':
+          description: 'unknown or expired delegation; never confirms existence across tenants'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }

@@ -1,0 +1,27 @@
+{
+  "name": "@healer/api",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --build tsconfig.json"
+  },
+  "dependencies": {
+    "@healer/events": "workspace:*",
+    "@healer/shared": "workspace:*",
+    "@healer/workflow": "workspace:*",
+    "@nestjs/common": "^12.1.0",
+    "@nestjs/core": "^12.1.0",
+    "@nestjs/platform-express": "^12.1.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  }
+}

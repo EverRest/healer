@@ -1,0 +1,693 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 002 policy, autonomy and budgets
+  version: 0.1.0
+  description: >
+    Draft contract for spec 002. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403 (FR-018).
+    Note what is absent: there is no endpoint that executes an action. Enforcing evaluation is an
+    in-process typed call (D-06, contracts/evaluation.md); the only evaluation exposed over HTTP is
+    the dry run, which writes nothing (FR-019).
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - RULESET_INVALID
+            - CEILING_EXCEEDED
+            - UNDO_NOT_ATTESTED
+            - DECISION_ALREADY_CONSUMED
+            - APPROVAL_NOT_PENDING
+            - STALE_AUTONOMY_EPOCH
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+    Outcome:
+      type: string
+      enum: [allow, require_approval, deny]
+      description: 'ordered allow < require_approval < deny; matched outcomes fold with max, seeded deny (FR-005, FR-006)'
+    ActionClass:
+      type: string
+      enum:
+        [
+          read_only,
+          code_change,
+          repository_write,
+          reversible_remediation,
+          merge,
+          forward_deploy,
+          irreversible,
+        ]
+    Predicate:
+      type: object
+      description: 'one triple from the closed vocabulary; no expression language exists (R-02)'
+      required: [field, operator, value]
+      properties:
+        field:
+          type: string
+          enum:
+            - action.key
+            - action.class
+            - target.componentId
+            - target.environment
+            - target.issueKind
+            - target.targetRef
+            - target.fingerprint
+            - target.reversible
+            - target.hasTestedUndo
+            - issue.state
+            - issue.classification
+            - eligibility.codeProblemVerdict
+            - eligibility.fixEligible
+            - evidence.complete
+            - evidence.conclusionHasLink
+            - reproduction.outcome
+            - impact.classification
+            - impact.touchesPublicContract
+            - impact.touchesMigration
+            - impact.touchesAuthPath
+            - impact.touchesMoneyPath
+            - impact.closure
+            - autonomy.level
+            - budget.state
+            - budget.degradationStep
+            - cooldown.recentAllowCount
+            - cooldown.attemptCount
+            - escalation.attemptCount
+          description: 'the closed field set of DecisionInput. No confidence field exists (FR-003, R-03)'
+        operator:
+          type: string
+          description: >
+            Generated from the operator-domain table in contracts/evaluation.md, which is the single
+            authority (C-19). An operator outside the field's domain rejects the whole rule set.
+          enum:
+            - equals
+            - notEquals
+            - in
+            - notIn
+            - isTrue
+            - isFalse
+            - atLeast
+            - atMost
+            - before
+            - after
+            - containsNoneOf
+            - subsetOf
+            - sizeAtMost
+            - maxDepthAtMost
+        value:
+          { description: 'type domain is fixed per field; a mismatch rejects the whole ruleset' }
+    PolicyRule:
+      type: object
+      required: [ruleKey, predicates, outcome, reasonCode]
+      properties:
+        ruleKey: { type: string, description: 'stable across versions' }
+        predicates: { type: array, minItems: 1, items: { $ref: '#/components/schemas/Predicate' } }
+        outcome: { $ref: '#/components/schemas/Outcome' }
+        reasonCode:
+          { type: string, description: 'enumerated; carried into the decision, never free text' }
+        note:
+          { type: string, description: 'tenant-facing explanation shown in the approval summary' }
+    Ruleset:
+      type: object
+      required: [version, digest, publishedAt, publishedBy, rules]
+      properties:
+        version: { type: integer }
+        digest:
+          {
+            type: string,
+            description: 'content hash; republishing identical content is a no-op (R-01)',
+          }
+        publishedAt: { type: string, format: date-time }
+        publishedBy: { type: string }
+        supersedesVersion: { type: integer, nullable: true }
+        rules: { type: array, items: { $ref: '#/components/schemas/PolicyRule' } }
+        conflictWarnings:
+          type: array
+          description: 'rule pairs that can both match with different outcomes; the fold still resolves safely (FR-006)'
+          items:
+            type: object
+            properties:
+              ruleKeys: { type: array, items: { type: string } }
+              explanation: { type: string }
+    DecisionInput:
+      type: object
+      additionalProperties: false
+      description: >
+        The closed input record. Unknown keys are rejected. There is deliberately no field for
+        model-reported confidence — the dangerous input is not representable (FR-003, R-03).
+      required: [actionKey, target]
+      properties:
+        actionKey: { type: string }
+        issueId: { type: string, format: uuid, nullable: true }
+        target:
+          type: object
+          additionalProperties: false
+          properties:
+            componentId: { type: string, format: uuid, nullable: true }
+            environment: { type: string }
+            issueKind: { type: string }
+            targetRef:
+              {
+                type: string,
+                nullable: true,
+                description: 'the remediation target; scopes rate limits and cooldowns (C-11)',
+              }
+            fingerprint:
+              {
+                type: string,
+                nullable: true,
+                description: '001 FR-002 issue fingerprint; the second half of the limit scope (C-11)',
+              }
+        issue:
+          type: object
+          additionalProperties: false
+          properties:
+            state: { type: string }
+            classification: { type: string, description: '006 FR-001 issue-class verdict' }
+        eligibility:
+          type: object
+          additionalProperties: false
+          description: "read here and guarded again at 008's loop entry — both views of the one gate (C-08)"
+          properties:
+            codeProblemVerdict:
+              type: string
+              enum: [code_problem, not_a_code_problem, undetermined, absent]
+              description: '006 FR-001 classifier verdict; absent means no classification exists'
+            fixEligible: { type: boolean, description: "006's fix_eligibility view" }
+        evidence:
+          type: object
+          additionalProperties: false
+          properties:
+            complete: { type: boolean }
+            conclusionHasLink: { type: boolean, description: '001 FR-009' }
+        reproduction:
+          type: object
+          additionalProperties: false
+          properties:
+            outcome:
+              { type: string, enum: [pass, fail, inconclusive, absent], description: '007 FR-004' }
+        impact:
+          type: object
+          additionalProperties: false
+          description: 'produced by 008 FR-003; this feature consumes it and does not compute it'
+          properties:
+            classification: { type: string }
+            touchesPublicContract: { type: boolean }
+            touchesMigration: { type: boolean }
+            touchesAuthPath: { type: boolean }
+            touchesMoneyPath: { type: boolean }
+        cooldown:
+          type: object
+          additionalProperties: false
+          description: >
+            Counted over policy_decision history for (actionKey, targetRef, fingerprint) — this
+            feature is the only enforcement point for rate limits, cooldowns and attempt caps (C-11,
+            R-13).
+          properties:
+            recentAllowCount: { type: integer }
+            windowSeconds: { type: integer }
+            attemptCount:
+              { type: integer, description: 'consumed ALLOW decisions for this scope, all windows' }
+        escalation:
+          type: object
+          additionalProperties: false
+          properties:
+            attemptCount:
+              {
+                type: integer,
+                description: "owned by 012's workflow_run — counted from that run's escalation transitions, never stored as a counter here (FR-013)",
+              }
+        declaredMaxCost: { type: number, description: 'the ceiling charged ex ante (R-11)' }
+        evaluatedAt:
+          {
+            type: string,
+            format: date-time,
+            description: 'passed in; the evaluator reads no clock',
+          }
+    EvaluationTrace:
+      type: object
+      description: 'identical shape for dry run and for the enforcing path (R-08); consumed by 011 FR-003'
+      required: [outcome, rulesetVersion, matchedRuleKeys, reasonCodes]
+      properties:
+        outcome: { $ref: '#/components/schemas/Outcome' }
+        rulesetVersion: { type: integer }
+        matchedRuleKeys: { type: array, items: { type: string } }
+        perRuleOutcomes:
+          type: array
+          items:
+            type: object
+            properties:
+              ruleKey: { type: string }
+              outcome: { $ref: '#/components/schemas/Outcome' }
+        foldResult: { $ref: '#/components/schemas/Outcome' }
+        ceilingApplied:
+          {
+            type: boolean,
+            description: 'true when the product ceiling changed the outcome (FR-008)',
+          }
+        resolvedAutonomyLevel: { type: integer, nullable: true }
+        budgetState:
+          type: object
+          properties:
+            consumedSpend: { type: number }
+            spendLimit: { type: number }
+            consumedTimeMs: { type: integer }
+            timeLimitMs: { type: integer }
+            degradationStep: { type: integer }
+            state: { type: string, enum: [within, degraded, exhausted] }
+        reasonCodes: { type: array, items: { type: string } }
+    Decision:
+      allOf:
+        - $ref: '#/components/schemas/EvaluationTrace'
+        - type: object
+          required: [id, actionKey, proposalDigest, evaluatedAt]
+          properties:
+            id: { type: string, format: uuid }
+            actionKey: { type: string }
+            proposalDigest: { type: string }
+            workflowRunId: { type: string, format: uuid, nullable: true }
+            evaluatedAt: { type: string, format: date-time }
+            consumedAt: { type: string, format: date-time, nullable: true }
+            invalidatedReason:
+              type: string
+              nullable: true
+              enum: [epoch_bump, approval_expired, digest_mismatch, null]
+    AutonomyGrant:
+      type: object
+      required: [id, actionKey, level, grantedBy, grantedAt]
+      properties:
+        id: { type: string, format: uuid }
+        componentId:
+          { type: string, format: uuid, nullable: true, description: 'null means every component' }
+        environment: { type: string, nullable: true }
+        issueKind: { type: string, nullable: true }
+        actionKey: { type: string }
+        level:
+          {
+            type: integer,
+            minimum: 0,
+            maximum: 5,
+            description: 'rejected with CEILING_EXCEEDED above the product ceiling (FR-008)',
+          }
+        grantedBy: { type: string }
+        grantedAt: { type: string, format: date-time }
+        revokedBy: { type: string, nullable: true }
+        revokedAt: { type: string, format: date-time, nullable: true }
+    ApprovalRequest:
+      type: object
+      required: [id, decisionId, state, expiresAt, summary]
+      properties:
+        id: { type: string, format: uuid }
+        decisionId: { type: string, format: uuid }
+        workflowRunId: { type: string, format: uuid }
+        state: { type: string, enum: [pending, approved, rejected, expired, revoked] }
+        expiresAt: { type: string, format: date-time }
+        summary:
+          type: object
+          description: 'structured fields and identifiers only — never collected customer text (FR-015)'
+          properties:
+            proposedAction: { type: string }
+            reasonCodes: { type: array, items: { type: string } }
+            impactSummary: { type: object, additionalProperties: true }
+            rollbackPlan: { type: object, additionalProperties: true }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        resolvedBy: { type: string, nullable: true }
+        resolvedAt: { type: string, format: date-time, nullable: true }
+paths:
+  /policy/actions:
+    get:
+      summary: The action registry — every action key the product can perform, with its class (R-14)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        actionKey: { type: string }
+                        actionClass: { $ref: '#/components/schemas/ActionClass' }
+                        mutating: { type: boolean }
+                        hasTestedUndo:
+                          { type: boolean, description: "derived from 010's catalogue (R-06)" }
+                        ceilingLevel:
+                          type: integer
+                          nullable: true
+                          description: >
+                            null means no grant can exist. For action_class reversible_remediation it
+                            is null while hasTestedUndo is false — the ceiling is a function of the
+                            class and of the attested undo (C-18).
+  /policy/rulesets:
+    get:
+      summary: List published rule set versions (FR-004)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Ruleset' } }
+    post:
+      summary: Publish a new rule set version — immutable; identical content is a no-op (FR-020, R-01)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rules]
+              properties:
+                rules: { type: array, items: { $ref: '#/components/schemas/PolicyRule' } }
+      responses:
+        '201':
+          description: Published
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ruleset' }
+        '422':
+          description: "RULESET_INVALID — unknown predicate field, operator outside the field's domain, or wrong value type"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /policy/rulesets/{version}:
+    get:
+      summary: Resolve a rule set version cited by a decision — must succeed forever (SC-003)
+      parameters:
+        - { name: version, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Ruleset' } } },
+          }
+        '404':
+          {
+            description: Not found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /policy/dry-run:
+    post:
+      summary: Dry-run evaluation (FR-019) — returns the decision and the rules that produced it; writes nothing
+      description: >
+        The same pure evaluator the enforcing path uses (R-08). This handler constructs no repository
+        write, which is what makes 011 FR-004's guarantee structural rather than a mode flag.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionInput' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvaluationTrace' }
+        '422':
+          description: 'VALIDATION — an unknown key, including any attempt to supply a confidence value (FR-003)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /policy/decisions:
+    get:
+      summary: List recorded decisions (FR-017)
+      parameters:
+        - { name: issueId, in: query, schema: { type: string, format: uuid } }
+        - { name: actionKey, in: query, schema: { type: string } }
+        - { name: outcome, in: query, schema: { $ref: '#/components/schemas/Outcome' } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Decision' } }
+  /policy/decisions/{decisionId}:
+    get:
+      summary: One decision with its inputs, matched rules and rule set version
+      parameters:
+        - { name: decisionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Decision' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's decision",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /policy/decisions/{decisionId}/replay:
+    post:
+      summary: Re-evaluate a stored decision against its own recorded inputs and rule set version (FR-002)
+      description: 'Proves determinism against history. A differing outcome is an incident, not a test failure.'
+      parameters:
+        - { name: decisionId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  identical: { type: boolean }
+                  original: { $ref: '#/components/schemas/EvaluationTrace' }
+                  replayed: { $ref: '#/components/schemas/EvaluationTrace' }
+  /autonomy/grants:
+    get:
+      summary: The autonomy matrix (FR-007)
+      parameters:
+        - { name: includeRevoked, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AutonomyGrant' } }
+    post:
+      summary: Grant autonomy for one scope and one action
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actionKey, level]
+              properties:
+                componentId: { type: string, format: uuid, nullable: true }
+                environment: { type: string, nullable: true }
+                issueKind: { type: string, nullable: true }
+                actionKey: { type: string }
+                level: { type: integer, minimum: 0, maximum: 5 }
+      responses:
+        '201':
+          {
+            description: Granted,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/AutonomyGrant' } } },
+          }
+        '422':
+          description: >
+            CEILING_EXCEEDED — the product ceiling is not raisable by configuration (FR-008, SC-004).
+            UNDO_NOT_ATTESTED — a `reversible_remediation` grant whose catalogue undo has no passing
+            test has no level to grant (C-18); the check runs at grant time as well as in the clamp.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /autonomy/grants/{grantId}:
+    delete:
+      summary: Revoke a grant with immediate effect on in-flight workflows (FR-007, R-07)
+      description: >
+        One transaction: the grant is revoked, the tenant's autonomy epoch is bumped — invalidating
+        every outstanding approval — and a sweep resolves open approval requests in scope to
+        `revoked`, delivering the approval callback so parked runs move at once (012 FR-030).
+      parameters:
+        - { name: grantId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  epoch: { type: integer }
+                  approvalsRevoked: { type: integer }
+                  runsMovedToNeedsHuman: { type: integer }
+  /approvals:
+    get:
+      summary: Pending and resolved approval requests (FR-015)
+      parameters:
+        - {
+            name: state,
+            in: query,
+            schema: { type: string, enum: [pending, approved, rejected, expired, revoked] },
+          }
+        - { name: issueId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ApprovalRequest' } }
+  /approvals/{approvalId}:
+    get:
+      summary: What the approver sees before deciding — action, reason, evidence, impact, rollback
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ApprovalRequest' } } },
+          }
+        '404':
+          {
+            description: Not found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /approvals/{approvalId}/resolve:
+    post:
+      summary: Approve or reject (FR-017) — records which human decided and against which rule set version
+      parameters:
+        - { name: approvalId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution]
+              properties:
+                resolution: { type: string, enum: [approved, rejected] }
+                note: { type: string }
+      responses:
+        '200':
+          {
+            description: Resolved,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ApprovalRequest' } } },
+          }
+        '409':
+          description: 'APPROVAL_NOT_PENDING — already resolved, expired or revoked. An expired request never becomes an approval (FR-016, SC-007)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /budgets:
+    get:
+      summary: Configured limits for this tenant and for issues (FR-011)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        scopeType: { type: string, enum: [issue, tenant] }
+                        period: { type: string, enum: [issue, day, month] }
+                        spendLimit: { type: number }
+                        timeLimitMs: { type: integer }
+                        softThresholdPcts: { type: array, items: { type: integer } }
+                        escalationAttemptCap: { type: integer }
+    put:
+      summary: Update limits — audited like any configuration change (FR-020)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scopeType, period]
+              properties:
+                scopeType: { type: string, enum: [issue, tenant] }
+                period: { type: string, enum: [issue, day, month] }
+                spendLimit: { type: number }
+                timeLimitMs: { type: integer }
+                softThresholdPcts: { type: array, items: { type: integer } }
+                escalationAttemptCap: { type: integer }
+      responses:
+        '200': { description: Updated }
+  /budgets/state:
+    get:
+      summary: Current consumption, degradation step and remaining headroom
+      description: 'Aggregated from agent_run and workflow_run (012 FR-036, R-10); no counter is stored here.'
+      parameters:
+        - {
+            name: scopeType,
+            in: query,
+            required: true,
+            schema: { type: string, enum: [issue, tenant] },
+          }
+        - { name: scopeId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  consumedSpend: { type: number }
+                  spendLimit: { type: number }
+                  consumedTimeMs: { type: integer }
+                  timeLimitMs: { type: integer }
+                  periodKey:
+                    {
+                      type: string,
+                      description: 'pinned at workflow start; a long run cannot gain budget across midnight',
+                    }
+                  degradationStep: { type: integer }
+                  degradationApplied: { type: array, items: { type: string } }
+                  state: { type: string, enum: [within, degraded, exhausted] }

@@ -1,0 +1,477 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 010 safe remediation
+  version: 0.1.0
+  description: >
+    Draft contract for spec 010. The authoritative OpenAPI is generated from NestJS controllers
+    (012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. Every mutation requires an Idempotency-Key.
+    This surface proposes, inspects and records. It never executes: execution happens in the
+    customer's execution plane through the remediation_directive of the runner protocol, and no
+    endpoint here accepts a command, a script or a manifest.
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+  parameters:
+    AttemptId: { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+    TargetId: { name: targetId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - POLICY_DENY
+            - TARGET_NOT_ELIGIBLE
+            - TARGET_BLOCKED
+            - TARGET_BUSY
+            # the next three are projections of 002's decision reason codes, not limits
+            # evaluated here — remediation_limit is deleted (C-11)
+            - RATE_LIMITED
+            - COOLDOWN
+            - ATTEMPT_CAP
+            - PRECONDITION_FAILED
+            - BLAST_RADIUS_EXCEEDED
+            - CAPABILITY_UNAVAILABLE
+            - JUSTIFICATION_MISSING
+            - UNKNOWN_ACTION
+        message: { type: string }
+        detail:
+          {
+            type: object,
+            additionalProperties: true,
+            description: 'which limit, which precondition — never truncate to fit',
+          }
+    ActionKey:
+      type: string
+      description: >
+        The closed set of **proposable** actions; a new member is a spec change and a release, not
+        configuration. `deployment.restore_dispatch_version` is deliberately absent: it exists in the
+        catalogue as rollback's undo-only key, dispatchable only with `mode: "undo"` and with its single
+        revision parameter fixed to the attempt's `revision_ref_at_dispatch` (C-15, R-19). No request
+        body here accepts it.
+      enum:
+        [
+          deployment.rollback,
+          workload.restart,
+          feature_flag.disable,
+          service.scale,
+          queue.drain,
+          job.retry,
+        ]
+    CatalogueEntry:
+      type: object
+      required: [actionKey, available, blastRadiusDimension, requiresApprovalBelowLevel]
+      properties:
+        actionKey: { $ref: '#/components/schemas/ActionKey' }
+        catalogueVersionDigest: { type: string }
+        available:
+          {
+            type: boolean,
+            description: 'false when no runner capability supports it for this tenant',
+          }
+        unavailableReason: { type: string, nullable: true }
+        parameterSchema: { type: object, additionalProperties: true }
+        verification:
+          type: object
+          properties:
+            anchorKind:
+              {
+                type: string,
+                enum: [production_metric, pre_existing_healthcheck, pre_existing_test],
+              }
+            windowSeconds: { type: integer }
+        undoSummary: { type: string }
+        blastRadiusDimension:
+          {
+            type: string,
+            enum: [deployment_unit, instances, flag_scope, replica_delta, messages, job],
+          }
+        requiresApprovalBelowLevel: { type: string }
+        undoAttestedAt:
+          {
+            type: string,
+            format: date-time,
+            description: 'undo test execution in the current build',
+          }
+    RemediationPlan:
+      type: object
+      description: 'the dry-run result; identical shape to what an approval request shows'
+      required:
+        [
+          actionKey,
+          resolvedTarget,
+          observedState,
+          blastRadius,
+          verificationPlan,
+          undoPlan,
+          policyDecision,
+        ]
+      properties:
+        actionKey: { $ref: '#/components/schemas/ActionKey' }
+        resolvedTarget:
+          type: object
+          properties:
+            targetId: { type: string, format: uuid }
+            componentId: { type: string, format: uuid }
+            deploymentUnitId: { type: string, format: uuid, nullable: true }
+            environment: { type: string }
+        operation: { type: string, description: 'the exact operation, resolved — not a template' }
+        observedState:
+          {
+            type: object,
+            additionalProperties: true,
+            description: 'read from the target; structured, never raw output',
+          }
+        blastRadius:
+          type: object
+          properties:
+            dimension: { type: string }
+            value: { type: number }
+            limit: { type: number }
+            affectedComponentIds: { type: array, items: { type: string, format: uuid } }
+            widenedByUnconfirmedEdges:
+              { type: boolean, description: 'an unconfirmed edge may widen, never narrow (C-03)' }
+        verificationPlan:
+          type: object
+          properties:
+            anchorKind:
+              {
+                type: string,
+                enum: [production_metric, pre_existing_healthcheck, pre_existing_test],
+              }
+            anchorRef: { type: string }
+            baselineWindow:
+              { type: string, description: "closes before the issue's first observation" }
+            baselineValue: { type: number }
+            expectedDirection: { type: string, enum: [decrease, increase, return_to_baseline] }
+            windowSeconds: { type: integer }
+        undoPlan:
+          type: object
+          description: 'resolved, literal parameters — the same object persisted at dispatch'
+          additionalProperties: true
+        policyDecision:
+          type: object
+          description: 'from dry-run evaluation (002 FR-019)'
+          properties:
+            outcome: { type: string, enum: [ALLOW, DENY, REQUIRE_APPROVAL] }
+            ruleVersion: { type: integer }
+            reasons: { type: array, items: { type: string } }
+        failedPrecondition:
+          {
+            type: string,
+            nullable: true,
+            description: 'present instead of a plan when a precondition does not hold',
+          }
+    Attempt:
+      type: object
+      required: [id, issueId, targetId, actionKey, mode, state, proposedAt]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid }
+        issueFingerprint: { type: string }
+        targetId: { type: string, format: uuid }
+        actionKey: { $ref: '#/components/schemas/ActionKey' }
+        catalogueVersionDigest: { type: string }
+        parameters: { type: object, additionalProperties: true }
+        mode: { type: string, enum: [dry_run, execute] }
+        state:
+          type: string
+          enum:
+            [
+              proposed,
+              awaiting_approval,
+              refused,
+              dispatched,
+              awaiting_verification,
+              verified,
+              invalidated,
+              undoing,
+              undone,
+              undo_failed,
+              failed,
+            ]
+        policyDecisionId: { type: string, format: uuid, nullable: true }
+        invocationId: { type: string, format: uuid }
+        refusalReason: { type: string, nullable: true }
+        mitigation:
+          { type: boolean, description: 'true once verified; never resolution of a code problem' }
+        verification:
+          type: object
+          nullable: true
+          properties:
+            outcome: { type: string, enum: [improved, not_improved, inconclusive] }
+            baselineValue: { type: number }
+            observedValue: { type: number, nullable: true }
+            deadlineAt: { type: string, format: date-time }
+        undo:
+          type: object
+          nullable: true
+          properties:
+            trigger: { type: string, enum: [not_improved, inconclusive, external_change, human] }
+            result: { type: string, enum: [restored, failed] }
+            stateObserved:
+              {
+                type: boolean,
+                description: 'false means the reported state is unreadable, not assumed',
+              }
+            failureReason: { type: string, nullable: true }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        timeToVerifiedRemediationMs:
+          {
+            type: integer,
+            nullable: true,
+            description: 'issue creation to improved (D-19a); never aggregated as product MTTR',
+          }
+        proposedAt: { type: string, format: date-time }
+    TargetBlock:
+      type: object
+      required: [id, targetId, reason, openedAt]
+      properties:
+        id: { type: string, format: uuid }
+        targetId: { type: string, format: uuid }
+        reason: { type: string, enum: [undo_failed, external_change_unresolved, human] }
+        attemptId: { type: string, format: uuid, nullable: true }
+        observedTargetState: { type: object, nullable: true, additionalProperties: true }
+        stateObserved: { type: boolean }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        openedAt: { type: string, format: date-time }
+        clearedAt: { type: string, format: date-time, nullable: true }
+paths:
+  /remediation/catalogue:
+    get:
+      summary: The closed catalogue as it applies to this tenant (FR-001)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  catalogueVersionDigest: { type: string }
+                  items: { type: array, items: { $ref: '#/components/schemas/CatalogueEntry' } }
+  /remediation/dry-run:
+    post:
+      summary: Plan an action without touching anything (FR-007)
+      description: >
+        Reaches the action's plan() path only; the executing capability is not granted to this
+        request. Verified against the target environment's own audit log (SC-005).
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [issueId, targetId, actionKey, parameters]
+              properties:
+                issueId: { type: string, format: uuid }
+                targetId: { type: string, format: uuid }
+                actionKey: { $ref: '#/components/schemas/ActionKey' }
+                parameters: { type: object, additionalProperties: true }
+      responses:
+        '200':
+          {
+            description: 'a plan, or the failing precondition',
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/RemediationPlan' } } },
+          }
+        '404':
+          {
+            description: "unknown target, or another tenant's",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /remediation/attempts:
+    post:
+      summary: Propose an action for execution (FR-008)
+      description: >
+        Policy is evaluated before anything is dispatched; a refusal is a recorded attempt in state
+        refused, not an error swallowed at the edge.
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [issueId, targetId, actionKey, parameters, justificationEvidenceIds]
+              properties:
+                issueId: { type: string, format: uuid }
+                targetId: { type: string, format: uuid }
+                actionKey: { $ref: '#/components/schemas/ActionKey' }
+                parameters: { type: object, additionalProperties: true }
+                justificationEvidenceIds:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+                  description: 'the diagnosis or correlation evidence that justifies acting (FR-018)'
+      responses:
+        '202':
+          {
+            description: 'accepted; state is proposed, awaiting_approval or dispatched',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Attempt' } } },
+          }
+        '409':
+          {
+            description: 'another mutation is in flight against this target (FR-012)',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+        '422':
+          {
+            description: 'refused — policy, precondition, limit, eligibility or block',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    get:
+      summary: List attempts
+      parameters:
+        - { name: issueId, in: query, schema: { type: string, format: uuid } }
+        - { name: targetId, in: query, schema: { type: string, format: uuid } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Attempt' } }
+  /remediation/attempts/{attemptId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/AttemptId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Attempt' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's attempt",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /remediation/attempts/{attemptId}/undo:
+    post:
+      summary: Dispatch the stored undo before the window closes (FR-006)
+      description: 'dispatches the directive persisted at execution time; nothing is recomputed (R-05)'
+      parameters:
+        - { $ref: '#/components/parameters/AttemptId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '202':
+          {
+            description: Accepted,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Attempt' } } },
+          }
+  /remediation/history:
+    get:
+      summary: Attempts grouped by target and issue fingerprint (FR-016)
+      description: 'a query over attempts — the recurrence signal, not a second store'
+      parameters:
+        - { name: targetId, in: query, schema: { type: string, format: uuid } }
+        - { name: fingerprint, in: query, schema: { type: string } }
+        - { name: windowSeconds, in: query, schema: { type: integer } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        targetId: { type: string, format: uuid }
+                        fingerprint: { type: string }
+                        attemptCount: { type: integer }
+                        capReached: { type: boolean }
+                        intervalsSeconds: { type: array, items: { type: integer } }
+                        attempts: { type: array, items: { $ref: '#/components/schemas/Attempt' } }
+  /remediation/blocks:
+    get:
+      summary: Targets out of automated reach (FR-019)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TargetBlock' } }
+  /remediation/blocks/{targetId}/clear:
+    post:
+      summary: A human clears a block (FR-019)
+      parameters:
+        - { $ref: '#/components/parameters/TargetId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note: { type: string, description: 'what was checked; recorded in the audit trail' }
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/TargetBlock' } } },
+          }
+  /remediation/targets/{targetId}/eligibility:
+    put:
+      summary: Opt a target in or out, per action (FR-015)
+      description: 'absence is refusal; there is no default-eligible state'
+      parameters:
+        - { $ref: '#/components/parameters/TargetId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actionKeys]
+              properties:
+                actionKeys: { type: array, items: { $ref: '#/components/schemas/ActionKey' } }
+                note: { type: string }
+      responses:
+        '200': { description: OK }
+        '404':
+          {
+            description: "unknown target, or another tenant's",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }

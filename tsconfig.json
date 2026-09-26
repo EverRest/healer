@@ -1,0 +1,86 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/domain/issues"
+    },
+    {
+      "path": "packages/domain/evidence"
+    },
+    {
+      "path": "packages/domain/policy"
+    },
+    {
+      "path": "packages/domain/context"
+    },
+    {
+      "path": "packages/domain/architecture"
+    },
+    {
+      "path": "packages/domain/knowledge"
+    },
+    {
+      "path": "packages/domain/diagnosis"
+    },
+    {
+      "path": "packages/domain/reproduction"
+    },
+    {
+      "path": "packages/domain/change"
+    },
+    {
+      "path": "packages/domain/support"
+    },
+    {
+      "path": "packages/domain/remediation"
+    },
+    {
+      "path": "packages/domain/evaluation"
+    },
+    {
+      "path": "packages/agents"
+    },
+    {
+      "path": "packages/llm"
+    },
+    {
+      "path": "packages/code-intelligence"
+    },
+    {
+      "path": "packages/integrations"
+    },
+    {
+      "path": "packages/prompts"
+    },
+    {
+      "path": "packages/events"
+    },
+    {
+      "path": "packages/sandbox"
+    },
+    {
+      "path": "packages/workflow"
+    },
+    {
+      "path": "packages/boundary-contract"
+    },
+    {
+      "path": "packages/shared"
+    },
+    {
+      "path": "apps/api"
+    },
+    {
+      "path": "apps/worker"
+    },
+    {
+      "path": "apps/mcp-server"
+    },
+    {
+      "path": "apps/runner"
+    },
+    {
+      "path": "apps/dashboard"
+    }
+  ]
+}

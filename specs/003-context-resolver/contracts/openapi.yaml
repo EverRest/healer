@@ -1,0 +1,469 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 003 context resolver
+  version: 0.1.0
+  description: >
+    Draft contract for spec 003. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Two surfaces: the runner ingress, which the customer's runner calls outbound (ADR 0001 — the
+    control plane never connects inward), and the tenant read surface.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403 (FR-023, SC-009).
+    The payload shapes crossing the boundary are defined in collection-plan.md and governed by
+    012 contracts/runner-protocol.md; this document defines the HTTP envelope around them.
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+    runnerBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'runner registration credential, tenant-scoped (012)',
+      }
+  parameters:
+    SnapshotId:
+      { name: snapshotId, in: path, required: true, schema: { type: string, format: uuid } }
+    IssueId: { name: issueId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - BOUNDARY_SCHEMA_REJECTED
+            - PLAN_DIGEST_MISMATCH
+            - PASS_ALREADY_INGESTED
+            - FOLLOW_UP_CAP_REACHED
+            - UNDECLARED_COLLECTOR
+            - CONTRACT_VERSION_UNSUPPORTED
+        message: { type: string }
+        schemaErrorPaths:
+          {
+            type: array,
+            items: { type: string },
+            description: 'paths only; the payload is never echoed (R-13)',
+          }
+    SourceStatus:
+      type: string
+      enum: [collected, partial, unavailable, timed_out, withheld, not_attempted]
+    GapReasonCode:
+      type: string
+      enum:
+        - source_unreachable
+        - auth_revoked
+        - timeout
+        - retention_exceeded
+        - capability_unavailable
+        - budget_exhausted
+        - redaction_withheld
+        - schema_rejected
+        - empty_result
+    ItemClass:
+      type: string
+      description: 'the closed crossing list of 012 contracts/runner-protocol.md; nothing is added here (R-03)'
+      enum:
+        [
+          error_signature,
+          trace_shape,
+          metric_delta,
+          deploy_ref,
+          commit_ref,
+          test_result,
+          file_path,
+          pull_request_ref,
+          config_key_ref,
+          knowledge_ref,
+          tool_output_summary,
+          collection_gap,
+        ]
+    SourceOutcome:
+      type: object
+      required: [collectorKey, status, reasonCode, itemCount, durationMs]
+      properties:
+        collectorKey: { type: string }
+        status: { $ref: '#/components/schemas/SourceStatus' }
+        reasonCode: { $ref: '#/components/schemas/GapReasonCode' }
+        itemCount: { type: integer }
+        truncated: { type: boolean }
+        durationMs: { type: integer }
+        gapEvidenceId:
+          type: string
+          format: uuid
+          nullable: true
+          description: 'null only when status is collected; every other status has exactly one collection_gap record (R-07)'
+    Completeness:
+      type: object
+      description: 'machine-readable, not prose (FR-017) — a consumer refuses to conclude from a snapshot missing what its conclusion depends on'
+      properties:
+        expected: { type: array, items: { type: string } }
+        contributed: { type: array, items: { type: string } }
+        missing: { type: array, items: { type: string } }
+        partial: { type: array, items: { type: string } }
+        degradedPrecision:
+          type: boolean
+          description: 'component attribution fell back to the default scope rather than guessing'
+        contradictions:
+          type: array
+          description: 'retained, never resolved by picking one (R-14)'
+          items:
+            type: object
+            properties:
+              itemIds: { type: array, items: { type: string, format: uuid } }
+              field: { type: string }
+    ContextSnapshot:
+      type: object
+      required: [id, issueId, version, collectedAt, window, completeness, budgetState]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid }
+        version: { type: integer }
+        predecessorId: { type: string, format: uuid, nullable: true }
+        collectedAt: { type: string, format: date-time }
+        window:
+          type: object
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        planDigest: { type: string }
+        collectionRulesetVersion: { type: integer }
+        rankingRulesetVersion: { type: integer }
+        redactionRulesetVersion: { type: integer }
+        normalisationRulesetVersion:
+          { type: integer, description: "001's, reused for dedup (FR-018)" }
+        contractVersion: { type: integer }
+        runnerImageVersion: { type: string }
+        completeness: { $ref: '#/components/schemas/Completeness' }
+        inclusionCutScore: { type: integer, nullable: true }
+        budgetState: { type: string, enum: [within, degraded, budget_limited] }
+        finalisedAt: { type: string, format: date-time, nullable: true }
+    RankingTerm:
+      type: object
+      description: 'the reason, not just the number — an engineer disagrees with a weight (FR-019, R-09)'
+      required: [term, weight, contribution]
+      properties:
+        term: { type: string }
+        weight: { type: integer }
+        contribution: { type: integer }
+    ContextItem:
+      type: object
+      required:
+        [id, evidenceId, itemClass, collectorKey, relevanceScore, rankingTerms, inclusionState]
+      properties:
+        id: { type: string, format: uuid }
+        evidenceId:
+          {
+            type: string,
+            format: uuid,
+            description: 'the item is an Evidence record (FR-012, 001 FR-007)',
+          }
+        itemClass: { $ref: '#/components/schemas/ItemClass' }
+        collectorKey: { type: string }
+        dedupKey: { type: string }
+        occurrenceCount: { type: integer }
+        firstObservedAt: { type: string, format: date-time }
+        lastObservedAt: { type: string, format: date-time }
+        componentId: { type: string, format: uuid, nullable: true }
+        componentAttribution: { type: string, enum: [resolved, fallback, unknown] }
+        relevanceScore:
+          { type: integer, description: 'integer sum; float ordering is not reproducible (R-09)' }
+        rankingTerms: { type: array, items: { $ref: '#/components/schemas/RankingTerm' } }
+        inclusionState:
+          {
+            type: string,
+            enum: [included, excluded],
+            description: 'excluded items are retained, never dropped (FR-020)',
+          }
+        redactionDominated: { type: boolean }
+        untrusted:
+          type: boolean
+          description: 'always true for any collected text; it reaches no predicate, no plan and no tool argument (FR-021)'
+    ResultBatch:
+      type: object
+      description: 'one batch per pass; a duplicate for an ingested pass is acknowledged and dropped (R-05)'
+      required: [passId, planDigest, contractVersion, collectedAt, sourceOutcomes, items]
+      properties:
+        passId: { type: string, format: uuid }
+        planDigest: { type: string }
+        contractVersion: { type: integer }
+        runnerImageVersion: { type: string }
+        collectedAt: { type: string, format: date-time }
+        sourceOutcomes: { type: array, items: { $ref: '#/components/schemas/SourceOutcome' } }
+        items:
+          type: array
+          description: 'validated against packages/boundary-contract at egress and independently here (012 FR-022)'
+          items:
+            type: object
+            required: [itemClass, collectorKey, observedAt, payload]
+            properties:
+              itemClass: { $ref: '#/components/schemas/ItemClass' }
+              collectorKey: { type: string }
+              observedAt: { type: string, format: date-time }
+              payload:
+                type: object
+                description: 'the declared field set for that shape; free-form string fields are rejected (012 R-04)'
+                additionalProperties: false
+    BoundaryRejection:
+      type: object
+      required: [id, runnerId, contractVersion, schemaErrorPaths, payloadDigest, receivedAt]
+      properties:
+        id: { type: string, format: uuid }
+        runnerId: { type: string, format: uuid }
+        passId: { type: string, format: uuid, nullable: true }
+        contractVersion: { type: integer }
+        schemaErrorPaths: { type: array, items: { type: string } }
+        payloadDigest:
+          {
+            type: string,
+            description: 'digest only; the payload that failed validation is never stored (R-13)',
+          }
+        byteSize: { type: integer }
+        receivedAt: { type: string, format: date-time }
+paths:
+  /runner/collection-results:
+    post:
+      summary: Runner delivers a result batch (FR-025) — the inbound half of the persisted wait
+      description: >
+        Consumes the workflow_callback of kind `runner_result` (012 FR-029, 012 FR-030). Authenticated,
+        idempotent and replayable; a batch for an unknown, completed or abandoned pass is recorded,
+        never discarded. Validation happens before any domain write.
+      security: [{ runnerBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResultBatch' }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ingested: { type: integer }
+                  duplicate:
+                    { type: boolean, description: 'true when this pass was already ingested' }
+                  snapshotFinalised: { type: boolean }
+        '409':
+          description: 'PLAN_DIGEST_MISMATCH or PASS_ALREADY_INGESTED'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: 'BOUNDARY_SCHEMA_REJECTED — quarantined as a digest and error paths; nothing is stored (FR-010)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /context/collectors:
+    get:
+      summary: The declared collector registry — the closed set a follow-up pass may name (FR-005)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        collectorKey: { type: string }
+                        itemClasses:
+                          { type: array, items: { $ref: '#/components/schemas/ItemClass' } }
+                        parameterSchema: { type: object, additionalProperties: true }
+                        defaultTimeoutMs: { type: integer }
+                        requiredCapability: { type: string }
+  /issues/{issueId}/context:
+    get:
+      summary: The latest finalised snapshot for an issue (FR-001)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ContextSnapshot' } } },
+          }
+        '404':
+          description: "not found, including another tenant's issue (SC-009)"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /issues/{issueId}/context/versions:
+    get:
+      summary: Every snapshot version for an issue — earlier versions remain readable (FR-022)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ContextSnapshot' } }
+  /issues/{issueId}/context/passes:
+    post:
+      summary: Request a targeted follow-up collection pass (FR-005)
+      description: >
+        Names a declared collector with schema-validated parameters. The collector key is an enum
+        over the registry, so a source outside the declared set is not expressible (R-12). Capped
+        per issue; recorded as its own pass with requester and reason.
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [collectorKey, parameters, requestReason]
+              properties:
+                collectorKey:
+                  {
+                    type: string,
+                    description: 'must exist in the registry; otherwise UNDECLARED_COLLECTOR',
+                  }
+                parameters: { type: object, additionalProperties: true }
+                requestReason:
+                  {
+                    type: string,
+                    enum: [insufficient_context, hypothesis_probe, named_file_retrieval],
+                  }
+      responses:
+        '202':
+          description: Dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  passId: { type: string, format: uuid }
+                  passOrdinal: { type: integer }
+        '409':
+          description: 'FOLLOW_UP_CAP_REACHED — the bounded number of passes is exhausted (FR-005)'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: 'UNDECLARED_COLLECTOR'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /context-snapshots/{snapshotId}:
+    get:
+      summary: One snapshot with its ruleset and contract versions
+      parameters: [{ $ref: '#/components/parameters/SnapshotId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ContextSnapshot' } } },
+          }
+        '404':
+          {
+            description: Not found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /context-snapshots/{snapshotId}/items:
+    get:
+      summary: Ranked, deduplicated items — stable ordering across runs (FR-018, FR-019, SC-007)
+      parameters:
+        - { $ref: '#/components/parameters/SnapshotId' }
+        - { name: inclusionState, in: query, schema: { type: string, enum: [included, excluded] } }
+        - { name: itemClass, in: query, schema: { $ref: '#/components/schemas/ItemClass' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ContextItem' } }
+  /context-snapshots/{snapshotId}/completeness:
+    get:
+      summary: What contributed and what did not, machine-readable (FR-014, FR-017)
+      parameters: [{ $ref: '#/components/parameters/SnapshotId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  completeness: { $ref: '#/components/schemas/Completeness' }
+                  sourceOutcomes:
+                    { type: array, items: { $ref: '#/components/schemas/SourceOutcome' } }
+  /context-snapshots/{snapshotId}/passes:
+    get:
+      summary: Every pass that fed this snapshot, with its plan and requester (FR-005, FR-027)
+      parameters: [{ $ref: '#/components/parameters/SnapshotId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        passOrdinal: { type: integer }
+                        planDigest: { type: string }
+                        requestedPlan: { type: object, additionalProperties: true }
+                        resolvedPlan:
+                          {
+                            type: object,
+                            additionalProperties: true,
+                            description: 'requested ∩ runner capabilities (R-04)',
+                          }
+                        requestedByStep: { type: string }
+                        requestReason: { type: string, nullable: true }
+                        outcome:
+                          {
+                            type: string,
+                            enum: [completed, partial, deadline_expired, runner_unavailable],
+                          }
+  /boundary-rejections:
+    get:
+      summary: Inbound payloads refused by the boundary schema — visible to the tenant (FR-010)
+      parameters:
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/BoundaryRejection' } }

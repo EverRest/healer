@@ -1,0 +1,334 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 001 issue and evidence
+  version: 0.1.0
+  description: >
+    Draft contract for spec 001. The authoritative OpenAPI is generated from NestJS controllers
+    (012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403, because 403 confirms existence.
+    Every mutation requires an Idempotency-Key.
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+    ingestBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'provider ingestion credential, tenant-scoped',
+      }
+  parameters:
+    IssueId: { name: issueId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            [
+              VALIDATION,
+              UNAUTHENTICATED,
+              NOT_FOUND,
+              RATE_LIMITED,
+              IDEMPOTENCY_CONFLICT,
+              EVIDENCE_REQUIRED,
+              IMMUTABLE_RECORD,
+              STEP_ATTRIBUTION_MISMATCH,
+            ]
+        message: { type: string }
+    Signal:
+      type: object
+      required: [observedAt, component, environment, errorSignature]
+      description: 'one raw observation from a provider; fingerprinted on receipt'
+      properties:
+        observedAt: { type: string, format: date-time }
+        component: { type: string }
+        environment: { type: string }
+        severity: { type: string, enum: [critical, high, medium, low] }
+        errorSignature:
+          type: object
+          description: 'normalised on receipt; message bodies are not accepted'
+          properties:
+            exceptionType: { type: string }
+            frames: { type: array, items: { type: string } }
+            endpointTemplate: { type: string }
+            errorCode: { type: string }
+        traceId: { type: string }
+        deploymentRef: { type: string }
+    Issue:
+      type: object
+      required: [id, kind, state, severity, fingerprint, occurrenceCount, firstSeenAt, lastSeenAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          {
+            type: string,
+            enum:
+              [
+                production_incident,
+                user_report,
+                monitoring_alert,
+                regression,
+                automated_detection,
+                knowledge_drift,
+              ],
+          }
+        componentId: { type: string, format: uuid, nullable: true }
+        environment: { type: string }
+        severity: { type: string, enum: [critical, high, medium, low] }
+        state:
+          {
+            type: string,
+            enum:
+              [
+                detected,
+                investigating,
+                diagnosed,
+                acting,
+                resolved,
+                needs_human,
+                stale,
+                merged,
+                removed,
+              ],
+          }
+        fingerprint: { type: string }
+        rulesetVersion: { type: integer }
+        occurrenceCount: { type: integer }
+        firstSeenAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time }
+        mergedIntoId:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: 'projection of the live merged_into relationship (FR-020)',
+          }
+        recurrenceOfId:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: 'projection of the live recurrence_of relationship (FR-020)',
+          }
+        relatedIssueIds:
+          type: array
+          description: 'deterministically correlated issues — related, never merged (FR-020)'
+          items: { type: string, format: uuid }
+    Evidence:
+      type: object
+      required: [id, type, sourceSystem, sourceLabel, refState, producedByStep, observedAt]
+      properties:
+        id: { type: string, format: uuid }
+        type:
+          {
+            type: string,
+            enum:
+              [
+                error_signature,
+                trace_shape,
+                metric_delta,
+                deploy_ref,
+                commit_ref,
+                test_result,
+                file_path,
+                tool_output_summary,
+                document_excerpt,
+                collection_gap,
+                budget_degradation,
+                graph_fact,
+              ],
+          }
+        sourceSystem: { type: string }
+        sourceRef: { type: string, nullable: true, description: 'null once detached' }
+        sourceLabel: { type: string, description: 'survives detachment' }
+        excerpt: { type: string, nullable: true }
+        excerptTruncated: { type: boolean }
+        payload: { type: object, additionalProperties: true }
+        producedByStep: { type: string }
+        refState: { type: string, enum: [linked, detached] }
+        observedAt: { type: string, format: date-time }
+    TimelineEntry:
+      type: object
+      description: 'computed by query; no model orders or selects events'
+      required: [at, type, cause]
+      properties:
+        at: { type: string, format: date-time }
+        type: { type: string }
+        cause: { type: string, enum: [ingestion, agent, human, policy, system] }
+        actorRef: { type: string, nullable: true }
+        summary: { type: string }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+paths:
+  /ingest/signals:
+    post:
+      summary: Provider signal batch (FR-002, FR-004)
+      security: [{ ingestBearer: [] }]
+      parameters:
+        - name: X-Delivery-Id
+          in: header
+          required: true
+          schema: { type: string }
+          description: 'provider delivery identifier; a repeat is acknowledged and dropped'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signals]
+              properties:
+                signals:
+                  { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/Signal' } }
+      responses:
+        '202':
+          description: 'accepted; always 202 — ingestion never blocks the provider'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: integer }
+                  duplicate:
+                    { type: boolean, description: 'true when this delivery id was already seen' }
+  /issues:
+    get:
+      summary: List issues
+      parameters:
+        - { name: state, in: query, schema: { type: string } }
+        - { name: componentId, in: query, schema: { type: string, format: uuid } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Issue' } }
+  /issues/{issueId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Issue' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's issue",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    delete:
+      summary: Tenant-requested deletion (FR-018) — leaves a tombstone, not the content
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '204': { description: No Content }
+  /issues/{issueId}/evidence:
+    get:
+      summary: Evidence for an issue (FR-007)
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { name: type, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+  /issues/{issueId}/timeline:
+    get:
+      summary: Deterministic timeline (FR-013) — a query, not a generated narrative
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/TimelineEntry' } }
+  /issues/{issueId}/evidence-graph:
+    get:
+      summary: Evidence graph — same records as the timeline, arranged as nodes and edges (FR-013)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200': { description: OK }
+  /issues/{issueId}/audit:
+    get:
+      summary: Audit trail for this issue (FR-012)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200': { description: OK }
+  /issues/{issueId}/close:
+    post:
+      summary: A human closes the issue (FR-021) — resolves it with resolutionKind self_resolved
+      description: >
+        Publishes IssueResolved with resolutionKind `self_resolved` and no verification evidence.
+        Consumers requiring verification must not treat it as verified: 009 escalates rather than
+        releasing a held ticket (C-09).
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+      responses:
+        '200':
+          {
+            description: Resolved,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Issue' } } },
+          }
+  /issues/{issueId}/merge:
+    post:
+      summary: Merge into another issue (FR-016) — reversible, evidence is not copied
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intoIssueId, reason]
+              properties:
+                intoIssueId: { type: string, format: uuid }
+                reason: { type: string }
+      responses:
+        '200': { description: OK }
+  /issues/{issueId}/unmerge:
+    post:
+      summary: Reverse a merge (FR-016)
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: OK }

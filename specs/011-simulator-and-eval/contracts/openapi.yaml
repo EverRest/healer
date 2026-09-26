@@ -1,0 +1,647 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 011 simulator and eval
+  version: 0.1.0
+  description: >
+    Draft contract for spec 011. The authoritative OpenAPI is generated from NestJS controllers
+    (012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. Every mutation requires an Idempotency-Key.
+    Nothing on this surface can grant a run a mutating capability: no request body carries a
+    capability field, and the credential broker has no representable grant for a simulation
+    principal. A metric is always requested for a named cohort — real or synthetic — because no
+    combined figure exists.
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+  parameters:
+    RunId: { name: runId, in: path, required: true, schema: { type: string, format: uuid } }
+    EntryId: { name: entryId, in: path, required: true, schema: { type: string, format: uuid } }
+    Cohort:
+      name: cohort
+      in: query
+      required: true
+      schema: { type: string, enum: [real, synthetic] }
+      description: 'required — there is no combined cohort (C-05)'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - UNREDACTED_FIELD
+            - PINNED_VERSION_UNAVAILABLE
+            - PROMPT_RESOLUTION_BY_PATH
+            - CROSS_TENANT_COMPARISON
+            - DATASET_VERSION_MISMATCH
+            - SCORING_VERSION_MISMATCH
+            - RUN_NOT_ELIGIBLE_FOR_DERIVATION
+            - BUDGET_EXHAUSTED
+        message: { type: string }
+        detail: { type: object, additionalProperties: true }
+    GoldenIssue:
+      type: object
+      required: [id, title, signature, repoRef, commitSha, origin, runnable]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        componentId: { type: string, format: uuid, nullable: true }
+        signature:
+          {
+            type: object,
+            additionalProperties: true,
+            description: 'error_signature shape (012 FR-022)',
+          }
+        fingerprint: { type: string }
+        contextBundle:
+          type: object
+          additionalProperties: false
+          description: 'closed evidence shapes only; an undeclared field rejects the entry (FR-025)'
+          properties:
+            errorSignatures: { type: array, items: { type: object, additionalProperties: true } }
+            traceShapes: { type: array, items: { type: object, additionalProperties: true } }
+            metricDeltas: { type: array, items: { type: object, additionalProperties: true } }
+            deployRefs: { type: array, items: { type: object, additionalProperties: true } }
+            commitRefs: { type: array, items: { type: object, additionalProperties: true } }
+            testResults: { type: array, items: { type: object, additionalProperties: true } }
+            filePaths: { type: array, items: { type: string } }
+            collectionGaps: { type: array, items: { type: object, additionalProperties: true } }
+        repoRef:
+          { type: string, description: 'resolved in the execution plane; no source is stored here' }
+        commitSha: { type: string }
+        bundleDigest: { type: string, nullable: true }
+        historicalOutcome: { type: object, additionalProperties: true }
+        fixRef:
+          {
+            type: string,
+            nullable: true,
+            description: 'provenance only — never an input to scoring (FR-014)',
+          }
+        incidentClass:
+          {
+            type: string,
+            enum: [deterministic, load_dependent, data_specific, concurrency, third_party, config],
+          }
+        wasCodeBug: { type: boolean, nullable: true }
+        reproducibilityClass:
+          { type: string, enum: [reproducible, partially, not_reproducible, unknown] }
+        origin:
+          { type: string, enum: [real, synthetic], description: 'mandatory; no default (C-05)' }
+        syntheticInjection: { type: object, nullable: true, additionalProperties: true }
+        runnable: { type: boolean }
+    DatasetVersion:
+      type: object
+      required: [id, name, version, entryCount, realCount, syntheticCount, publishedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        version: { type: integer }
+        entryCount: { type: integer }
+        realCount: { type: integer, description: 'computed at publication and frozen' }
+        syntheticCount: { type: integer, description: 'computed at publication and frozen' }
+        composition: { type: object, additionalProperties: true }
+        publishedAt: { type: string, format: date-time }
+    RunConfiguration:
+      type: object
+      required:
+        [
+          digest,
+          modelId,
+          modelVersion,
+          routing,
+          promptVersionIds,
+          policyRuleVersion,
+          scoringVersion,
+        ]
+      properties:
+        digest: { type: string }
+        modelId: { type: string }
+        modelVersion: { type: string }
+        routing:
+          {
+            type: string,
+            enum: [evaluation_shared, tenant_provider],
+            description: 'a BYO tenant resolves to their own provider (012 FR-046, R-14)',
+          }
+        promptVersionIds:
+          {
+            type: array,
+            items: { type: string, format: uuid },
+            description: 'resolved by id, never by key or path (R-13)',
+          }
+        datasetVersionId: { type: string, format: uuid, nullable: true }
+        policyRuleVersion: { type: integer }
+        retrievalSnapshotId: { type: string }
+        scoringVersion: { type: integer }
+        adapterVersions: { type: object, additionalProperties: true }
+        temperature: { type: number }
+        seed: { type: integer, nullable: true }
+        budget: { type: object, additionalProperties: true }
+    Run:
+      type: object
+      required: [id, kind, configuration, completionState, reproducibility, capabilitySet]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [single_issue, dataset] }
+        configuration: { $ref: '#/components/schemas/RunConfiguration' }
+        capabilitySet:
+          type: array
+          items: { type: string }
+          description: 'as granted; contains no mutating capability and none can be added (FR-004, FR-005)'
+        completionState: { type: string, enum: [running, complete, partial, failed] }
+        reproducibility: { type: string, enum: [unverified, reproducible, non_reproducible] }
+        divergingComponent: { type: string, nullable: true }
+        scoredCount: { type: integer }
+        realScoredCount: { type: integer }
+        syntheticScoredCount:
+          { type: integer, description: 'what was scored, not what the dataset held' }
+        unrunnableCount: { type: integer }
+        cost:
+          { type: number, description: 'summed from agent runs (012 FR-036); not counted twice' }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+    RunReport:
+      type: object
+      required:
+        [runId, classification, reproductionOutcome, stopPoint, policyDecisions, evidenceIds]
+      properties:
+        runId: { type: string, format: uuid }
+        goldenIssueId: { type: string, format: uuid, nullable: true }
+        issueId:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: 'read-only replay of a live issue',
+          }
+        classification: { type: string, description: '006 outcome, including NOT_A_CODE_PROBLEM' }
+        diagnosis: { type: object, additionalProperties: true }
+        reproductionOutcome: { type: string, enum: [PASS, FAIL, INCONCLUSIVE] }
+        changePlan: { type: object, nullable: true, additionalProperties: true }
+        policyDecisions:
+          type: array
+          description: 'dry-run evaluations (002 FR-019); a refusal is output, not an error (FR-003)'
+          items:
+            type: object
+            properties:
+              action: { type: string }
+              outcome: { type: string, enum: [ALLOW, DENY, REQUIRE_APPROVAL] }
+              ruleVersion: { type: integer }
+              reasons: { type: array, items: { type: string } }
+              missingGrant: { type: string, nullable: true }
+        stopPoint:
+          { type: string, description: 'where it would have stopped and waited for a human' }
+        riskClassification: { type: string }
+        cost: { type: number }
+        tokensIn: { type: integer }
+        tokensOut: { type: integer }
+        latencyMs: { type: integer }
+        unrunnableReason: { type: string, nullable: true }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+    Score:
+      type: object
+      required: [goldenIssueId, verdict, criteria, scoringVersion]
+      properties:
+        goldenIssueId: { type: string, format: uuid }
+        verdict: { type: string, enum: [success, false_fix, no_fix, unscored] }
+        scoringVersion: { type: integer }
+        criteria:
+          type: array
+          items:
+            type: object
+            required: [criterion, result, anchorKind]
+            properties:
+              criterion:
+                type: string
+                enum:
+                  [
+                    regression_test_passes,
+                    original_failure_not_reproducible,
+                    pre_existing_suite_passes,
+                    no_unintended_change,
+                    incident_did_not_recur,
+                  ]
+              result: { type: string, enum: [pass, fail, not_applicable] }
+              anchorKind:
+                {
+                  type: string,
+                  enum:
+                    [
+                      historical_outcome,
+                      pre_existing_suite,
+                      raw_evidence,
+                      adopted_expectation,
+                      production_observation,
+                    ],
+                }
+              anchorRef: { type: string }
+              reason: { type: string }
+        gatesPassed:
+          {
+            type: array,
+            items: { type: string },
+            description: 'retained for every false fix (FR-017)',
+          }
+        modelId: { type: string }
+        promptVersionIds: { type: array, items: { type: string, format: uuid } }
+        reportedConfidence:
+          {
+            type: number,
+            nullable: true,
+            description: 'recorded for calibration; never a criterion (FR-028)',
+          }
+    Metric:
+      type: object
+      required: [metric, cohort, numerator, denominator, availability]
+      properties:
+        metric: { type: string }
+        cohort: { type: string, enum: [real, synthetic] }
+        value: { type: number, nullable: true }
+        numerator: { type: integer }
+        denominator: { type: integer }
+        exclusions: { type: object, additionalProperties: true }
+        availability: { type: string, enum: [available, insufficient_observation, not_applicable] }
+        availabilityReason:
+          {
+            type: string,
+            nullable: true,
+            description: 'e.g. no tenant has run at L2 for thirty days — stated, never rendered as zero',
+          }
+    ThresholdDerivation:
+      type: object
+      required: [thresholdKey, value, runId, datasetVersionId, metric, realDenominator]
+      properties:
+        id: { type: string, format: uuid }
+        thresholdKey:
+          {
+            type: string,
+            enum:
+              [
+                false_fix_rate,
+                per_incident_cost_ceiling,
+                tenant_daily_budget,
+                escalation_attempt_cap,
+              ],
+          }
+        value: { type: number }
+        runId: { type: string, format: uuid }
+        datasetVersionId: { type: string, format: uuid }
+        metric: { type: string }
+        realDenominator:
+          {
+            type: integer,
+            minimum: 20,
+            description: 'scored real denominator, not dataset size; min_real_yield is the product constant 20 and no configuration can lower it (FR-021a, R-15)',
+          }
+        derivedBy: { type: string }
+        derivedAt: { type: string, format: date-time }
+        supersededById: { type: string, format: uuid, nullable: true }
+paths:
+  /eval/entries:
+    post:
+      summary: Import incident entries (FR-010, FR-025)
+      description: >
+        Accepts only the closed evidence shapes. Redaction is the customer's, performed in their
+        execution plane; an entry carrying an undeclared field is rejected, never cleaned.
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries]
+              properties:
+                entries: { type: array, items: { $ref: '#/components/schemas/GoldenIssue' } }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: integer }
+                  rejected:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        index: { type: integer }
+                        code: { type: string, enum: [UNREDACTED_FIELD, VALIDATION] }
+                        field: { type: string }
+        '422':
+          {
+            description: 'rejected',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    get:
+      summary: List entries
+      parameters:
+        - { name: origin, in: query, schema: { type: string, enum: [real, synthetic] } }
+        - { name: runnable, in: query, schema: { type: boolean } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/GoldenIssue' } }
+  /eval/entries/{entryId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/EntryId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/GoldenIssue' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's entry",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /eval/dataset-versions:
+    post:
+      summary: Publish an immutable dataset version (FR-019)
+      description: 'real and synthetic counts are computed from the members and frozen; they are not settable'
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, entryIds]
+              properties:
+                name: { type: string }
+                entryIds: { type: array, items: { type: string, format: uuid } }
+      responses:
+        '201':
+          {
+            description: Created,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/DatasetVersion' } } },
+          }
+    get:
+      summary: List dataset versions
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/DatasetVersion' } }
+  /eval/runs:
+    post:
+      summary: Start a run — one issue or a whole dataset (FR-001)
+      description: >
+        The same mechanism for both; only input selection differs. No capability field exists in
+        this body: the run's capability set is minted without mutating capabilities and cannot be
+        configured (FR-004, FR-005).
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [configuration]
+              properties:
+                configuration: { $ref: '#/components/schemas/RunConfiguration' }
+                goldenIssueId: { type: string, format: uuid, description: 'single-issue run' }
+                issueId:
+                  {
+                    type: string,
+                    format: uuid,
+                    description: 'read-only replay of a live issue; never joins the live workflow',
+                  }
+      responses:
+        '202':
+          {
+            description: Accepted,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } },
+          }
+        '422':
+          {
+            description: 'pinned model or prompt version unavailable — never substituted (FR-008)',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    get:
+      summary: List runs
+      parameters:
+        - { name: datasetVersionId, in: query, schema: { type: string, format: uuid } }
+        - { name: completionState, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Run' } }
+  /eval/runs/{runId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/RunId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's run",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /eval/runs/{runId}/resume:
+    post:
+      summary: Resume a run suspended at its budget (FR-023)
+      description: 'resumes from the first unscored entry; per-entry results are already committed'
+      parameters:
+        - { $ref: '#/components/parameters/RunId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202':
+          {
+            description: Accepted,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Run' } } },
+          }
+  /eval/runs/{runId}/reports:
+    get:
+      summary: Per-issue reports (FR-002)
+      parameters: [{ $ref: '#/components/parameters/RunId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/RunReport' } }
+  /eval/runs/{runId}/scores:
+    get:
+      summary: Per-issue behavioural scores (FR-013)
+      parameters:
+        - { $ref: '#/components/parameters/RunId' }
+        - {
+            name: verdict,
+            in: query,
+            schema: { type: string, enum: [success, false_fix, no_fix, unscored] },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Score' } }
+  /eval/runs/{runId}/metrics:
+    get:
+      summary: Metrics for one cohort (FR-016)
+      description: 'cohort is required; no combined figure exists (C-05)'
+      parameters:
+        - { $ref: '#/components/parameters/RunId' }
+        - { $ref: '#/components/parameters/Cohort' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cohort: { type: string, enum: [real, synthetic] }
+                  syntheticSharePct:
+                    {
+                      type: number,
+                      description: 'of the run, stated whenever synthetic entries were scored',
+                    }
+                  items: { type: array, items: { $ref: '#/components/schemas/Metric' } }
+  /eval/comparisons:
+    get:
+      summary: Compare two runs over one dataset version (FR-020)
+      parameters:
+        - { name: baseRunId, in: query, required: true, schema: { type: string, format: uuid } }
+        - {
+            name: candidateRunId,
+            in: query,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  datasetVersionId: { type: string, format: uuid }
+                  scoringVersion: { type: integer }
+                  regressionsIntoFalseFix:
+                    type: array
+                    description: 'reported independently of the aggregate direction'
+                    items: { type: object, additionalProperties: true }
+                  deltas:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        goldenIssueId: { type: string, format: uuid }
+                        baseVerdict: { type: string }
+                        candidateVerdict: { type: string }
+        '422':
+          {
+            description: 'different dataset or scoring version, or two tenants',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /eval/thresholds:
+    post:
+      summary: Derive a threshold from a run (FR-021)
+      description: >
+        Refused unless the cited run scored zero synthetic entries, completed fully, is verified
+        reproducible, and met the minimum real denominator. When real yield is too small no
+        derivation exists and the L2 ceiling stands (C-05).
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [thresholdKey, value, runId, metric]
+              properties:
+                thresholdKey:
+                  {
+                    type: string,
+                    enum:
+                      [
+                        false_fix_rate,
+                        per_incident_cost_ceiling,
+                        tenant_daily_budget,
+                        escalation_attempt_cap,
+                      ],
+                  }
+                value: { type: number }
+                runId: { type: string, format: uuid }
+                metric: { type: string }
+      responses:
+        '201':
+          {
+            description: Created,
+            content:
+              {
+                application/json: { schema: { $ref: '#/components/schemas/ThresholdDerivation' } },
+              },
+          }
+        '422':
+          {
+            description: 'run not eligible — synthetic, partial or non-reproducible',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    get:
+      summary: Thresholds in effect with their provenance (FR-021, SC-009)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    { type: array, items: { $ref: '#/components/schemas/ThresholdDerivation' } }
+                  conflicts:
+                    type: array
+                    description: 'runs whose results contradict a threshold in effect (FR-022)'
+                    items:
+                      type: object
+                      properties:
+                        thresholdKey: { type: string }
+                        runId: { type: string, format: uuid }
+                        observedValue: { type: number }

@@ -1,0 +1,589 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 009 autosupport
+  version: 0.1.0
+  description: >
+    Draft contract for spec 009. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403, because 403 confirms existence.
+    Every mutation requires an Idempotency-Key.
+    There is deliberately NO operation that sends answer text to an end customer, at any path,
+    under any configuration (FR-016, D-13). Its absence is asserted by a contract test and by
+    gate-no-send. The only outbound path is the draft-ready event on the outbox.
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+    intakeBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'channel intake credential, tenant-scoped',
+      }
+    senderBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'external sending system; may report sends, may not read drafts of other tenants',
+      }
+  parameters:
+    TicketId: { name: ticketId, in: path, required: true, schema: { type: string, format: uuid } }
+    DraftId: { name: draftId, in: path, required: true, schema: { type: string, format: uuid } }
+    Category: { name: category, in: path, required: true, schema: { type: string } }
+    DeliveryId:
+      name: X-Delivery-Id
+      in: header
+      required: true
+      schema: { type: string }
+      description: 'channel delivery identifier; a repeat is acknowledged and dropped (FR-002)'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - RATE_LIMITED
+            - IDEMPOTENCY_CONFLICT
+            - EVIDENCE_REQUIRED
+            - CATEGORY_BLOCKED
+            - CATEGORY_NOT_PROMOTABLE
+            - TENANT_MISMATCH
+            - DRAFT_INVALIDATED
+            - SENDING_NOT_SUPPORTED
+        message: { type: string }
+    Outcome:
+      type: string
+      description: 'no hedged value exists — AUTO_REPLY with a caveat is not representable (FR-004)'
+      enum: [AUTO_REPLY, NEEDS_HUMAN, INSUFFICIENT_CONTEXT, held]
+    SupportTicket:
+      type: object
+      required: [id, issueId, channel, receivedAt, language]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid, description: 'kind = user_report (FR-001)' }
+        channel: { type: string, enum: [webhook, email, gitlab_issue] }
+        externalRef: { type: string }
+        reporterRef:
+          { type: string, description: 'channel-scoped reference; never a name or address (R-22)' }
+        bodyExcerpt:
+          { type: string, description: 'bounded at capture; data, never instruction (FR-023)' }
+        quotedHistoryExcerpt: { type: string, nullable: true }
+        language: { type: string }
+        category:
+          {
+            type: string,
+            nullable: true,
+            description: 'null is treated as not allowlisted (FR-011)',
+          }
+        categoryCandidates: { type: array, items: { type: string } }
+        holdState: { type: string, enum: [none, held, released, escalated] }
+        linkedIssueId: { type: string, format: uuid, nullable: true }
+        heldUntil: { type: string, format: date-time, nullable: true }
+        receivedAt: { type: string, format: date-time }
+    Claim:
+      type: object
+      required: [seq, claimText, claimKind, grounded]
+      properties:
+        seq: { type: integer }
+        claimText: { type: string }
+        claimKind:
+          { type: string, enum: [factual_token, prose_assertion, procedural_step, commitment] }
+        grounded: { type: boolean }
+        ungroundedReason:
+          type: string
+          nullable: true
+          enum:
+            [
+              no_candidate_span,
+              span_rejected,
+              cited_document_silent,
+              cross_language,
+              source_version_changed,
+            ]
+    Citation:
+      type: object
+      required: [sourceKind, documentId, documentVersion, provenance]
+      properties:
+        claimSeq: { type: integer, nullable: true }
+        sourceKind: { type: string, enum: [knowledge_document, resolved_issue, evidence_record] }
+        documentId: { type: string, format: uuid }
+        documentVersion: { type: integer, description: 'pinned (005 FR-019)' }
+        provenance:
+          {
+            type: string,
+            enum: [human_authored, machine_generated, machine_generated_human_adopted],
+          }
+        trustWeight: { type: number }
+        freshnessState: { type: string, enum: [fresh, stale, unknown] }
+        matchedSpan: { type: string, nullable: true }
+        tenantVerifiedAtRetrieval: { type: string, format: date-time }
+        tenantVerifiedAtFinalisation: { type: string, format: date-time, nullable: true }
+    StructuredFactBinding:
+      type: object
+      required: [slotKey, fieldName, sourceSystem, value, valueType, readAt]
+      properties:
+        slotKey: { type: string, example: 'invoice.amount' }
+        fieldName: { type: string }
+        sourceSystem: { type: string }
+        sourceRef: { type: string }
+        value: { type: string }
+        valueType: { type: string, enum: [number, date, currency, duration, identifier, sla] }
+        readAt: { type: string, format: date-time }
+        bound: { type: boolean }
+    GroundingVerdict:
+      type: object
+      description: 'written by the grounding step, not by the drafting step (FR-008)'
+      required: [verdict, claimsTotal, claimsGrounded, matcherVersion]
+      properties:
+        verdict: { type: string, enum: [fully_grounded, ungrounded] }
+        claimsTotal: { type: integer }
+        claimsGrounded: { type: integer }
+        matcherVersion: { type: string }
+        overlapFloor: { type: number }
+        modelRejections:
+          { type: integer, description: 'a model may reject a span; it cannot create one (R-07)' }
+        decidedAt: { type: string, format: date-time }
+    PredicateResult:
+      type: object
+      required: [predicate, result]
+      properties:
+        predicate:
+          type: string
+          enum:
+            - claims_have_citations
+            - citations_resolve_trusted_fresh
+            - category_allowlisted
+            - no_blocked_topic
+            - tenant_verified
+            - supporting_precedent_exists
+            - factual_tokens_bound
+            - grounding_fully_grounded
+        result: { type: boolean }
+        detail: { type: object, additionalProperties: true }
+    AnswerDecision:
+      type: object
+      required: [outcome, ruleVersion, predicates]
+      properties:
+        outcome: { $ref: '#/components/schemas/Outcome' }
+        ruleVersion: { type: integer }
+        policyDecisionId: { type: string, format: uuid }
+        failedPredicate: { type: string, nullable: true }
+        predicates:
+          type: array
+          description: 'every predicate evaluated, not only the failing one (US-2 scenario 5)'
+          items: { $ref: '#/components/schemas/PredicateResult' }
+        modelId: { type: string }
+        promptVersionId: { type: string, format: uuid }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        retrievalTrace: { type: array, items: { type: object, additionalProperties: true } }
+    AnswerDraft:
+      type: object
+      required: [id, ticketId, outcome, language]
+      properties:
+        id: { type: string, format: uuid }
+        ticketId: { type: string, format: uuid }
+        textRendered:
+          { type: string, nullable: true, description: 'null while any fact slot is unbound' }
+        language: { type: string }
+        outcome: { $ref: '#/components/schemas/Outcome' }
+        invalidatedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    CategoryEligibility:
+      type: object
+      required: [category, draftsProduced, consecutiveCleanSends, threshold, promotable]
+      properties:
+        category: { type: string }
+        draftsProduced:
+          {
+            type: integer,
+            description: 'includes non-allowlisted categories — this is what makes promotion measurable (C-07)',
+          }
+        sendsReported: { type: integer }
+        consecutiveCleanSends:
+          {
+            type: integer,
+            description: 'unedited and not reopened; any material edit or reopen resets to zero',
+          }
+        threshold:
+          {
+            type: integer,
+            minimum: 10,
+            description: 'product floor of 10; a tenant may raise it and never lower it (FR-011b, R-23)',
+          }
+        lastResetReason: { type: string, nullable: true, enum: [material_edit, reopen] }
+        promotable: { type: boolean }
+paths:
+  /support/intake/webhook:
+    post:
+      summary: Generic signed webhook intake (FR-001, FR-002)
+      security: [{ intakeBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/DeliveryId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reporterRef, body]
+              properties:
+                reporterRef: { type: string }
+                subject: { type: string }
+                body: { type: string }
+                componentHint: { type: string }
+      responses:
+        '202':
+          description: 'accepted; always 202 — intake never blocks the channel'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticketId: { type: string, format: uuid }
+                  duplicate: { type: boolean }
+  /support/intake/email:
+    post:
+      summary: Inbound mail forwarded by the tenant's mail system (R-02) — Healer polls no mailbox
+      security: [{ intakeBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/DeliveryId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messageId, fromRef, body]
+              properties:
+                messageId: { type: string, description: 'the delivery identity for this channel' }
+                fromRef:
+                  {
+                    type: string,
+                    description: 'reference only; no name or address is stored (R-22)',
+                  }
+                subject: { type: string }
+                body:
+                  {
+                    type: string,
+                    description: 'newest message is the report; quoted history is context (R-03)',
+                  }
+      responses:
+        '202': { description: Accepted }
+  /support/intake/gitlab:
+    post:
+      summary: GitLab issue intake (D-21)
+      security: [{ intakeBearer: [] }]
+      parameters: [{ $ref: '#/components/parameters/DeliveryId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [projectId, issueIid, body]
+              properties:
+                projectId: { type: string }
+                issueIid: { type: integer }
+                noteId: { type: integer }
+                body: { type: string }
+      responses:
+        '202': { description: Accepted }
+  /support/tickets:
+    get:
+      summary: List support tickets
+      parameters:
+        - { name: category, in: query, schema: { type: string } }
+        - {
+            name: holdState,
+            in: query,
+            schema: { type: string, enum: [none, held, released, escalated] },
+          }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SupportTicket' } }
+  /support/tickets/{ticketId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/SupportTicket' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's ticket",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /support/tickets/{ticketId}/draft:
+    get:
+      summary: The draft, if one exists — blocked categories have none (SC-007)
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/AnswerDraft' } } },
+          }
+        '404':
+          {
+            description: 'no draft — blocked category, or held before drafting',
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /support/tickets/{ticketId}/decision:
+    get:
+      summary: The AnswerPolicy outcome with every predicate evaluated (FR-024, SC-008)
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/AnswerDecision' } } },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /support/drafts/{draftId}/claims:
+    get:
+      summary: Decomposed claims and their grounding state (FR-008, FR-009)
+      parameters: [{ $ref: '#/components/parameters/DraftId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Claim' } }
+  /support/drafts/{draftId}/citations:
+    get:
+      summary: Citations with pinned versions, provenance and tenant verification times
+      parameters: [{ $ref: '#/components/parameters/DraftId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Citation' } }
+  /support/drafts/{draftId}/fact-bindings:
+    get:
+      summary: Every factual token bound to a named structured field (FR-012, SC-002)
+      parameters: [{ $ref: '#/components/parameters/DraftId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    { type: array, items: { $ref: '#/components/schemas/StructuredFactBinding' } }
+                  generatedTokenScanClean: { type: boolean }
+  /support/drafts/{draftId}/grounding:
+    get:
+      summary: The independent grounding verdict (FR-008)
+      parameters: [{ $ref: '#/components/parameters/DraftId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/GroundingVerdict' } } },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /support/drafts/{draftId}/feedback:
+    post:
+      summary: An external system reports what it sent, or a reopen (FR-017, FR-021)
+      description: >
+        This is the only write an external sender may perform. It records an inbound fact
+        attributed to that sender; it never attributes a send to Healer. There is no operation
+        here or anywhere else that asks Healer to send.
+      security: [{ senderBearer: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/DraftId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signal, reportedBy]
+              properties:
+                signal:
+                  type: string
+                  enum: [sent_unedited, sent_edited, reopened, human_verdict]
+                  description: >
+                    `sent_edited` is the only inbound edit value on purpose: the server diffs
+                    `sentText` against the draft and resolves it into the stored
+                    `sent_cosmetic_edit` or `sent_material_edit`, and only material resets the C-07
+                    counter (R-25, data-model.md `answer_feedback`). A sender classifying its own
+                    edit would be classifying whether it just lost the progress it wants.
+                    `human_verdict` is a quality signal for 011 and never touches the counter
+                    (FR-021a, R-24).
+                reportedBy: { type: string }
+                sentText:
+                  {
+                    type: string,
+                    description: 'compared to the draft; stored as a digest and a diff summary, not verbatim (R-14)',
+                  }
+                verdict:
+                  {
+                    type: string,
+                    enum: [useful, partly_useful, not_useful],
+                    description: 'required when signal is human_verdict; recorded for 011 only (FR-021a)',
+                  }
+                occurredAt: { type: string, format: date-time }
+      responses:
+        '202': { description: Accepted }
+  /support/held-tickets:
+    get:
+      summary: Tickets waiting on a linked issue (FR-018) — released only on verified-in-production
+      parameters:
+        - { name: linkedIssueId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SupportTicket' } }
+  /support/categories/eligibility:
+    get:
+      summary: The C-07 promotion measurement per category
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    { type: array, items: { $ref: '#/components/schemas/CategoryEligibility' } }
+    patch:
+      summary: Raise the promotion threshold for a category (FR-011b, R-23)
+      description: >
+        The only writer of `category_eligibility.threshold`. A value below the product floor of 10
+        is clamped to 10 and the clamp is recorded; the check constraint makes a lower row impossible
+        as well, because one mechanism away from silent failure is not enough for a number the party
+        who wants the category promoted would like lower. Counters are not writable here.
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, threshold]
+              properties:
+                category: { type: string }
+                threshold: { type: integer, minimum: 10 }
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              {
+                application/json: { schema: { $ref: '#/components/schemas/CategoryEligibility' } },
+              },
+          }
+        '400':
+          {
+            description: Bad Request,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /support/categories/allowlist:
+    get:
+      summary: Categories eligible for AUTO_REPLY — empty for every new tenant (C-07)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category: { type: string }
+                        promotedBy: { type: string }
+                        promotedAt: { type: string, format: date-time }
+    post:
+      summary: Promote a category — a recorded human decision, never automatic (C-07, R-15)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category]
+              properties:
+                category: { type: string }
+      responses:
+        '201': { description: Promoted }
+        '409':
+          description: 'CATEGORY_BLOCKED — a blocked topic can never be allowlisted (FR-010); or CATEGORY_NOT_PROMOTABLE'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /support/categories/allowlist/{category}:
+    delete:
+      summary: Revoke a category; takes effect on subsequent decisions
+      parameters:
+        - { $ref: '#/components/parameters/Category' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '204': { description: No Content }
+  /support/blocked-topics:
+    get:
+      summary: The product-level blocked set — read-only, not tenant-scoped, not reducible (FR-010)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  setVersion: { type: integer }
+                  categories: { type: array, items: { type: string } }

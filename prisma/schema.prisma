@@ -1,0 +1,332 @@
+// Schema for the tables 012 owns. Domain tables belong to their own specs and are added
+// by those features; this file is multi-schema so each feature's tables stay in their own
+// Postgres schema rather than in one namespace (ADR 0004, prisma rules).
+
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../prisma/generated/client"
+  // postgresqlExtensions declares the approved extension list of ADR 0004 in the
+  // schema itself, so `db-check` can assert it rather than trusting a runbook.
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, pg_trgm]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent"]
+}
+
+// ─────────────────────────────── workflow execution ───────────────────────────────
+
+/// The persisted state machine. Its transitions are the machine-step half of 001's
+/// timeline; nothing here is copied into 001's issue_event (C-14).
+model WorkflowRun {
+  id                String    @id @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  issueId           String    @map("issue_id") @db.Uuid
+  definitionKey     String    @map("definition_key")
+  /// Pinned at start: a redeploy does not migrate a running instance.
+  definitionVersion Int       @map("definition_version")
+  state             String
+  /// What this run is waiting for — callback kind, token reference, deadline.
+  awaiting          Json?
+  correlationId     String    @map("correlation_id") @db.Uuid
+  startedAt         DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  /// The state's own timeout, fired by a scheduled tick — never by a waiting worker.
+  deadlineAt        DateTime? @map("deadline_at") @db.Timestamptz(6)
+  /// Set once. A terminal run never transitions again.
+  terminalState     String?   @map("terminal_state")
+
+  transitions WorkflowTransition[]
+  callbacks   WorkflowCallback[]
+
+  @@index([tenantId, state])
+  // The deadline index is partial — `where terminal_state is null` — because the sweep
+  // only ever looks at live runs. Prisma cannot express a partial index, so it is created
+  // in the migration and deliberately not declared here; declaring a plain index as well
+  // would have Prisma manage a second, larger one covering rows no query reads.
+  @@map("workflow_run")
+  @@schema("workflow")
+}
+
+/// Append-only. Insert-only database rules land with 001 T003, which owns the
+/// append-only enforcement pattern for every immutable table.
+model WorkflowTransition {
+  id            String          @id @db.Uuid
+  runId         String          @map("run_id") @db.Uuid
+  fromState     String          @map("from_state")
+  toState       String          @map("to_state")
+  cause         TransitionCause
+  actorRef      String?         @map("actor_ref")
+  payloadDigest String?         @map("payload_digest")
+  occurredAt    DateTime        @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  run WorkflowRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@index([runId, occurredAt])
+  @@map("workflow_transition")
+  @@schema("workflow")
+}
+
+enum TransitionCause {
+  job
+  callback
+  timeout
+  human
+  policy
+
+  @@map("transition_cause")
+  @@schema("workflow")
+}
+
+/// What makes "never wait inside a job" possible (ADR 0003).
+model WorkflowCallback {
+  id            String       @id @db.Uuid
+  runId         String       @map("run_id") @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  kind          CallbackKind
+  /// The token is stored hashed: a callback URL in a CI log is not a credential leak.
+  tokenHash     String       @unique @map("token_hash")
+  expiresAt     DateTime     @map("expires_at") @db.Timestamptz(6)
+  consumedAt    DateTime?    @map("consumed_at") @db.Timestamptz(6)
+  /// A second delivery increments this and changes nothing else.
+  receivedCount Int          @default(0) @map("received_count")
+
+  run WorkflowRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, kind])
+  @@index([runId])
+  @@map("workflow_callback")
+  @@schema("workflow")
+}
+
+enum CallbackKind {
+  ci_result
+  deploy_result
+  verification_tick
+  approval
+  runner_result
+
+  @@map("callback_kind")
+  @@schema("workflow")
+}
+
+// ───────────────────────────────────── prompts ─────────────────────────────────────
+
+/// Immutable and content-addressed (R-07). No update path exists: runtime resolves by
+/// id, never by key, so an audit entry from a year ago cannot point at new text.
+model PromptVersion {
+  id          String   @id @db.Uuid
+  key         String
+  digest      String
+  body        String
+  schemaRef   String?  @map("schema_ref")
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+  publishedBy String   @map("published_by")
+
+  agentRuns AgentRun[]
+
+  @@unique([key, digest])
+  @@index([key, publishedAt])
+  @@map("prompt_version")
+  @@schema("prompt")
+}
+
+// ──────────────────────────────── tenant configuration ────────────────────────────
+
+model Tenant {
+  id        String       @id @db.Uuid
+  name      String
+  status    TenantStatus @default(active)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  providerConfig TenantProviderConfig?
+  budgets        TenantBudget[]
+  runners        RunnerRegistration[]
+
+  @@map("tenant")
+  @@schema("tenant")
+}
+
+enum TenantStatus {
+  active
+  suspended
+  deleting
+
+  @@map("tenant_status")
+  @@schema("tenant")
+}
+
+/// Per-tenant LLM access (ADR 0006, R-08).
+model TenantProviderConfig {
+  tenantId      String        @id @map("tenant_id") @db.Uuid
+  mode          ProviderMode
+  provider      ProviderName
+  endpoint      String?
+  /// A reference into the secret manager. Never the secret.
+  credentialRef String        @map("credential_ref")
+  /// One value on purpose: cross-provider fallback for a BYO tenant is not
+  /// representable, not merely defaulted off (R-08).
+  fallbackScope FallbackScope @default(within_tenant_providers) @map("fallback_scope")
+  modelTierMap  Json          @map("model_tier_map")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("tenant_provider_config")
+  @@schema("tenant")
+}
+
+enum ProviderMode {
+  healer_provided
+  customer_byo
+
+  @@map("provider_mode")
+  @@schema("tenant")
+}
+
+enum ProviderName {
+  anthropic
+  openai
+  bedrock
+  vertex
+
+  @@map("provider_name")
+  @@schema("tenant")
+}
+
+enum FallbackScope {
+  within_tenant_providers
+
+  @@map("fallback_scope")
+  @@schema("tenant")
+}
+
+/// Consumed by 002, which inherits these limits rather than converting them.
+model TenantBudget {
+  tenantId          String       @map("tenant_id") @db.Uuid
+  period            BudgetPeriod
+  spendLimit        Decimal      @map("spend_limit") @db.Decimal(12, 4)
+  timeLimit         Int          @map("time_limit")
+  /// An array, matching 002's budget_limit: degradation has ordered steps.
+  softThresholdPcts Int[]        @map("soft_threshold_pcts")
+  degradationOrder  String[]     @map("degradation_order")
+  updatedAt         DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, period])
+  @@map("tenant_budget")
+  @@schema("tenant")
+}
+
+enum BudgetPeriod {
+  day
+  month
+
+  @@map("budget_period")
+  @@schema("tenant")
+}
+
+// ───────────────────────────────────── runner ─────────────────────────────────────
+
+model RunnerRegistration {
+  id              String       @id @db.Uuid
+  tenantId        String       @map("tenant_id") @db.Uuid
+  name            String
+  protocolVersion Int          @map("protocol_version")
+  /// Declared, never inferred (R-03).
+  capabilities    String[]
+  imageVersion    String       @map("image_version")
+  status          RunnerStatus
+  lastHeartbeatAt DateTime     @map("last_heartbeat_at") @db.Timestamptz(6)
+  refusedReason   String?      @map("refused_reason")
+
+  tenant      Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resolutions RunnerCapabilityResolution[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+  @@map("runner_registration")
+  @@schema("runner")
+}
+
+enum RunnerStatus {
+  active
+  degraded
+  refused
+  revoked
+
+  @@map("runner_status")
+  @@schema("runner")
+}
+
+/// Append-only. Why a given run behaved as it did, months later.
+model RunnerCapabilityResolution {
+  id                  String            @id @db.Uuid
+  tenantId            String            @map("tenant_id") @db.Uuid
+  runId               String            @map("run_id") @db.Uuid
+  runnerId            String            @map("runner_id") @db.Uuid
+  requestedCapability String            @map("requested_capability")
+  outcome             CapabilityOutcome
+  reason              String
+  occurredAt          DateTime          @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  runner RunnerRegistration @relation(fields: [runnerId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, runId])
+  @@map("runner_capability_resolution")
+  @@schema("runner")
+}
+
+enum CapabilityOutcome {
+  available
+  degraded
+  refused
+
+  @@map("capability_outcome")
+  @@schema("runner")
+}
+
+// ────────────────────────────────── self-observation ──────────────────────────────
+
+/// The single store of the agent-run facts (FR-033). 001's audit_entry stands alongside
+/// it and reaches these fields through agentRunId — it is not a second store (C-13).
+model AgentRun {
+  id               String       @id @db.Uuid
+  tenantId         String       @map("tenant_id") @db.Uuid
+  issueId          String?      @map("issue_id") @db.Uuid
+  correlationId    String       @map("correlation_id") @db.Uuid
+  agentKind        AgentKind    @map("agent_kind")
+  promptVersionId  String       @map("prompt_version_id") @db.Uuid
+  modelId          String       @map("model_id")
+  provider         ProviderName
+  inputTokens      Int          @map("input_tokens")
+  outputTokens     Int          @map("output_tokens")
+  cost             Decimal      @db.Decimal(12, 6)
+  /// Name, argument digest and outcome — never raw arguments, which carry paths and
+  /// excerpts, and this table is read by support.
+  toolCalls        Json         @map("tool_calls")
+  policyDecisionId String?      @map("policy_decision_id") @db.Uuid
+  outcome          String
+  startedAt        DateTime     @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?    @map("finished_at") @db.Timestamptz(6)
+
+  promptVersion PromptVersion @relation(fields: [promptVersionId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, startedAt])
+  @@index([correlationId])
+  @@map("agent_run")
+  @@schema("agent")
+}
+
+enum AgentKind {
+  investigator
+  change
+  verifier
+  support
+
+  @@map("agent_kind")
+  @@schema("agent")
+}

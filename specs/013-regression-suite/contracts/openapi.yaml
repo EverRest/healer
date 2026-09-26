@@ -1,0 +1,127 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 013 regression suite
+  version: 0.1.0
+  description: >
+    Draft contract for spec 013. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. There is no operation that writes a test, merges a pull request or adopts
+    an expectation: tests reach the repository only through a human-merged pull request (FR-011),
+    and adoption is a pull-request approval (005 R-16).
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+    ciBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'tenant-scoped CI credential; selection only',
+      }
+  parameters:
+    ComponentId:
+      { name: componentId, in: path, required: true, schema: { type: string, format: uuid } }
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, enum: [VALIDATION, UNAUTHENTICATED, NOT_FOUND, RATE_LIMITED] }
+        message: { type: string }
+    SelectionRequest:
+      type: object
+      required: [repository, baseCommit, headCommit, changedPaths]
+      properties:
+        repository: { type: string, description: 'repository identifier as the CI host names it' }
+        baseCommit: { type: string }
+        headCommit: { type: string }
+        changedPaths:
+          type: array
+          items: { type: string, description: 'repository-relative path' }
+    SelectionResponse:
+      type: object
+      required: [selectionId, fullSuite, reason, tests]
+      properties:
+        selectionId: { type: string, format: uuid }
+        fullSuite: { type: boolean }
+        reason: { type: string, enum: [closure, unknown_path, closure_uncomputable] }
+        tests:
+          type: array
+          items:
+            type: object
+            required: [testIdentifier, testPath]
+            properties:
+              testIdentifier: { type: string }
+              testPath: { type: string }
+    CoverageEntry:
+      type: object
+      required: [subjectKind, subjectRef, state]
+      properties:
+        subjectKind: { type: string, enum: [endpoint, page, flow] }
+        subjectRef: { type: string, format: uuid }
+        state:
+          type: string
+          enum: [no_expectation, draft_only, adopted_without_test, tested, tested_quarantined]
+        bindingIds: { type: array, items: { type: string, format: uuid } }
+    Binding:
+      type: object
+      required: [id, testIdentifier, testPath, expectationId, expectationVersionId, state, origin]
+      properties:
+        id: { type: string, format: uuid }
+        testIdentifier: { type: string }
+        testPath: { type: string }
+        expectationId: { type: string, format: uuid }
+        expectationVersionId: { type: string, format: uuid }
+        state: { type: string, enum: [active, stale, quarantined, retired] }
+        origin: { type: string, enum: [healer, human] }
+paths:
+  /regression/selection:
+    post:
+      operationId: selectTests
+      summary: Tests a pull request must run (contracts/selection.md)
+      security: [{ ciBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/SelectionRequest' } }
+      responses:
+        '200':
+          description: selection, recorded as a selection_request
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/SelectionResponse' } }
+        '400':
+          description: invalid request
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /regression/components/{componentId}/coverage:
+    get:
+      operationId: getCoverage
+      summary: Coverage per endpoint, page and flow of a component, computed at read time (FR-023)
+      parameters: [{ $ref: '#/components/parameters/ComponentId' }]
+      responses:
+        '200':
+          description: coverage entries
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/CoverageEntry' } }
+        '404':
+          description: not found in this tenant
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /regression/components/{componentId}/bindings:
+    get:
+      operationId: listBindings
+      summary: Test bindings of a component
+      parameters: [{ $ref: '#/components/parameters/ComponentId' }]
+      responses:
+        '200':
+          description: bindings
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Binding' } }
+        '404':
+          description: not found in this tenant
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }

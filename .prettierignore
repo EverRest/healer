@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+pnpm-lock.yaml
+prisma/generated/
+# Markdown in this repository is hand-wrapped at 100 columns and its tables are aligned by
+# meaning, not by column width. Prettier reflows both, so documentation is out of scope.
+**/*.md
+# Prisma has its own formatter: `prisma format`.
+prisma/schema.prisma

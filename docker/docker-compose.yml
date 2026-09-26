@@ -1,0 +1,37 @@
+# Local development only (constitution VIII: no Terraform, no Kubernetes for our own
+# deployment in v1). Test runs do not use this file — they start disposable
+# containers through testcontainers (R-12).
+name: healer-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: healer
+      POSTGRES_PASSWORD: healer
+      POSTGRES_DB: healer
+    ports: ['5432:5432']
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U healer -d healer']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    ports: ['6379:6379']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,488 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 004 architecture graph
+  version: 0.1.0
+  description: >
+    Draft contract for spec 004. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. Every mutation requires an Idempotency-Key.
+    Every read returns the graph envelope: a bare array is never returned, so a consumer cannot
+    mistake an empty graph for "no dependencies" (FR-016).
+    Confirmation, rejection, manual edit and drift resolution require a human actor holding
+    graph:confirm; an agent credential does not carry it (FR-010).
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'carries tenantId and actor type',
+      }
+  parameters:
+    NodeId: { name: nodeId, in: path, required: true, schema: { type: string, format: uuid } }
+    DraftId: { name: draftId, in: path, required: true, schema: { type: string, format: uuid } }
+    FindingId: { name: findingId, in: path, required: true, schema: { type: string, format: uuid } }
+    GraphVersion:
+      name: graphVersion
+      in: query
+      required: false
+      schema: { type: integer }
+      description: 'pin the query to a graph version; omitted resolves to current and the response states which (FR-014)'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - RATE_LIMITED
+            - IDEMPOTENCY_CONFLICT
+            - HUMAN_ACTOR_REQUIRED
+            - PROVENANCE_REQUIRED
+            - CONFIRMED_ELEMENT_IMMUTABLE
+            - DRAFT_ITEM_SUPERSEDED
+            - GRAPH_VERSION_UNKNOWN
+        message: { type: string }
+    Envelope:
+      type: object
+      description: 'every graph read is wrapped in this (R-13)'
+      required: [graphVersion, confirmationState, coverage]
+      properties:
+        graphVersion: { type: integer }
+        confirmationState:
+          type: string
+          enum: [never_discovered, unconfirmed, partially_confirmed, confirmed]
+        coverage:
+          type: object
+          properties:
+            nodesConfirmed: { type: integer }
+            nodesTotal: { type: integer }
+            edgesConfirmed: { type: integer }
+            edgesTotal: { type: integer }
+    Provenance:
+      type: object
+      required: [class, strength, confidence]
+      properties:
+        class:
+          type: string
+          enum:
+            [
+              human_authored,
+              human_confirmed,
+              derived_from_trace,
+              derived_from_runtime,
+              derived_from_code,
+              derived_from_config,
+              inferred_from_convention,
+            ]
+        strength: { type: integer, description: 'stored ordinal; higher is stronger (FR-007)' }
+        confidence:
+          {
+            type: integer,
+            minimum: 0,
+            maximum: 100,
+            description: 'smallint 0–100, written once at insert time (R-15)',
+          }
+        observationRef:
+          { type: string, format: uuid, nullable: true, description: 'evidence.id (001 FR-007)' }
+        actorRef:
+          { type: string, nullable: true, description: 'named human, for the two human classes' }
+        contributingSources:
+          type: array
+          description: 'every provenance retained when sources agree (FR-008)'
+          items:
+            type: object
+            properties:
+              class: { type: string }
+              adapterKey: { type: string }
+              observationRef: { type: string, format: uuid, nullable: true }
+              observationCount: { type: integer }
+    Node:
+      type: object
+      required: [id, nodeKind, layer, name, state, lifecycleState, provenance]
+      properties:
+        id: { type: string, format: uuid }
+        nodeKind:
+          {
+            type: string,
+            enum: [component, deployment_unit, repository, endpoint, feature, flow, external],
+          }
+        layer: { type: string, enum: [code, runtime, product] }
+        name: { type: string }
+        naturalKey: { type: string }
+        state: { type: string, enum: [proposed, confirmed, rejected, stale] }
+        lifecycleState: { type: string, enum: [active, unobserved, unresolved, possibly_removed] }
+        provenance: { $ref: '#/components/schemas/Provenance' }
+        attributes:
+          type: object
+          additionalProperties: true
+          description: 'kind-specific; componentType + characteristics[] for a component (FR-001)'
+    Edge:
+      type: object
+      required: [id, fromNodeId, toNodeId, edgeType, layer, state, provenance]
+      properties:
+        id: { type: string, format: uuid }
+        fromNodeId: { type: string, format: uuid }
+        toNodeId: { type: string, format: uuid }
+        edgeType:
+          {
+            type: string,
+            enum:
+              [
+                depends_on,
+                calls,
+                deploys,
+                contains,
+                implements,
+                exposes,
+                serves_feature,
+                built_from,
+              ],
+          }
+        layer: { type: string, enum: [code, runtime, product] }
+        state: { type: string, enum: [proposed, confirmed, rejected, stale] }
+        observationCount: { type: integer }
+        lastObservedAt: { type: string, format: date-time, nullable: true }
+        provenance: { $ref: '#/components/schemas/Provenance' }
+    ClosureMember:
+      type: object
+      description: 'one blast-radius result; confidence is the weakest edge on the path (FR-015, R-02)'
+      required: [nodeId, nodeKind, path, weakestConfidence, weakestStrength, crossedUnconfirmed]
+      properties:
+        nodeId: { type: string, format: uuid }
+        nodeKind: { type: string }
+        path: { type: array, items: { type: string, format: uuid } }
+        weakestConfidence: { type: integer, minimum: 0, maximum: 100 }
+        weakestStrength: { type: integer }
+        crossedUnconfirmed:
+          { type: boolean, description: 'machine-readable so a consumer may refuse it' }
+        lifecycleState: { type: string, enum: [active, unobserved, unresolved, possibly_removed] }
+        termination: { type: string, enum: [cycle, depth_limit], nullable: true }
+    DraftItem:
+      type: object
+      required: [id, op, state, provenance]
+      properties:
+        id: { type: string, format: uuid }
+        op: { type: string, enum: [add_node, add_edge, modify_attributes, mark_removed] }
+        targetNodeId: { type: string, format: uuid, nullable: true }
+        targetEdgeId: { type: string, format: uuid, nullable: true }
+        proposed: { type: object, additionalProperties: true }
+        current:
+          {
+            type: object,
+            additionalProperties: true,
+            nullable: true,
+            description: 'confirmed state at baseVersion — review is a two-column read (R-07)',
+          }
+        proposalDigest: { type: string }
+        state: { type: string, enum: [proposed, confirmed, rejected, superseded] }
+        provenance: { $ref: '#/components/schemas/Provenance' }
+    DriftFinding:
+      type: object
+      required: [id, kind, recordedSide, observedSide, evidenceIds, issueId, state]
+      properties:
+        id: { type: string, format: uuid }
+        kind:
+          {
+            type: string,
+            enum:
+              [
+                observed_edge_absent,
+                recorded_edge_contradicted,
+                deployment_unit_missing,
+                product_link_dangling,
+              ],
+          }
+        recordedSide: { type: object, additionalProperties: true }
+        observedSide: { type: object, additionalProperties: true }
+        evidenceIds: { type: array, items: { type: string, format: uuid } }
+        issueId:
+          { type: string, format: uuid, description: 'the knowledge_drift issue (001 FR-001)' }
+        graphVersion: { type: integer }
+        state:
+          {
+            type: string,
+            enum: [open, resolved_graph_updated, resolved_observation_rejected, dismissed],
+          }
+        detectedAt: { type: string, format: date-time }
+paths:
+  /graph/nodes:
+    get:
+      summary: List graph nodes (FR-004)
+      parameters:
+        - { $ref: '#/components/parameters/GraphVersion' }
+        - { name: nodeKind, in: query, schema: { type: string } }
+        - { name: layer, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - {
+            name: minStrength,
+            in: query,
+            schema: { type: integer },
+            description: 'explanation filter only — FR-016; never reaches an impact or policy path',
+          }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/Node' } }
+  /graph/nodes/{nodeId}:
+    get:
+      parameters:
+        - { $ref: '#/components/parameters/NodeId' }
+        - { $ref: '#/components/parameters/GraphVersion' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      node: { $ref: '#/components/schemas/Node' }
+                      edges: { type: array, items: { $ref: '#/components/schemas/Edge' } }
+        '404':
+          description: "not found, including another tenant's node (FR-024)"
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    patch:
+      summary: Manual edit by a human (FR-010, FR-025) — mints a graph version
+      parameters:
+        - { $ref: '#/components/parameters/NodeId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                name: { type: string }
+                componentType: { type: string }
+                characteristics: { type: array, items: { type: string } }
+                ownerRef: { type: string }
+                reason: { type: string }
+      responses:
+        '200': { description: 'OK — response carries the minted graphVersion' }
+        '403':
+          description: 'actor is not human, or lacks graph:confirm'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /graph/impact-closure:
+    get:
+      summary: >
+        Blast radius (FR-015). Traverses every edge in scope regardless of state, provenance or
+        confidence. There is deliberately no minStrength or minConfidence parameter — an
+        unconfirmed edge may only widen this result (C-03, FR-016a, R-05).
+      parameters:
+        - { name: rootNodeId, in: query, required: true, schema: { type: string, format: uuid } }
+        - {
+            name: direction,
+            in: query,
+            schema: { type: string, enum: [downstream, upstream, both], default: downstream },
+          }
+        - { name: maxDepth, in: query, schema: { type: integer, default: 6, maximum: 12 } }
+        - { $ref: '#/components/parameters/GraphVersion' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      truncated: { type: boolean }
+                      members:
+                        { type: array, items: { $ref: '#/components/schemas/ClosureMember' } }
+  /graph/known-subgraph:
+    get:
+      summary: >
+        Explanation view (FR-016) — the same traversal filtered by provenance strength or
+        confidence. Its result type is not accepted by any impact, risk or policy input.
+      parameters:
+        - { name: rootNodeId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: minStrength, in: query, schema: { type: integer } }
+        - { name: minConfidence, in: query, schema: { type: number, format: double } }
+        - { name: maxDepth, in: query, schema: { type: integer, default: 6, maximum: 12 } }
+        - { $ref: '#/components/parameters/GraphVersion' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Envelope' }
+                  - type: object
+                    properties:
+                      members:
+                        { type: array, items: { $ref: '#/components/schemas/ClosureMember' } }
+  /graph/system-context:
+    get:
+      summary: >
+        The payload handed to an agent (FR-020). Carries components, deployment units,
+        repositories, characteristics and edges — and no architecture-style discriminator.
+      parameters:
+        - { name: componentId, in: query, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/GraphVersion' }
+      responses:
+        '200': { description: OK }
+  /graph/versions:
+    get:
+      summary: List graph versions (FR-014)
+      responses:
+        '200': { description: OK }
+  /discovery/runs:
+    post:
+      summary: Start a discovery run (FR-009) — read-only against every customer system (FR-022)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trigger]
+              properties:
+                trigger: { type: string, enum: [onboarding, scheduled, manual, post_deploy] }
+                sources:
+                  {
+                    type: array,
+                    items: { type: string },
+                    description: 'adapter keys; omitted means all connected',
+                  }
+      responses:
+        '202':
+          { description: 'accepted; the run is a workflow (012 FR-029), never a blocking call' }
+    get:
+      summary: List runs with their per-source outcomes (FR-023, mirrors 003 FR-014)
+      responses:
+        '200': { description: OK }
+  /discovery/drafts/{draftId}:
+    get:
+      summary: >
+        The draft, as a diff against confirmed state at its base version (R-07). A re-discovery of
+        an already-confirmed graph returns the same shape — there is no separate "initial" form.
+      parameters:
+        - { $ref: '#/components/parameters/DraftId' }
+        - { name: op, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  draftId: { type: string, format: uuid }
+                  baseVersion: { type: integer }
+                  state: { type: string, enum: [open, applied, abandoned] }
+                  items: { type: array, items: { $ref: '#/components/schemas/DraftItem' } }
+  /discovery/drafts/{draftId}/confirm:
+    post:
+      summary: >
+        Confirm draft items (FR-009, FR-010). Human actor holding graph:confirm only — an agent or
+        automation credential does not carry it. Mints one graph version for the whole batch.
+      parameters:
+        - { $ref: '#/components/parameters/DraftId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemIds]
+              properties:
+                itemIds: { type: array, items: { type: string, format: uuid } }
+                note: { type: string }
+      responses:
+        '200':
+          description: 'OK — carries the minted graphVersion and any superseded items'
+        '403':
+          description: 'actor is not human, or lacks graph:confirm (FR-010, SC-002)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: 'an item was superseded by a change since the run started (R-07)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /discovery/drafts/{draftId}/reject:
+    post:
+      summary: >
+        Reject draft items (FR-011). The structural digest is recorded so the same proposal is not
+        re-raised unchanged; confidence and observation counts are excluded from it (R-08).
+      parameters:
+        - { $ref: '#/components/parameters/DraftId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itemIds, reason]
+              properties:
+                itemIds: { type: array, items: { type: string, format: uuid } }
+                reason: { type: string }
+      responses:
+        '200': { description: OK }
+        '403': { description: 'actor is not human' }
+  /graph/drift:
+    get:
+      summary: Open drift findings (FR-017) — each linked to its knowledge_drift issue
+      parameters:
+        - { name: state, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/DriftFinding' } }
+  /graph/drift/{findingId}/resolve:
+    post:
+      summary: >
+        Human resolution (FR-018, FR-025). The only path from a finding to a graph change; a
+        finding never edits the graph by itself.
+      parameters:
+        - { $ref: '#/components/parameters/FindingId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resolution, reason]
+              properties:
+                resolution: { type: string, enum: [accept_observation, keep_recorded, dismiss] }
+                reason: { type: string }
+      responses:
+        '200': { description: 'OK — carries the minted graphVersion when the graph changed' }
+        '403': { description: 'actor is not human' }

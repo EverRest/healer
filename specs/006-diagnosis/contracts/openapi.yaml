@@ -1,0 +1,427 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 006 diagnosis
+  version: 0.1.0
+  description: >
+    Draft contract for spec 006. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403. Every mutation requires an Idempotency-Key.
+    There is no endpoint that sets fix eligibility: it is a view over classification, expectation
+    violation and outcome, and has no write path (research R-03).
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+  parameters:
+    IssueId: { name: issueId, in: path, required: true, schema: { type: string, format: uuid } }
+    DiagnosisId:
+      { name: diagnosisId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - IDEMPOTENCY_CONFLICT
+            - EVIDENCE_REQUIRED
+            - IMMUTABLE_RECORD
+            - ATTEMPT_LIMIT_REACHED
+            - NOT_A_CODE_PROBLEM
+            - CLASSIFICATION_REQUIRED
+            - BUDGET_EXHAUSTED
+        message: { type: string }
+        detail: { type: object, additionalProperties: true }
+    EvidenceRef:
+      type: object
+      required: [evidenceId, relation]
+      properties:
+        evidenceId: { type: string, format: uuid }
+        relation: { type: string, enum: [supports, contradicts, contextualises] }
+        assertedByStep: { type: string, description: 'the step that observed it (001 FR-008)' }
+    TaxonomyClass:
+      type: string
+      description: >
+        Member of the ruleset's closed class list (FR-001); free text is not accepted. One definition,
+        referenced by both the read schema and the human override body — the override is the only
+        human write path into the safety gate and is no less constrained than the read.
+      enum:
+        - unhandled_exception
+        - contract_violation
+        - deploy_regression
+        - data_specific
+        - concurrency
+        - load_dependent
+        - third_party_outage
+        - config_or_infrastructure_drift
+        - capacity
+        - data_corruption
+        - knowledge_drift
+    Classification:
+      type: object
+      required: [id, taxonomyClass, verdict, decidedBy, rulesetVersion, evidence, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        taxonomyClass: { $ref: '#/components/schemas/TaxonomyClass' }
+        secondaryClasses:
+          type: array
+          items: { type: string }
+          description: 'populated when signals conflict; the verdict is then UNDETERMINED'
+        verdict: { type: string, enum: [CODE_PROBLEM, NOT_A_CODE_PROBLEM, UNDETERMINED] }
+        decidedBy: { type: string, enum: [signal_rules, model, human] }
+        firedRules: { type: array, items: { type: string } }
+        rulesetVersion: { type: integer }
+        overrideOfId: { type: string, format: uuid, nullable: true }
+        overrideReason: { type: string, nullable: true }
+        evidence: { type: array, minItems: 1, items: { $ref: '#/components/schemas/EvidenceRef' } }
+        createdAt: { type: string, format: date-time }
+    Hypothesis:
+      type: object
+      required: [id, statement, status, evidence, disconfirmingSearch]
+      properties:
+        id: { type: string, format: uuid }
+        statement: { type: string }
+        statementFingerprint: { type: string }
+        status: { type: string, enum: [CANDIDATE, SUPPORTED, REFUTED, UNVERIFIABLE] }
+        isRootCause: { type: boolean }
+        contradictionExplanation: { type: string, nullable: true }
+        excluded: { type: boolean }
+        exclusionReason: { type: string, nullable: true }
+        evidence:
+          type: array
+          description: 'supporting and contradicting, in one list, distinguished by relation'
+          items: { $ref: '#/components/schemas/EvidenceRef' }
+        disconfirmingSearch:
+          type: object
+          description: "mandatory; 'none found' with nothing searched is not a valid record (FR-007)"
+          required: [outcome, searched]
+          properties:
+            outcome: { type: string, enum: [found, none_found] }
+            searched:
+              type: object
+              properties:
+                evidenceTypes: { type: array, items: { type: string } }
+                sourceSystems: { type: array, items: { type: string } }
+                windowStart: { type: string, format: date-time }
+                windowEnd: { type: string, format: date-time }
+    ExpectationViolation:
+      type: object
+      required: [state, observedStatement, issueFirstSeenAt, preExisting]
+      properties:
+        state: { type: string, enum: [violated, no_expectation] }
+        expectationId: { type: string, format: uuid, nullable: true }
+        expectationVersionId: { type: string, format: uuid, nullable: true }
+        expectedStatement:
+          type: string
+          nullable: true
+          description: 'quoted verbatim from the adopted entry; never paraphrased (research R-04)'
+        observedStatement: { type: string }
+        adoptedAt: { type: string, format: date-time, nullable: true }
+        issueFirstSeenAt: { type: string, format: date-time }
+        preExisting:
+          type: boolean
+          description: 'adoptedAt < issueFirstSeenAt; false confers no fix eligibility (008 FR-006)'
+        observationEvidence: { type: array, items: { $ref: '#/components/schemas/EvidenceRef' } }
+    PrecedentCandidate:
+      type: object
+      description: 'a lead, not a conclusion. No field carries the past root cause (FR-020)'
+      required:
+        [referencedIssueId, similarityBasis, similarityScore, ageDays, liveness, stale, weight]
+      properties:
+        referencedIssueId: { type: string, format: uuid }
+        similarityBasis: { type: string, enum: [fingerprint, component_and_signature, vector] }
+        similarityScore: { type: number }
+        ageDays: { type: integer }
+        liveness: { type: string, enum: [present, moved, absent] }
+        stale: { type: boolean, description: 'true when the referenced code no longer exists' }
+        weight: { type: number, description: 'similarity x age decay x liveness factor' }
+        evidenceIds:
+          type: array
+          items: { type: string, format: uuid }
+          description: "the precedent's own evidence — the only part that may be cited"
+    MissingEvidenceItem:
+      type: object
+      required: [evidenceType, sourceSystem, whyBlocking, gapEvidenceId]
+      properties:
+        evidenceType: { type: string }
+        sourceSystem: { type: string }
+        windowStart: { type: string, format: date-time }
+        windowEnd: { type: string, format: date-time }
+        whyBlocking: { type: string }
+        gapEvidenceId:
+          type: string
+          format: uuid
+          description: 'the collection_gap evidence record — this is what makes INSUFFICIENT_CONTEXT persistable (research R-07)'
+    ReproductionDirective:
+      type: object
+      description: 'consumed by 007; rung vocabulary is owned by 007/contracts/ladder.md'
+      required: [observableLocation, suggestedRung, maxRung, failingObservable]
+      properties:
+        observableLocation:
+          type: string
+          enum: [server, client, undetermined]
+          description: >
+            Selects which ladder 007 uses (007 R-22). Derived from the evidence, never from
+            issue.kind. `undetermined` becomes INCONCLUSIVE rather than a guessed browser run.
+        suggestedRung:
+          { type: string, description: 'a hint, on the ladder observableLocation selects' }
+        maxRung:
+          {
+            type: string,
+            description: 'a ceiling — 007 always starts at the cheapest rung of that ladder',
+          }
+        entryPoint: { type: object, additionalProperties: true }
+        preconditions: { type: object, additionalProperties: true }
+        failingObservable:
+          type: object
+          description: "the issue's normalised error signature (001 FR-002, FR-003)"
+          additionalProperties: true
+        dataRequirements:
+          type: object
+          description: 'field presence, types and bounds — shape only, never a value (007 FR-024)'
+          additionalProperties: true
+    Diagnosis:
+      type: object
+      required:
+        [id, issueId, attemptNo, outcome, terminationReason, classification, hypotheses, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid }
+        attemptNo: { type: integer, maximum: 2 }
+        trigger: { type: string, enum: [initial, rediagnosis_after_rejection] }
+        rejectionReason: { type: string, nullable: true }
+        outcome:
+          type: string
+          enum: [ROOT_CAUSE_IDENTIFIED, UNKNOWN, INSUFFICIENT_CONTEXT, NOT_A_CODE_PROBLEM]
+        terminationReason: { type: string, enum: [completed, budget_exhausted, escalation_cap] }
+        rootCauseStatement:
+          type: string
+          nullable: true
+          description: 'non-null exactly when outcome is ROOT_CAUSE_IDENTIFIED (SC-006)'
+        rootCauseEvidence: { type: array, items: { $ref: '#/components/schemas/EvidenceRef' } }
+        classification: { $ref: '#/components/schemas/Classification' }
+        expectationViolation: { $ref: '#/components/schemas/ExpectationViolation' }
+        hypotheses: { type: array, items: { $ref: '#/components/schemas/Hypothesis' } }
+        precedents: { type: array, items: { $ref: '#/components/schemas/PrecedentCandidate' } }
+        missingEvidence:
+          { type: array, items: { $ref: '#/components/schemas/MissingEvidenceItem' } }
+        affectedComponentIds: { type: array, items: { type: string, format: uuid } }
+        graphVersion: { type: integer }
+        reproductionDirective: { $ref: '#/components/schemas/ReproductionDirective' }
+        unexamined: { type: array, items: { type: string } }
+        agentRunId:
+          type: string
+          format: uuid
+          description: 'model, prompt version, tool calls, cost (012 FR-033)'
+        createdAt: { type: string, format: date-time }
+    DiagnosisConfidence:
+      type: object
+      description: >
+        Recorded for calibration measurement by 011 only. Served on a separate path so that no
+        consumer of Diagnosis receives it incidentally (FR-015, research R-09).
+      required: [diagnosisId, value, scale]
+      properties:
+        diagnosisId: { type: string, format: uuid }
+        value: { type: number }
+        scale: { type: string }
+    FixEligibility:
+      type: object
+      description: >
+        A projection of the view; there is no PUT or PATCH for this resource. `eligible` is never
+        null — the view coalesces the conjunction to false when a row is missing. A true here is
+        advisory: 008's anchor resolution is authoritative for the anchor (C-12, 008 R-04).
+      required: [issueId, eligible, blockedBy]
+      properties:
+        issueId: { type: string, format: uuid }
+        eligible: { type: boolean }
+        blockedBy:
+          type: array
+          description: >
+            Exactly the reasons the view emits. There is no `no_diagnosis` member: with no diagnosis
+            row the conjuncts report `outcome` alongside the others, and a reason the view cannot
+            produce is a reason a consumer would handle forever without ever seeing it.
+          items:
+            type: string
+            enum: [classification, no_expectation, expectation_not_pre_existing, outcome]
+    Handoff:
+      type: object
+      description: 'what a human receives on UNKNOWN, INSUFFICIENT_CONTEXT or a second rejection'
+      required: [issueId, outcome, hypotheses, ruledOut]
+      properties:
+        issueId: { type: string, format: uuid }
+        outcome: { type: string }
+        attempts: { type: array, items: { $ref: '#/components/schemas/Diagnosis' } }
+        hypotheses: { type: array, items: { $ref: '#/components/schemas/Hypothesis' } }
+        ruledOut:
+          type: array
+          description: 'what was excluded and the evidence that excluded it'
+          items:
+            type: object
+            properties:
+              statement: { type: string }
+              reason: { type: string }
+              evidence: { type: array, items: { $ref: '#/components/schemas/EvidenceRef' } }
+        missingEvidence:
+          { type: array, items: { $ref: '#/components/schemas/MissingEvidenceItem' } }
+paths:
+  /issues/{issueId}/classification:
+    get:
+      summary: Current classification (FR-001, FR-003)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Classification' }
+        '404':
+          description: "no classification yet, or another tenant's issue"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    post:
+      summary: Human override of a classification (FR-003) — a new row, audited; never an edit
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taxonomyClass, verdict, reason, evidenceIds]
+              properties:
+                taxonomyClass: { $ref: '#/components/schemas/TaxonomyClass' }
+                verdict: { type: string, enum: [CODE_PROBLEM, NOT_A_CODE_PROBLEM, UNDETERMINED] }
+                reason: { type: string }
+                evidenceIds:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+                  description: 'an override still carries evidence (001 FR-009)'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Classification' }
+        '422':
+          description: "EVIDENCE_REQUIRED, or a class outside the ruleset's closed list"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /issues/{issueId}/classification/history:
+    get:
+      summary: Every classification row for this issue, newest first — nothing is overwritten
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Classification' } }
+  /issues/{issueId}/diagnosis:
+    get:
+      summary: Latest diagnosis version (FR-026)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Diagnosis' }
+        '404':
+          description: "not diagnosed, or another tenant's issue"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /issues/{issueId}/diagnosis/versions:
+    get:
+      summary: All attempts, oldest first (FR-026) — a changed conclusion is visible as a change
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Diagnosis' } }
+  /issues/{issueId}/diagnosis/rerun:
+    post:
+      summary: Re-diagnosis after a rejection (FR-024, D-08) — at most one; the second is refused
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rejectionReason]
+              properties:
+                rejectionReason: { type: string }
+                refutedHypothesisIds:
+                  type: array
+                  items: { type: string, format: uuid }
+                  description: 'carried in as exclusions by statement fingerprint (research R-11)'
+      responses:
+        '202': { description: 'accepted; the run is a workflow node, not a synchronous call' }
+        '409':
+          description: 'ATTEMPT_LIMIT_REACHED — escalate to a human with both attempts'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /issues/{issueId}/fix-eligibility:
+    get:
+      summary: The structural fact the policy engine reads (FR-002) — read-only by construction
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FixEligibility' }
+  /issues/{issueId}/diagnosis/handoff:
+    get:
+      summary: Human handoff payload (FR-006 of 007 consumes the same shape; FR-024 here)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Handoff' }
+  /diagnoses/{diagnosisId}/confidence:
+    get:
+      summary: Recorded confidence, for calibration measurement only (FR-015)
+      description: >
+        Served separately so that no gate, predicate or ordering can receive it as part of a
+        Diagnosis payload. Reachable from the evaluation surface (011), not from policy.
+      parameters: [{ $ref: '#/components/parameters/DiagnosisId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiagnosisConfidence' }

@@ -1,0 +1,765 @@
+openapi: 3.1.0
+info:
+  title: Healer API — 008 change and verification
+  version: 0.1.0
+  description: >
+    Draft contract for spec 008. The authoritative OpenAPI is generated from NestJS controllers
+    (012 FR-012); this file is the target for contract tests. All paths under /api/v1.
+    Every read is constrained by the tenant in the authenticated context — a foreign identifier
+    returns 404, never 403, because 403 confirms existence.
+    Every mutation requires an Idempotency-Key.
+    There is deliberately NO merge operation in this document, at any path, under any
+    configuration (FR-024, D-12). Its absence is asserted by a contract test and by gate-no-merge.
+servers:
+  - url: /api/v1
+security:
+  - tenantBearer: []
+components:
+  securitySchemes:
+    tenantBearer: { type: http, scheme: bearer, bearerFormat: JWT, description: 'carries tenantId' }
+    runnerBearer:
+      {
+        type: http,
+        scheme: bearer,
+        bearerFormat: JWT,
+        description: 'runner credential, tenant-scoped (012)',
+      }
+    callbackToken:
+      { type: http, scheme: bearer, description: 'single-use workflow callback token (012 FR-030)' }
+  parameters:
+    IssueId: { name: issueId, in: path, required: true, schema: { type: string, format: uuid } }
+    AnalysisId:
+      { name: analysisId, in: path, required: true, schema: { type: string, format: uuid } }
+    PlanId: { name: planId, in: path, required: true, schema: { type: string, format: uuid } }
+    AttemptId: { name: attemptId, in: path, required: true, schema: { type: string, format: uuid } }
+    RepositoryId:
+      { name: repositoryId, in: path, required: true, schema: { type: string, format: uuid } }
+    ComponentId:
+      { name: componentId, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+      description: 'repeat with same key and body returns the original result; different body is 409'
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - VALIDATION
+            - UNAUTHENTICATED
+            - NOT_FOUND
+            - RATE_LIMITED
+            - IDEMPOTENCY_CONFLICT
+            - EVIDENCE_REQUIRED
+            - NO_ADOPTED_EXPECTATION
+            - EXPECTATION_ADOPTED_AFTER_ISSUE
+            - FILE_OUTSIDE_CHANGE_PLAN
+            - OUT_OF_ORDER_TRANSITION
+            - RED_SIGNATURE_MISMATCH
+            - QUARANTINED_TEST_AS_PROOF
+            - ANALYSIS_STALE
+            - POLICY_DENIED
+            - MERGE_NOT_SUPPORTED
+        message: { type: string }
+    TouchPredicate:
+      type: object
+      description: 'the entire classifier input; no file count, line count or diff size exists here (FR-003)'
+      required: [predicate, value]
+      properties:
+        predicate:
+          type: string
+          enum:
+            - touches_public_contract
+            - touches_db_migration
+            - touches_authn_authz
+            - touches_money_path
+            - crosses_component_boundary
+            - touches_shared_library
+            - touches_feature_flag
+            - touches_event_contract
+        value: { type: boolean }
+        graphPath:
+          {
+            type: array,
+            items: { type: string },
+            description: 'the path that established it (004 FR-015)',
+          }
+    ImpactAnalysis:
+      type: object
+      required: [id, issueId, analysedCommit, classification, touchPredicates]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid }
+        repositoryId: { type: string, format: uuid }
+        analysedCommit: { type: string }
+        classification: { type: string, enum: [critical, high, medium, low] }
+        classificationRulesetVersion: { type: integer }
+        touchPredicates: { type: array, items: { $ref: '#/components/schemas/TouchPredicate' } }
+        coverageGaps:
+          type: array
+          description: 'unsupported languages and untested surfaces; may only widen, never narrow (R-21)'
+          items:
+            type: object
+            properties:
+              kind:
+                {
+                  type: string,
+                  enum:
+                    [
+                      unsupported_language,
+                      untested_public_surface,
+                      untested_migration,
+                      untested_event_contract,
+                    ],
+                }
+              ref: { type: string }
+        graphNodeCount: { type: integer }
+        graphEdgeCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+    ChangeGraphEdge:
+      type: object
+      required: [fromRef, toRef, relation, derivation]
+      properties:
+        fromRef: { type: string }
+        toRef: { type: string }
+        relation:
+          {
+            type: string,
+            enum:
+              [
+                references,
+                calls,
+                types,
+                implements,
+                persists_to,
+                migrates,
+                covers,
+                publishes,
+                consumes,
+                guarded_by,
+              ],
+          }
+        derivation:
+          type: string
+          description: 'model_inferred appears only on annotations, which are additive (R-02)'
+          enum:
+            [
+              symbol_reference,
+              type_graph,
+              call_graph,
+              contract,
+              db_model,
+              migration,
+              test_map,
+              event_topic,
+              feature_flag,
+              model_inferred,
+            ]
+    AnchorResolution:
+      type: object
+      required: [verdict, issueFirstSeenAt]
+      properties:
+        verdict:
+          {
+            type: string,
+            enum: [ANCHORED, NO_EXPECTATION, ADOPTED_AFTER_ISSUE, REVOKED, VERSION_NOT_READOPTED],
+          }
+        anchorGrantId:
+          type: string
+          format: uuid
+          nullable: true
+          description: >
+            005's anchor_grant — the only thing that can name an anchor, and non-null exactly when
+            verdict is ANCHORED. No state = adopted predicate exists anywhere here (C-12)
+        expectationId: { type: string, format: uuid, nullable: true }
+        expectationVersionId:
+          type: string
+          format: uuid
+          nullable: true
+          description: '005 expected_behavior_version.id — the version the test asserts (005 FR-012)'
+        expectationVersionNo:
+          { type: integer, nullable: true, description: "that version's version_no, for citation" }
+        adoptedAt:
+          {
+            type: string,
+            format: date-time,
+            nullable: true,
+            description: 'immutable copy, so the comparison survives revocation (C-12)',
+          }
+        adoptedByActorType:
+          {
+            type: string,
+            enum: [human],
+            nullable: true,
+            description: 'immutable copy; machine adoption is not representable (005 FR-011)',
+          }
+        issueFirstSeenAt: { type: string, format: date-time }
+        constraintKinds: { type: array, items: { type: string } }
+        resolvedAt: { type: string, format: date-time }
+    ChangePlan:
+      type: object
+      required: [id, version, reason, classification, anchorResolutionId, files, state]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        reason: { type: string }
+        impactAnalysisId: { type: string, format: uuid }
+        classification: { type: string, enum: [critical, high, medium, low] }
+        anchorResolutionId: { type: string, format: uuid }
+        policyDecisionId: { type: string, format: uuid, nullable: true }
+        state: { type: string, enum: [submitted, approved, rejected, superseded, invalidated] }
+        files:
+          type: array
+          items:
+            type: object
+            required: [path, role]
+            properties:
+              path: { type: string }
+              role: { type: string, enum: [primary, dependent, test] }
+    MaskingFinding:
+      type: object
+      required: [pattern, filePath, disposition]
+      properties:
+        pattern:
+          type: string
+          description: >
+            expectation_document_modified is a hard refusal — its disposition is always rejected and
+            no approval path reaches it, because a fix that edits an expectation carries its own
+            anchor (FR-014a)
+          enum:
+            [
+              catch_added,
+              rejection_swallowed,
+              retry_added,
+              default_fallback,
+              type_widened,
+              assertion_loosened,
+              test_weakened,
+              test_skipped,
+              test_deleted,
+              expectation_document_modified,
+            ]
+        filePath: { type: string }
+        nodeRef: { type: string }
+        atFailureSite: { type: boolean }
+        behaviouralAssertionSatisfied: { type: boolean }
+        disposition: { type: string, enum: [rejected, requires_human_approval] }
+    FixAttempt:
+      type: object
+      required: [id, attemptNumber, state, baseCommit]
+      properties:
+        id: { type: string, format: uuid }
+        attemptNumber: { type: integer }
+        planId: { type: string, format: uuid }
+        planVersion: { type: integer }
+        state: { type: string, description: 'fix-loop state; see contracts/fix-loop.md' }
+        baseCommit: { type: string }
+        patchRef: { type: string, nullable: true }
+        diffDigest: { type: string, nullable: true }
+        approachFingerprint: { type: string, nullable: true }
+        retryReason:
+          {
+            type: string,
+            nullable: true,
+            description: 'required when repeating a rejected approach (FR-027)',
+          }
+        stale: { type: boolean }
+        verdictId: { type: string, format: uuid, nullable: true }
+        rejectionReason: { type: string, nullable: true }
+        cost: { type: number }
+        createdAt: { type: string, format: date-time }
+        closedAt: { type: string, format: date-time, nullable: true }
+    VerificationVerdict:
+      type: object
+      required: [id, verdict, anchorsAvailable, anchorsUsed, independenceRankAchieved]
+      properties:
+        id: { type: string, format: uuid }
+        verdict:
+          { type: string, enum: [APPROVE, REJECT_PATCH, REJECT_DIAGNOSIS, INSUFFICIENT_EVIDENCE] }
+        anchorsAvailable:
+          type: array
+          items:
+            type: object
+            properties:
+              kind:
+                {
+                  type: string,
+                  enum:
+                    [
+                      production_signal,
+                      human_written_test,
+                      adopted_expectation,
+                      expectation_anchored_regression_test,
+                      raw_evidence,
+                      second_model,
+                      self_review,
+                    ],
+                }
+              ref: { type: string }
+        anchorsUsed:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string }
+              ref: { type: string }
+        independenceRankAchieved:
+          type: integer
+          minimum: 1
+          maximum: 5
+          description: '5 production_signal, 4 human_written_test, 3 expectation_anchored_regression_test, 2 second_model, 1 self_review; APPROVE requires >= 3 (FR-018)'
+        reasons: { type: array, items: { type: object, additionalProperties: true } }
+        modelConfidence:
+          { type: number, nullable: true, description: 'recorded, never read by a gate (FR-019)' }
+        decidedAt: { type: string, format: date-time }
+    PullRequestRecord:
+      type: object
+      description: 'describes a request. There is no merged state, no merge actor and no merge action (FR-024)'
+      required: [id, issueId, repositoryId, targetBranch, sections, awaitingCi]
+      properties:
+        id: { type: string, format: uuid }
+        issueId: { type: string, format: uuid }
+        repositoryId: { type: string, format: uuid }
+        targetBranch: { type: string }
+        sourceBranch: { type: string }
+        externalId: { type: string, nullable: true }
+        changeFingerprint: { type: string }
+        attemptIds: { type: array, items: { type: string, format: uuid } }
+        awaitingCi: { type: boolean, description: 'true until required CI results return (FR-020)' }
+        sections:
+          type: object
+          description: 'every one must be populated or creation is refused (FR-021, SC-006)'
+          properties:
+            problem: { type: boolean }
+            rootCauseWithEvidence: { type: boolean }
+            issueClassification: { type: boolean }
+            fixDescription: { type: boolean }
+            regressionTestWithExpectation: { type: boolean }
+            testResults: { type: boolean }
+            impactAndRisk: { type: boolean }
+            rollbackPlan: { type: boolean }
+            issueLink: { type: boolean }
+            auditReference: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+    ComponentVerificationPolicy:
+      type: object
+      description: >
+        The tenant declaration FR-020's exemption needs (R-27). Read by the VERIFIED guard; e2eRequired
+        defaults to true, so a component nobody configured cannot skip end-to-end results.
+      required: [componentId, e2eRequired]
+      properties:
+        componentId: { type: string, format: uuid }
+        e2eRequired: { type: boolean, default: true }
+        declaredBy: { type: string, nullable: true }
+        declaredAt: { type: string, format: date-time, nullable: true }
+        note: { type: string, nullable: true }
+    QuarantinedTest:
+      type: object
+      required: [testIdentifier, commitSha, observedOutcomes]
+      properties:
+        testIdentifier: { type: string }
+        commitSha: { type: string }
+        observedOutcomes: { type: array, items: { type: string } }
+        repeatCount: { type: integer }
+        quarantinedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+paths:
+  /issues/{issueId}/anchor-resolution:
+    get:
+      summary: The anchor resolution for this issue (FR-006, FR-007)
+      description: >
+        Resolved deterministically against 005. A positive claim from diagnosis grants nothing;
+        this is the record the fix path gates on.
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/AnchorResolution' } } },
+          }
+        '404':
+          {
+            description: "not found, including another tenant's issue",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /issues/{issueId}/impact-analyses:
+    get:
+      summary: Impact analyses for an issue (FR-001)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ImpactAnalysis' } }
+    post:
+      summary: Request a fresh analysis against the current base commit (R-17)
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [repositoryId, targetRef]
+              properties:
+                repositoryId: { type: string, format: uuid }
+                targetRef: { type: string }
+      responses:
+        '202': { description: 'accepted; analysis runs in the execution plane (R-01)' }
+  /impact-analyses/{analysisId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/AnalysisId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/ImpactAnalysis' } } },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /impact-analyses/{analysisId}/graph:
+    get:
+      summary: The deterministic change graph, plus additive annotations (FR-002)
+      parameters:
+        - { $ref: '#/components/parameters/AnalysisId' }
+        - { name: derivation, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  edges: { type: array, items: { $ref: '#/components/schemas/ChangeGraphEdge' } }
+                  annotations:
+                    type: array
+                    description: 'additive only; no annotation removes or downgrades a deterministic edge (R-02)'
+                    items: { type: object, additionalProperties: true }
+  /issues/{issueId}/change-plans:
+    get:
+      summary: Every plan version for the issue; none is deleted (FR-005)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ChangePlan' } }
+    post:
+      summary: Submit a ChangePlan for policy evaluation (FR-004, 002 FR-001)
+      parameters:
+        - { $ref: '#/components/parameters/IssueId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePlan' }
+      responses:
+        '201':
+          {
+            description: Created,
+            content: { application/json: { schema: { $ref: '#/components/schemas/ChangePlan' } } },
+          }
+        '409':
+          description: 'anchor is not ANCHORED, or the analysis is stale'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /change-plans/{planId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/ChangePlan' } } },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /change-plans/{planId}/extensions:
+    post:
+      summary: Extend a plan; creates a new version and requires re-evaluation (FR-005)
+      parameters:
+        - { $ref: '#/components/parameters/PlanId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [files, reason]
+              properties:
+                reason: { type: string }
+                files:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      path: { type: string }
+                      role: { type: string, enum: [primary, dependent, test] }
+      responses:
+        '201': { description: 'new plan version, state submitted, awaiting policy' }
+  /issues/{issueId}/fix-attempts:
+    get:
+      summary: Every attempt, successful or not — never discarded (FR-026, SC-012)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FixAttempt' } }
+  /fix-attempts/{attemptId}:
+    get:
+      parameters: [{ $ref: '#/components/parameters/AttemptId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content: { application/json: { schema: { $ref: '#/components/schemas/FixAttempt' } } },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /fix-attempts/{attemptId}/transitions:
+    get:
+      summary: The persisted fix-loop transitions with their guard evidence (FR-009)
+      parameters: [{ $ref: '#/components/parameters/AttemptId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer }
+                        fromState: { type: string }
+                        toState: { type: string }
+                        guardKind: { type: string }
+                        executionId: { type: string, nullable: true }
+                        occurredAt: { type: string, format: date-time }
+  /fix-attempts/{attemptId}/masking-findings:
+    get:
+      summary: Deterministic diff inspection results (FR-014)
+      parameters: [{ $ref: '#/components/parameters/AttemptId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/MaskingFinding' } }
+  /fix-attempts/{attemptId}/verdict:
+    get:
+      summary: The verifier's verdict with anchors available and used (FR-018)
+      parameters: [{ $ref: '#/components/parameters/AttemptId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              {
+                application/json: { schema: { $ref: '#/components/schemas/VerificationVerdict' } },
+              },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /issues/{issueId}/pull-request:
+    get:
+      summary: The single pull request record for this issue and target branch (FR-022)
+      parameters: [{ $ref: '#/components/parameters/IssueId' }]
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              { application/json: { schema: { $ref: '#/components/schemas/PullRequestRecord' } } },
+          }
+        '404':
+          {
+            description: Not Found,
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+  /repositories/{repositoryId}/quarantined-tests:
+    get:
+      summary: Flaky tests surfaced to the tenant (FR-013)
+      parameters: [{ $ref: '#/components/parameters/RepositoryId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/QuarantinedTest' } }
+  /components/{componentId}/verification-policy:
+    get:
+      summary: Whether end-to-end results are required for this component (FR-020, R-27)
+      parameters: [{ $ref: '#/components/parameters/ComponentId' }]
+      responses:
+        '200':
+          {
+            description: 'OK — absent row answers e2eRequired true, the safe default',
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/ComponentVerificationPolicy' } },
+              },
+          }
+        '404':
+          {
+            description: "unknown component, or another tenant's",
+            content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } },
+          }
+    put:
+      summary: Tenant declaration that end-to-end results are optional for this component (FR-020)
+      description: >
+        A human declaration, audited like any other. It is printed in the pull request with its
+        declarer, so an exemption is visible to the reviewer rather than implicit in a table.
+      parameters:
+        - { $ref: '#/components/parameters/ComponentId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [e2eRequired]
+              properties:
+                e2eRequired: { type: boolean }
+                note: { type: string }
+      responses:
+        '200':
+          {
+            description: OK,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: '#/components/schemas/ComponentVerificationPolicy' } },
+              },
+          }
+  /callbacks/merge-events:
+    post:
+      summary: Inbound merge fact for a pull request this feature opened (R-26, SC-001)
+      description: >
+        A callback like CI results (ADR 0003), idempotent per delivery. It carries what a person did
+        with the request — merged, closed without merging, or force-pushed over — and the actor who did
+        it. check:merge-reconcile compares opened requests against these facts; where a tenant has not
+        configured the webhook it reports **unknown**, never merged and never unmerged. The no-merge
+        guarantee does not depend on this channel — it rests on the four structural layers (FR-024) —
+        so an absent webhook costs visibility, not safety.
+      security: [{ callbackToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [externalId, repositoryId, outcome, actorRef, observedAt]
+              properties:
+                externalId: { type: string, description: "the provider's pull request identifier" }
+                repositoryId: { type: string, format: uuid }
+                outcome: { type: string, enum: [merged, closed_unmerged, force_pushed_over] }
+                actorRef:
+                  {
+                    type: string,
+                    description: 'the identity that performed it; reconciled against Healer actors (SC-001)',
+                  }
+                mergeCommitSha: { type: string, nullable: true }
+                observedAt: { type: string, format: date-time }
+      responses:
+        '202': { description: 'accepted; a repeat delivery is counted and changes nothing' }
+        '404':
+          description: "no pull request record for that identifier, including another tenant's"
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  /callbacks/ci-results:
+    post:
+      summary: Inbound CI completion (007 FR-022, 012 FR-030) — resolves awaiting_ci
+      security: [{ callbackToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [attemptId, outcome, results]
+              properties:
+                attemptId: { type: string, format: uuid }
+                outcome: { type: string, enum: [passed, failed, cancelled, timed_out] }
+                results:
+                  type: array
+                  description: 'structured results only; no stdout crosses the boundary (007 FR-026)'
+                  items:
+                    type: object
+                    properties:
+                      testIdentifier: { type: string }
+                      outcome: { type: string, enum: [passed, failed, skipped] }
+                      durationMs: { type: integer }
+                      failureSignature: { type: string }
+      responses:
+        '202':
+          {
+            description: 'accepted; a repeat delivery with the same token changes nothing but is counted',
+          }
+  /runner/change-graph:
+    post:
+      summary: Runner submits a computed change graph (R-01) — nodes, edges and paths only
+      security: [{ runnerBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [analysisId, nodes, edges]
+              properties:
+                analysisId: { type: string, format: uuid }
+                nodes: { type: array, items: { type: object, additionalProperties: true } }
+                edges: { type: array, items: { $ref: '#/components/schemas/ChangeGraphEdge' } }
+                coverageGaps: { type: array, items: { type: object, additionalProperties: true } }
+      responses:
+        '202': { description: Accepted }
+        '400':
+          description: 'schema rejection — free-form fields and file contents are not accepted (012 FR-022)'
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
