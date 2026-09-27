@@ -200,10 +200,59 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
     }
   });
 
-  it('rejects a malformed signal (missing required errorSignature)', async () => {
-    await post('00000000-0000-0000-8000-0000000000a5', {
+  it('a signal missing a required field is rejected per-item, not the whole request (001 T024, quickstart 20)', async () => {
+    const response = await post('00000000-0000-0000-8000-0000000000a5', {
       signals: [{ observedAt: '2026-01-01T00:00:00.000Z', component: 'x' }],
-    }).expect(400);
+    }).expect(202);
+
+    expect(response.body.accepted).toBe(0);
+    expect(response.body.rejected).toHaveLength(1);
+    expect(response.body.rejected[0].index).toBe(0);
+  });
+
+  it('a batch mixing valid and malformed signals accepts and enqueues the valid ones, rejecting only the bad one', async () => {
+    const tenantId = '00000000-0000-0000-8000-0000000000ae';
+    const response = await post(tenantId, {
+      signals: [
+        validSignal(),
+        { observedAt: '2026-01-01T00:00:00.000Z', component: 'x' }, // missing environment/errorSignature
+        validSignal(),
+      ],
+    }).expect(202);
+
+    expect(response.body.accepted).toBe(2);
+    expect(response.body.rejected).toEqual([{ index: 1, error: expect.any(String) }]);
+
+    const inspectQueue = createQueue('ingestion', { url: redis.url });
+    try {
+      const jobs = await inspectQueue.getJobs(['waiting', 'delayed', 'active']);
+      expect(jobs.filter((job) => job.data.tenantId === tenantId)).toHaveLength(2);
+    } finally {
+      await inspectQueue.close();
+    }
+  });
+
+  it('a wrongly typed but non-identity errorSignature field is dropped, not fatal — "issue created from what parsed"', async () => {
+    const tenantId = '00000000-0000-0000-8000-0000000000af';
+    const response = await post(tenantId, {
+      signals: [
+        {
+          ...validSignal(),
+          errorSignature: { exceptionType: 'RealException', frames: 'not-an-array' },
+        },
+      ],
+    }).expect(202);
+
+    expect(response.body).toEqual({ accepted: 1, duplicate: false });
+    const inspectQueue = createQueue('ingestion', { url: redis.url });
+    try {
+      const jobs = await inspectQueue.getJobs(['waiting', 'delayed', 'active']);
+      const own = jobs.filter((job) => job.data.tenantId === tenantId);
+      expect(own).toHaveLength(1);
+      expect(own[0]?.data.signal.errorSignature).toEqual({ exceptionType: 'RealException' });
+    } finally {
+      await inspectQueue.close();
+    }
   });
 
   it('the same delivery posted twice returns duplicate: true, counts unchanged, and enqueues nothing the second time (001 T020, quickstart 4)', async () => {

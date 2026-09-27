@@ -95,6 +95,37 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.36.0 — 2026-09-27
+
+**001 T023/T024/T025**: the last three Phase 3 (US1) tasks besides the load check. T025 was the
+big one — nothing consumed the `ingestion` queue at all before this.
+
+- **T025**: `processSignalJob` (`packages/domain/issues`) turns a queued job back into a real
+  `TenantContext`/`Signal`, running inside the job's own correlation id, then calls T018's
+  `ingestSignal` — throwing on failure so BullMQ's own retry (5 attempts, exponential backoff)
+  and dead-letter retention are the observability mechanism, not a second one built here. Wired
+  into `apps/worker/src/main.ts` (`ingestion` added to `CONSUMED`; `loadConfig()` moved inside
+  `start()` so tests can set env vars first). **Real bug found and fixed**: the handler returned
+  the full `Issue` (`occurrenceCount: bigint`), and BullMQ's own `JSON.stringify` of a job's
+  return value throws on a `bigint` — silently reporting a successful ingest as a *failed* job,
+  which would retry and double-count. Fixed by returning a small JSON-safe summary instead. New
+  `apps/worker/worker.e2e.test.ts` (2/2, real Redis + Postgres): a queued signal becomes a real
+  issue row and the job reaches `completed`, not `delayed`; an unrecoverable job becomes a
+  counted dead letter, not a silent loss.
+- **T024**: found a real conflict with T019's own tests — `z.array(signalSchema)` validated the
+  whole batch at once, so one malformed signal 400'd everything, exactly what quickstart 20 says
+  must not happen. Fixed: each signal is now validated independently (`parseSignalBatch`); a
+  signal missing a required identity field is named by index in a new `rejected` array in the
+  202 response (added to `contracts/openapi.yaml`) while its batch-mates still enqueue.
+  `errorSignature`'s own fields are now `.catch(undefined)` rather than fatal — "issue created
+  from what parsed" for the common case of one bad optional field. Deliberately not built:
+  writing an "evidence" record for a signal with no computable identity at all — there is no
+  issue to attach it to, flagged as a genuinely open question in `QUESTIONS.md`.
+- **T023**: already structurally true since T012/T018; added the proof — a signal observed five
+  minutes in the future still records that exact `observed_at`, while `received_at` reflects
+  this system's real clock, strictly before it.
+- `make ci` green cold-cache: 126 e2e tests, all 16 gates.
+
 ## 0.35.0 — 2026-09-27
 
 **Root cause found and fixed for `issue-repository.e2e.test.ts`'s long-standing flaky concurrency

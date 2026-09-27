@@ -108,9 +108,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@healer/domain-issues':
+        specifier: workspace:*
+        version: link:../../packages/domain/issues
       '@healer/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../../packages/prisma-client
       '@healer/shared':
         specifier: workspace:*
         version: link:../../packages/shared

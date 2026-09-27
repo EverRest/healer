@@ -12,6 +12,7 @@ export * from './domain/signal-queue.js';
 export * from './domain/state-machine.js';
 export * from './application/commands/enqueue-signal-batch.js';
 export * from './application/commands/ingest-signal-batch.js';
+export * from './application/commands/process-signal-job.js';
 export * from './infrastructure/prisma-issue-repository.js';
 export * from './infrastructure/prisma-normalisation-ruleset-repository.js';
 export * from './infrastructure/prisma-ingestion-delivery-repository.js';

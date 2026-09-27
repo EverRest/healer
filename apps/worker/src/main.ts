@@ -1,6 +1,13 @@
 import { createLogger, loadConfig, newCorrelationId, withCorrelation } from '@healer/shared';
 import { type DrainResult } from '@healer/events';
 import { createWorker, deadLetterDepth, createQueue, type QueueClass } from '@healer/workflow';
+import {
+  processSignalJob,
+  PrismaIssueRepository,
+  PrismaNormalisationRulesetRepository,
+  type SignalJobData,
+} from '@healer/domain-issues';
+import { createPrismaClient } from './infrastructure/prisma.js';
 
 /**
  * The worker process. Same code as the api, separate process (plan.md): a flood of jobs must
@@ -9,15 +16,24 @@ import { createWorker, deadLetterDepth, createQueue, type QueueClass } from '@he
  * Every handler runs inside a correlation scope, so one investigation is one identifier
  * across logs, traces and model calls (FR-032) — and under its queue's declared wall-clock
  * budget, which `createWorker` applies with no way to opt out.
+ *
+ * `loadConfig()` is called inside `start()`, not at module load (001 T025 review): a test
+ * booting a real Postgres/Redis on ephemeral ports sets `DATABASE_URL`/`REDIS_URL` only once it
+ * knows them, after this module has already been imported — a module-level `loadConfig()` would
+ * have read whatever was in the environment at import time instead.
  */
-const config = loadConfig();
-const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-worker' });
 
-/** Classes this process consumes. The outbox drain is the one processor that exists today. */
-const CONSUMED: readonly QueueClass[] = ['maintenance'];
+/** Classes this process consumes. `ingestion` is 001's own signal-processing queue (T025); the
+ *  outbox drain is `maintenance`'s one processor. */
+const CONSUMED: readonly QueueClass[] = ['maintenance', 'ingestion'];
 
 export function start(): { close: () => Promise<void> } {
+  const config = loadConfig();
+  const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-worker' });
   const connection = { url: config.REDIS_URL };
+  const prisma = createPrismaClient(config.DATABASE_URL);
+  const rulesetRepo = new PrismaNormalisationRulesetRepository(prisma);
+  const issueRepo = new PrismaIssueRepository(prisma);
 
   const workers = CONSUMED.map((queue) =>
     createWorker(queue, connection, async (job) => {
@@ -28,8 +44,18 @@ export function start(): { close: () => Promise<void> } {
 
       return withCorrelation(correlationId, async () => {
         logger.info({ queue, jobId: job.id, correlationId, name: job.name }, 'job started');
-        // Handlers are registered by the features that own them; nothing is registered here,
-        // because a processor in this file would be a processor outside its domain package.
+        // Handlers are registered by the feature that owns them (001), not invented in this
+        // generic dispatch loop — this is the one place a queue/job-name pair is routed to it.
+        if (queue === 'ingestion' && job.name === 'signal') {
+          const result = await processSignalJob(rulesetRepo, issueRepo, job.data as SignalJobData);
+          // BullMQ JSON.stringifies whatever a handler returns to store as the job's
+          // `returnvalue` (review finding, reproduced): the full `Issue` carries
+          // `occurrenceCount: bigint`, which `JSON.stringify` throws on — silently turning a
+          // *successful* ingest into a reported job failure, and into a retry that would double
+          // -count the very occurrence it just recorded. Return a JSON-safe summary instead; the
+          // domain result itself is for `ingestSignal`'s other, non-queue callers.
+          return { issueId: result.issue.id, created: result.created };
+        }
         return undefined;
       });
     }),
@@ -46,6 +72,7 @@ export function start(): { close: () => Promise<void> } {
   return {
     close: async () => {
       await Promise.all(workers.map((w) => w.close()));
+      await prisma.$disconnect();
     },
   };
 }
@@ -67,5 +94,8 @@ if (process.argv[1]?.endsWith('main.js')) {
   const stop = (): void => void handle.close().then(() => process.exit(0));
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
-  logger.info({ queues: CONSUMED }, 'worker started');
+  createLogger({ level: loadConfig().LOG_LEVEL, serviceName: 'healer-worker' }).info(
+    { queues: CONSUMED },
+    'worker started',
+  );
 }

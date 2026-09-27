@@ -274,4 +274,38 @@ describe('ingestSignal (001 T018, FR-002)', () => {
       );
       expect(fingerprints).toBe('1');
     }));
+
+  it('a signal with a clock five minutes ahead records its own observed_at, independent of received_at (001 T023, R-10, quickstart 7)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const skewedObservedAt = new Date(Date.now() + 5 * 60_000);
+      const beforeIngest = new Date();
+      const result = await ingestSignal(
+        rulesetRepo,
+        issueRepo,
+        CONTEXT,
+        signal({
+          errorSignature: { exceptionType: 'ClockSkewCase' },
+          observedAt: skewedObservedAt,
+        }),
+      );
+      const afterIngest = new Date();
+
+      // The issue row itself uses the source clock throughout (firstSeenAt/lastSeenAt) —
+      // already proven by every other test in this file that asserts on them.
+      expect(result.issue.firstSeenAt).toEqual(skewedObservedAt);
+
+      // issue_event.observed_at is the signal's own (skewed) clock; issue_event.received_at is
+      // ours, and cannot be later than the skewed observed_at despite this system's clock never
+      // having moved — the two columns really are independent, not one copied into the other.
+      const row = await query(
+        pg,
+        `select observed_at, received_at from "issue"."issue_event"
+         where issue_id = '${result.issue.id}' and type = 'signal_received'`,
+      );
+      const [observedAt, receivedAt] = row.split('|').map((s) => new Date(s));
+      expect(observedAt).toEqual(skewedObservedAt);
+      expect(receivedAt.getTime()).toBeGreaterThanOrEqual(beforeIngest.getTime());
+      expect(receivedAt.getTime()).toBeLessThanOrEqual(afterIngest.getTime());
+      expect(receivedAt.getTime()).toBeLessThan(observedAt.getTime());
+    }));
 });

@@ -204,6 +204,18 @@ paths:
                   accepted: { type: integer }
                   duplicate:
                     { type: boolean, description: 'true when this delivery id was already seen' }
+                  rejected:
+                    type: array
+                    description: >-
+                      Signals this batch could not parse (001 T024, FR-019) — a required field
+                      absent or the wrong type. Every other signal in the same batch is still
+                      accepted; nothing in a partially-malformed batch is dropped silently.
+                    items:
+                      type: object
+                      properties:
+                        index:
+                          { type: integer, description: 'position in the request signals array' }
+                        error: { type: string }
   /issues:
     get:
       summary: List issues

@@ -15,8 +15,10 @@
     "typecheck": "tsc --build tsconfig.json"
   },
   "dependencies": {
-    "@healer/shared": "workspace:*",
+    "@healer/domain-issues": "workspace:*",
     "@healer/events": "workspace:*",
+    "@healer/prisma-client": "workspace:*",
+    "@healer/shared": "workspace:*",
     "@healer/workflow": "workspace:*"
   }
 }

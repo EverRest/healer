@@ -22,16 +22,19 @@ import {
   TenantIsolationError,
   withCorrelation,
 } from '@healer/shared';
-import { ingestSignalsRequestSchema, type IngestSignalsRequest } from './ingest-signals.dto.js';
+import {
+  ingestSignalsRequestSchema,
+  parseSignalBatch,
+  type RejectedSignal,
+  type SignalDto,
+} from './ingest-signals.dto.js';
 
 /**
  * zod's `.optional()` types a field as `T | undefined`, which `exactOptionalPropertyTypes`
  * treats as distinct from an absent key. `Signal`'s and `ErrorSignature`'s optional fields must
  * be absent, not present-with-undefined, so this drops rather than assigns.
  */
-function toErrorSignature(
-  dto: IngestSignalsRequest['signals'][number]['errorSignature'],
-): ErrorSignature {
+function toErrorSignature(dto: SignalDto['errorSignature']): ErrorSignature {
   return {
     ...(dto.exceptionType !== undefined && { exceptionType: dto.exceptionType }),
     ...(dto.frames !== undefined && { frames: dto.frames }),
@@ -40,7 +43,7 @@ function toErrorSignature(
   };
 }
 
-function toSignal(dto: IngestSignalsRequest['signals'][number]): Signal {
+function toSignal(dto: SignalDto): Signal {
   return {
     observedAt: new Date(dto.observedAt),
     component: dto.component,
@@ -86,7 +89,7 @@ export class IngestController {
     // carry provider identity for real; until then a bare header stands in for it, kept
     // deliberately as honest and greppable as the tenant stub next to it.
     @Headers('x-provider-id') providerIdHeader?: string,
-  ): Promise<{ accepted: number; duplicate: boolean }> {
+  ): Promise<{ accepted: number; duplicate: boolean; rejected?: readonly RejectedSignal[] }> {
     // One correlation id per request (review finding), not one per signal — every job a batch
     // produces (`BullmqSignalQueue` reads `currentCorrelationId()`) traces back to the delivery
     // that created it, matching every other entry point in this codebase (012 FR-032).
@@ -113,16 +116,22 @@ export class IngestController {
         throw new BadRequestException('X-Provider-Id header is required');
       }
 
-      const signals: Signal[] = parsed.data.signals.map(toSignal);
+      // Per-signal, not `z.array(signalSchema)` (001 T024, quickstart 20): one malformed
+      // signal must not reject its batch-mates. `rejected` names each one and why — FR-019's
+      // "nothing dropped silently" met by telling the caller, not by inventing an evidence
+      // record with no issue to attach to (see QUESTIONS.md).
+      const { valid, rejected } = parseSignalBatch(parsed.data.signals);
+      const signals: Signal[] = valid.map(toSignal);
 
       try {
-        return await ingestSignalBatch(
+        const result = await ingestSignalBatch(
           this.queue,
           this.deliveries,
           context,
           { provider: providerIdHeader, deliveryId: deliveryIdHeader },
           signals,
         );
+        return rejected.length > 0 ? { ...result, rejected } : result;
       } catch (error) {
         // FR-019 "never blocks the provider": a queue that cannot be reached within budget
         // must fail loudly and fast, not hang and not surface as an opaque 500 — 503 tells the

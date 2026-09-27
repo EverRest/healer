@@ -412,3 +412,44 @@ of this (re-confirmed via `git stash`: fails identically on the pre-T019 tree).
   `make ci` gates pass. The one remaining e2e failure is the same pre-existing, already documented
   `issue-repository.e2e.test.ts` concurrency flake — unrelated (it now also passed cleanly in one
   of the runs during this task, consistent with its documented intermittency).
+
+## 001 T024 — where does a totally-unidentifiable parse failure's "evidence" attach?
+
+Not decided, genuinely open, flagged rather than guessed at.
+
+Quickstart 20 says a malformed signal's parse failure should be "recorded as evidence", but
+`evidence.issue_id` is `NOT NULL` — evidence cannot exist without an issue. A signal missing a
+required top-level field (`observedAt`/`component`/`environment`/`errorSignature`) has no
+fingerprint, no component, no environment: nothing to create or attach an issue to. Today's
+build (T024) satisfies "nothing dropped silently" a different way — naming the rejected signal
+and why in the `POST /ingest/signals` response's new `rejected` array — rather than inventing
+either of:
+
+- a placeholder/junk-drawer issue per tenant that every unparseable signal attaches to (a real
+  new concept nothing else in the spec names), or
+- a new `Evidence.type` value for "this couldn't be parsed" attached to... which issue, still
+  unresolved, so this doesn't actually close the gap above.
+
+If a reviewer wants the literal "evidence" behavior, the first step is deciding which of the two
+(or a third option) it should be — that's a data-model-shaped decision, not a one-line fix.
+
+## 001 T025 — a narrow correctness bug BullMQ's own serialization surfaced
+
+**Resolved and fixed**, recorded here because it was a real, silent-failure-shaped bug, not a
+style note: `apps/worker`'s dispatch loop originally returned `processSignalJob`'s full
+`IngestSignalResult` (carrying the created/attached `Issue`, which has `occurrenceCount: bigint`)
+as the BullMQ job's return value. BullMQ `JSON.stringify`s whatever a handler returns to store as
+`job.returnvalue`, and `JSON.stringify` throws on a `bigint` — so a signal that *successfully*
+created or attached to an issue was reported to BullMQ as a **failed** job, which then retried,
+which would have attached the same signal a second time and inflated `occurrenceCount` on every
+subsequent retry. Fixed by returning a small JSON-safe `{issueId, created}` summary from the
+dispatch loop instead of the domain result — `apps/worker/worker.e2e.test.ts` explicitly waits
+past where the retry would have landed and asserts the job reached `completed`, which is what
+would have caught this before it shipped.
+
+**General lesson, not specific to this bug**: any queue handler in this codebase that returns a
+domain object containing a `bigint` field (any `occurrenceCount`-shaped value, currently only on
+`Issue`) will hit the identical failure mode. Nothing enforces "job handlers return JSON-safe
+values" mechanically today — worth a lint rule or a typed `JobResult` boundary if a second handler
+ever needs to return something richer than `undefined`/`{issueId, created}`-shaped data, flagged
+here rather than built speculatively for a problem with exactly one occurrence so far.
