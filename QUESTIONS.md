@@ -43,3 +43,17 @@ shared database — a schema change past that point is always a new migration fi
 
 **Resolved and confirmed 2026-09-27**: see [decisions.md](docs/decisions.md) C-49. Kept as-is,
 over merging unit+e2e coverage and over a lower (arbitrary) floor.
+
+## 001 T012 — the issue state graph has no `stale -> investigating` edge yet
+
+Not decided, and deliberately not invented ahead of the task that should decide it.
+`state-machine.ts`'s graph is exactly what data-model.md's diagram draws: the only reopen edge is
+`resolved -> investigating` (matching signal inside the reopen window, FR-005). A `stale` issue
+has no edge back to `investigating` at all — only to `resolved`/`merged`/`removed`.
+
+Question for whoever builds T018 (fingerprint attachment of matching signals): should a new
+matching signal also revive a `stale` issue back to `investigating`, the same way it reopens a
+`resolved` one? R-11 only says staleness is "surfaced, not closed"; it doesn't say whether new
+signal traffic should un-stale it automatically. If yes, T018 needs to add that edge to the graph
+(and decide whether the cause is `ingestion`, same as the resolved-reopen edge). If no, a stale
+issue only leaves that state through a human action — say so and this note can be deleted.

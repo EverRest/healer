@@ -1,0 +1,152 @@
+import { describe, expect, it } from 'vitest';
+import { InvalidIssueTransitionError, transitionIssue } from './state-machine.js';
+import type { Issue } from './issue.js';
+
+/**
+ * Pure transition validation over the closed graph in data-model.md's "State transitions"
+ * (001 T012, FR-006) — same technique as 012's `packages/workflow/src/machine.ts` `step()`: the
+ * graph is the one authority on what may happen next, not the caller, and every transition
+ * produces the event that records who or what caused it.
+ */
+function issue(state: Issue['state']): Issue {
+  return {
+    id: 'issue-1',
+    tenantId: 'tenant-1',
+    kind: 'production_incident',
+    componentId: null,
+    environment: 'prod',
+    severity: 'high',
+    state,
+    fingerprint: 'fp1',
+    rulesetVersion: 1,
+    occurrenceCount: 1n,
+    firstSeenAt: new Date('2026-01-01T00:00:00Z'),
+    lastSeenAt: new Date('2026-01-01T00:00:00Z'),
+    staleAt: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+  };
+}
+
+describe('transitionIssue (001 T012, FR-006)', () => {
+  it('detected -> investigating is declared', () => {
+    const result = transitionIssue(issue('detected'), 'investigating', 'agent', 'context-resolver');
+    expect(result.issue.state).toBe('investigating');
+    expect(result.event).toMatchObject({
+      issueId: 'issue-1',
+      fromState: 'detected',
+      toState: 'investigating',
+      cause: 'agent',
+      actorRef: 'context-resolver',
+    });
+  });
+
+  it('investigating -> diagnosed -> acting -> resolved, the happy path', () => {
+    let current = issue('investigating');
+    current = transitionIssue(current, 'diagnosed', 'agent', 'diagnosis-engine').issue;
+    current = transitionIssue(current, 'acting', 'agent', 'change-agent').issue;
+    current = transitionIssue(current, 'resolved', 'agent', 'verifier').issue;
+    expect(current.state).toBe('resolved');
+  });
+
+  it('diagnosed and acting can both reach needs_human — no path found', () => {
+    expect(transitionIssue(issue('diagnosed'), 'needs_human', 'policy', 'gate').issue.state).toBe(
+      'needs_human',
+    );
+    expect(transitionIssue(issue('acting'), 'needs_human', 'policy', 'gate').issue.state).toBe(
+      'needs_human',
+    );
+  });
+
+  it('any non-terminal state can be closed by a human directly to resolved', () => {
+    for (const state of [
+      'detected',
+      'investigating',
+      'diagnosed',
+      'acting',
+      'needs_human',
+      'stale',
+    ] as const) {
+      expect(transitionIssue(issue(state), 'resolved', 'human', 'pavlo').issue.state).toBe(
+        'resolved',
+      );
+    }
+  });
+
+  it('any non-terminal state can go stale — surfaced, not closed', () => {
+    for (const state of [
+      'detected',
+      'investigating',
+      'diagnosed',
+      'acting',
+      'needs_human',
+    ] as const) {
+      expect(transitionIssue(issue(state), 'stale', 'system', 'staleness-job').issue.state).toBe(
+        'stale',
+      );
+    }
+  });
+
+  it('resolved reopens to investigating inside the reopen window', () => {
+    expect(
+      transitionIssue(issue('resolved'), 'investigating', 'ingestion', 'signal').issue.state,
+    ).toBe('investigating');
+  });
+
+  it('every non-removed state can be merged, and merged can only be removed', () => {
+    for (const state of [
+      'detected',
+      'investigating',
+      'diagnosed',
+      'acting',
+      'needs_human',
+      'stale',
+      'resolved',
+    ] as const) {
+      expect(transitionIssue(issue(state), 'merged', 'human', 'pavlo').issue.state).toBe('merged');
+    }
+    expect(transitionIssue(issue('merged'), 'removed', 'policy', 'retention').issue.state).toBe(
+      'removed',
+    );
+  });
+
+  it('every state, including merged and resolved, can be removed — tenant deletion is unconditional', () => {
+    for (const state of [
+      'detected',
+      'investigating',
+      'diagnosed',
+      'acting',
+      'needs_human',
+      'stale',
+      'resolved',
+      'merged',
+    ] as const) {
+      expect(transitionIssue(issue(state), 'removed', 'human', 'pavlo').issue.state).toBe(
+        'removed',
+      );
+    }
+  });
+
+  it('removed is terminal — no transition out, not even to itself', () => {
+    expect(() => transitionIssue(issue('removed'), 'resolved', 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+    expect(() => transitionIssue(issue('removed'), 'removed', 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+  });
+
+  it('rejects an undeclared edge — diagnosed cannot jump straight back to detected', () => {
+    expect(() => transitionIssue(issue('diagnosed'), 'detected', 'human', 'pavlo')).toThrow(
+      /diagnosed -> detected is not a declared transition/,
+    );
+  });
+
+  it('rejects stale reopening directly to investigating — only resolved has that edge today', () => {
+    // Flagged in QUESTIONS.md rather than guessed: whether a new matching signal should also
+    // revive a stale issue is T018's ingestion-attach decision, not this task's to invent ahead
+    // of it. Today the diagram draws exactly one reopen edge, from resolved.
+    expect(() => transitionIssue(issue('stale'), 'investigating', 'ingestion', 'signal')).toThrow(
+      InvalidIssueTransitionError,
+    );
+  });
+});

@@ -137,6 +137,9 @@ importers:
       '@healer/prisma-client':
         specifier: workspace:*
         version: link:../../prisma-client
+      '@healer/shared':
+        specifier: workspace:*
+        version: link:../../shared
 
   packages/domain/knowledge: {}
 

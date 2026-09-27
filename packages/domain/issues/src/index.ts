@@ -1,2 +1,6 @@
+export * from './domain/issue.js';
 export * from './domain/normalisation-ruleset.js';
+export * from './domain/repository.js';
+export * from './domain/state-machine.js';
+export * from './infrastructure/prisma-issue-repository.js';
 export * from './infrastructure/prisma-normalisation-ruleset-repository.js';

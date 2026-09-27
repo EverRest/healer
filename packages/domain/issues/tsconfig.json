@@ -8,6 +8,9 @@
   "references": [
     {
       "path": "../../prisma-client"
+    },
+    {
+      "path": "../../shared"
     }
   ]
 }

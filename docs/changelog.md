@@ -95,6 +95,31 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.24.0 — 2026-09-27
+
+**001 T012**: `domain/issues` — `Issue`, the persisted state machine over data-model.md's nine
+states, every transition recorded with its cause (FR-006).
+
+- "Built on 012's workflow machine" means the same *technique* as
+  `packages/workflow/src/machine.ts`'s `step()` — a closed graph is the authority on what may
+  happen next, not the caller, and a pure function returns the new state plus the event —
+  deliberately not the same `WorkflowState` union: `awaits`/`jobBudgetMs` exist so a *job* cannot
+  hang with nothing to wake it (ADR 0003), a concern `issue.state` does not have (C-14).
+- `state-machine.ts`'s graph is exactly data-model.md's diagram: `removed` the only fully
+  terminal state, `merged` reaching only `removed`, every other state reaching `merged`/`removed`
+  unconditionally alongside its own edges. **Test first**, pure unit test, 11/11
+  (`state-machine.test.ts`).
+- `PrismaIssueRepository` (`packages/domain/issues`'s first real infrastructure code):
+  create/read/`transition` only — `transition` validates against the pure machine first (a
+  rejected move never touches the database), then writes the new `state` and the `issue_event`
+  recording its cause in one transaction. `issue-repository.e2e.test.ts`, 7/7, including 001
+  T011's FK (an unpublished `ruleset_version` is rejected) and `NotFoundError` rather than leaking
+  cross-tenant existence.
+- Left open, flagged in `QUESTIONS.md`: whether a new matching signal should also revive a
+  `stale` issue back to `investigating` (today only `resolved` has a reopen edge) — 001 T018's
+  call, not this task's to make ahead of it.
+- `make ci` green cold-cache: 75 e2e tests, all 16 gates.
+
 ## 0.23.0 — 2026-09-27
 
 **001 T011**: `normalisation_ruleset` as versioned data, the two guarantees the task actually asks
