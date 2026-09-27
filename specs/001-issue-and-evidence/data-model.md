@@ -19,6 +19,7 @@ Every table carries `tenant_id` with an index `(tenant_id, …)`.
 | occurrence_count | bigint | |
 | first_seen_at, last_seen_at | timestamptz | source clock (R-10) |
 | stale_at | timestamptz? | set by the staleness job (R-11) |
+| resolved_at | timestamptz? | set when `state` moves to `resolved`, cleared on reopen — what FR-005's reopen window is measured against (001 T022) |
 | created_at | timestamptz | |
 
 Issue-to-issue links live in `issue_relationship`, not in columns here — see below.

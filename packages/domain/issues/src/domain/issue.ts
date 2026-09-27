@@ -46,5 +46,7 @@ export interface Issue {
   readonly lastSeenAt: Date;
   /** Set by the staleness job (R-11) — surfaced, never auto-resolving. */
   readonly staleAt: Date | null;
+  /** Set when `state` moves to `resolved`, cleared on reopen — FR-005's reopen window (001 T022). */
+  readonly resolvedAt: Date | null;
   readonly createdAt: Date;
 }

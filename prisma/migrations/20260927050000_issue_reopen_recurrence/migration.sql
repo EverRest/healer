@@ -1,0 +1,12 @@
+-- 001 T022 (FR-005, R-02): a matching signal inside the reopen window reopens a resolved issue;
+-- outside it, a new issue is created and linked `recurrence_of` the old one. Both branches (spec.md
+-- acceptance scenarios 2/3: "after the issue was resolved" / "long after resolution") measure the
+-- window from *when the issue was resolved*, not from its last signal — a resolved issue can sit
+-- quiet for weeks before anyone closes it, so `lastSeenAt` is the wrong clock for this decision.
+--
+-- Not recomputed from `issue_event` on the ingestion hot path: finding "the most recent
+-- state_changed event with to_state = 'resolved'" for a fingerprint that had zero *open* matches
+-- would cost a second query, on every signal, for the common case of a resolved issue with no
+-- further activity. `resolved_at` is the same denormalized-status-timestamp shape `stale_at`
+-- already uses, set and cleared alongside the transition that changes what it measures.
+ALTER TABLE "issue"."issue" ADD COLUMN "resolved_at" TIMESTAMPTZ(6);

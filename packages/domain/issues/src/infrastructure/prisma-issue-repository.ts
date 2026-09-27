@@ -11,6 +11,9 @@ import {
   type IssueEventCause,
 } from '../domain/state-machine.js';
 
+/** The one rule name `create`'s `recurrenceOf` path ever writes (001 T022) — see its call site. */
+const RECURRENCE_RULE = 'reopen_window_exceeded';
+
 function toDomain(row: IssueRow): Issue {
   return {
     id: row.id,
@@ -26,6 +29,7 @@ function toDomain(row: IssueRow): Issue {
     firstSeenAt: row.firstSeenAt,
     lastSeenAt: row.lastSeenAt,
     staleAt: row.staleAt,
+    resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
   };
 }
@@ -66,6 +70,38 @@ export class PrismaIssueRepository implements IssueRepository {
           observedAt: issue.firstSeenAt,
         },
       });
+      if (issue.recurrenceOf !== undefined) {
+        // Same transaction as the issue row (001 T022, FR-005, FR-020): a recurrence with no
+        // relationship row is exactly the "prose guarantee, no mechanism" shape this repository
+        // exists to make impossible. `RECURRENCE_RULE` is this path's only rule — the sole
+        // authority for how a `recurrence_of` link created here explains itself.
+        await tx.issueRelationship.create({
+          data: {
+            id: randomUUID(),
+            tenantId: issue.tenantId,
+            issueId: issue.id,
+            otherIssueId: issue.recurrenceOf,
+            kind: 'recurrence_of',
+            rule: RECURRENCE_RULE,
+          },
+        });
+        await tx.issueEvent.create({
+          data: {
+            id: randomUUID(),
+            tenantId: issue.tenantId,
+            issueId: issue.id,
+            type: 'related',
+            cause: 'ingestion',
+            actorRef: 'ingestion',
+            payload: {
+              kind: 'recurrence_of',
+              otherIssueId: issue.recurrenceOf,
+              rule: RECURRENCE_RULE,
+            } as Prisma.InputJsonValue,
+            observedAt: issue.firstSeenAt,
+          },
+        });
+      }
       // Same transaction as the row it describes (001 T013, 012 FR-031) — a rolled-back create
       // is never observed downstream, and a committed one is never lost.
       await enqueue(new PrismaOutboxTransaction(tx), issueDetectedEvent(created));
@@ -94,6 +130,20 @@ export class PrismaIssueRepository implements IssueRepository {
         fingerprint: where.fingerprint,
         state: { notIn: ['resolved', 'merged', 'removed'] },
       },
+    });
+    return row === null ? null : toDomain(row);
+  }
+
+  async findMostRecentlyResolvedByFingerprint(
+    where: TenantScoped<{ readonly fingerprint: string }>,
+  ): Promise<Issue | null> {
+    // `state = 'resolved'` is a subset of T002's `where state not in ('merged', 'removed')`
+    // partial index, so this query still uses it — no second index needed. Ordered by
+    // `resolvedAt` descending: a recurrence chain can leave more than one resolved issue sharing
+    // this fingerprint, and only the most recent resolution is the one FR-005's window measures.
+    const row = await this.prisma.issue.findFirst({
+      where: { tenantId: where.tenantId, fingerprint: where.fingerprint, state: 'resolved' },
+      orderBy: { resolvedAt: 'desc' },
     });
     return row === null ? null : toDomain(row);
   }
@@ -166,6 +216,12 @@ export class PrismaIssueRepository implements IssueRepository {
           const { event } = transitionIssue(toDomain(current), to, cause, actorRef);
           const now = new Date();
 
+          // `resolved_at` (001 T022, FR-005): set the moment this transition lands on `resolved`,
+          // cleared the moment it leaves it (the `resolved -> investigating` reopen edge) —
+          // computed here, not left to a trigger, since both "to" and "from" are already known.
+          const resolvedAt =
+            to === 'resolved' ? now : current.state === 'resolved' ? null : current.resolvedAt;
+
           // A raw `UPDATE ... WHERE ... AND state = <the state just validated>`, not a plain
           // `.update()` by id — the WHERE clause's explicit reference to `state` is what gives
           // Postgres's serializable-conflict detection a concrete overlap to catch between the
@@ -176,7 +232,8 @@ export class PrismaIssueRepository implements IssueRepository {
           // twice" elsewhere in this codebase (docs/patterns.md).
           const affected = await tx.$executeRaw`
             UPDATE "issue"."issue"
-            SET state = ${to}::"issue"."issue_state"
+            SET state = ${to}::"issue"."issue_state",
+                resolved_at = ${resolvedAt}::timestamptz
             WHERE id = ${where.id}::uuid AND tenant_id = ${where.tenantId}::uuid
               AND state = ${current.state}::"issue"."issue_state"
           `;

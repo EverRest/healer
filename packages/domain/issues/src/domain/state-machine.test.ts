@@ -23,6 +23,7 @@ function issue(state: Issue['state']): Issue {
     firstSeenAt: new Date('2026-01-01T00:00:00Z'),
     lastSeenAt: new Date('2026-01-01T00:00:00Z'),
     staleAt: null,
+    resolvedAt: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
   };
 }

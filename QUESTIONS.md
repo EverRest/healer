@@ -329,3 +329,54 @@ of this (re-confirmed via `git stash`: fails identically on the pre-T019 tree).
   (`ingest.e2e.test.ts` grew from 9 to 13; new `ingestion-delivery-repository.e2e.test.ts`, 6/6),
   all `make ci` gates pass. The one remaining e2e failure is the same pre-existing, already
   documented `issue-repository.e2e.test.ts` flake — unrelated.
+
+## 001 T022 — reopen and recurrence: judgment calls
+
+- **Reopen window = 14 days, a placeholder, not a measured value.** `docs/stage-0.md` S0-7 names
+  "reopen window" explicitly as one of the numbers this spec deliberately left unset pending S0-1
+  incident-cadence data. 14 days is a common default for alerting/monitoring tools, documented as
+  a placeholder in `ingest-signal.ts` next to the constant, same status as `MAX_FINGERPRINT_FRAMES`
+  (T016) and the excerpt-length limit — belongs behind per-tenant configuration once that exists
+  (R-02: "the window is per-tenant configuration"), not hardcoded, but there is no tenant-config
+  store yet to put it behind.
+- **`resolved_at` is a new denormalized column on `issue`, not derived from `issue_event`.** The
+  spec's acceptance scenarios measure the window from *when the issue was resolved*
+  ("after the issue was resolved" / "long after resolution"), not from `last_seen_at` — a resolved
+  issue can sit quiet for weeks before anyone closes it. That timestamp is technically recoverable
+  from `issue_event` (the most recent `state_changed` row with `to_state = 'resolved'`), but
+  recomputing it via a second query on every signal that misses `findOpenByFingerprint` costs a
+  join per ingestion for what is otherwise the common case. `resolved_at` is the same
+  denormalized-status-timestamp shape `stale_at` already uses on this same table — set by
+  `transition()` the moment `state` becomes `resolved`, cleared the moment it leaves. New migration
+  `20260927050000_issue_reopen_recurrence` (reversible, `db-check`/migration e2e both pass).
+- **The window compares against the signal's own `observedAt`, and a negative difference routes
+  to recurrence, not reopen.** R-10's source-clock principle says ordering decisions use when the
+  failure actually happened, not when it arrived — a delayed delivery should still be judged
+  against the real gap. A signal whose `observedAt` predates the issue's `resolvedAt` (severe
+  out-of-order delivery, or a test fixture with a fixed historical timestamp reused across a real
+  wall-clock resolve) is **not** treated as "inside the window" just because the arithmetic
+  difference is negative — that would have made ordinary test fixtures spuriously reopen. This
+  routes such a signal into the recurrence branch instead of reopening the still-relevant issue,
+  a real, unexercised edge case flagged in `ingest-signal.ts`'s own comment rather than hidden.
+- **`create()` grew a `recurrenceOf` field**, writing the `recurrence_of` `issue_relationship` row
+  and a `related`-type `issue_event` in the same transaction as the new issue — an issue created
+  as a recurrence with no relationship row would be exactly the "prose guarantee, no mechanism"
+  shape `docs/patterns.md` argues against. The rule name (`reopen_window_exceeded`) is hardcoded
+  inside `create()`, not a caller-supplied parameter: this path only ever creates a recurrence for
+  one reason, so `create()` is the one authority for how it explains itself. `related` is the
+  closest existing `issue_event.type` for "an issue-to-issue relationship was recorded" — the
+  closed list has no dedicated `recurrence` value, and adding one is a bigger, closed-list-owner
+  decision than this task's diff, not something to invent in passing.
+- **Reopen transitions before attaching the signal (`transition` then `recordOccurrence`), not the
+  reverse.** Both are independently safe to call in either order (neither checks the other's
+  effect), so this is a readability choice, not a correctness one — "the issue reopens, then the
+  signal that reopened it is recorded" matches how the acceptance scenario reads. A crash between
+  the two leaves the issue correctly reopened with a slightly stale count, corrected by the next
+  occurrence.
+- Re-ran the full suite after T022: 49 unit files / 262 tests, 15 e2e files / 120 tests (10 new in
+  `issue-repository.e2e.test.ts`: `resolvedAt` set/clear, four `findMostRecentlyResolvedByFingerprint`
+  cases, `create`-with-`recurrenceOf`; `ingest-signal.e2e.test.ts` gained a real reopen test and
+  replaced its old T018 placeholder with a recurrence test that checks the relationship row), all
+  `make ci` gates pass. The one remaining e2e failure is the same pre-existing, already documented
+  `issue-repository.e2e.test.ts` concurrency flake — unrelated (it now also passed cleanly in one
+  of the runs during this task, consistent with its documented intermittency).

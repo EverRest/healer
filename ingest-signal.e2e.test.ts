@@ -187,7 +187,7 @@ describe('ingestSignal (001 T018, FR-002)', () => {
       expect(a.issue.id).not.toBe(b.issue.id);
     }));
 
-  it('a signal matching only a resolved issue creates a new one — T022 owns reopen/recurrence', () =>
+  it('a signal matching a resolved issue, outside the reopen window, creates a new issue linked recurrence_of (001 T022, FR-005, FR-020, R-02, quickstart 6)', () =>
     withCorrelation(newCorrelationId(), async () => {
       const resolvedSignature = signal({ errorSignature: { exceptionType: 'ResolvedCase' } });
       const first = await ingestSignal(rulesetRepo, issueRepo, CONTEXT, resolvedSignature);
@@ -198,6 +198,7 @@ describe('ingestSignal (001 T018, FR-002)', () => {
         'agent',
         'x',
       );
+      const beforeResolve = new Date();
       await issueRepo.transition(
         scope(CONTEXT, { id: first.issue.id }),
         'resolved',
@@ -205,14 +206,72 @@ describe('ingestSignal (001 T018, FR-002)', () => {
         'pavlo',
       );
 
-      const second = await ingestSignal(rulesetRepo, issueRepo, CONTEXT, resolvedSignature);
+      // `resolvedAt` is set to real wall-clock "now" by `transition` — 15 days *after* that is
+      // unambiguously outside the 14-day placeholder window, regardless of when this test runs.
+      const wellOutsideWindow = new Date(beforeResolve.getTime() + 15 * 24 * 60 * 60 * 1000);
+      const second = await ingestSignal(
+        rulesetRepo,
+        issueRepo,
+        CONTEXT,
+        signal({
+          errorSignature: { exceptionType: 'ResolvedCase' },
+          observedAt: wellOutsideWindow,
+        }),
+      );
       expect(second.created).toBe(true);
       expect(second.issue.id).not.toBe(first.issue.id);
+      expect(second.issue.state).toBe('detected');
 
       const fingerprints = await query(
         pg,
         `select count(*) from "issue"."issue" where fingerprint = '${first.issue.fingerprint}'`,
       );
       expect(fingerprints).toBe('2');
+
+      const relationship = await query(
+        pg,
+        `select kind, rule, removed_at from "issue"."issue_relationship"
+         where issue_id = '${second.issue.id}' and other_issue_id = '${first.issue.id}'`,
+      );
+      expect(relationship).toBe('recurrence_of|reopen_window_exceeded|');
+    }));
+
+  it('a signal matching a resolved issue, inside the reopen window, reopens it instead of creating a recurrence (001 T022, FR-005, R-02, quickstart 5)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const resolvedSignature = signal({ errorSignature: { exceptionType: 'ReopenCase' } });
+      const first = await ingestSignal(rulesetRepo, issueRepo, CONTEXT, resolvedSignature);
+      await issueRepo.transition(
+        scope(CONTEXT, { id: first.issue.id }),
+        'investigating',
+        'agent',
+        'x',
+      );
+      const beforeResolve = new Date();
+      await issueRepo.transition(
+        scope(CONTEXT, { id: first.issue.id }),
+        'resolved',
+        'human',
+        'pavlo',
+      );
+
+      const wellInsideWindow = new Date(beforeResolve.getTime() + 60_000);
+      const second = await ingestSignal(
+        rulesetRepo,
+        issueRepo,
+        CONTEXT,
+        signal({ errorSignature: { exceptionType: 'ReopenCase' }, observedAt: wellInsideWindow }),
+      );
+
+      expect(second.created).toBe(false);
+      expect(second.issue.id).toBe(first.issue.id);
+      expect(second.issue.state).toBe('investigating');
+      expect(second.issue.resolvedAt).toBeNull();
+      expect(second.issue.occurrenceCount).toBe(2n);
+
+      const fingerprints = await query(
+        pg,
+        `select count(*) from "issue"."issue" where fingerprint = '${first.issue.fingerprint}'`,
+      );
+      expect(fingerprints).toBe('1');
     }));
 });

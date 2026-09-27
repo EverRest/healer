@@ -95,6 +95,34 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.33.0 — 2026-09-27
+
+**001 T022**: reopen and recurrence — a matching signal inside the reopen window reopens a
+resolved issue; outside it, a new issue is created and linked `recurrence_of` the old one.
+
+- `ingestSignal` extended: when nothing *open* matches the fingerprint, a new
+  `findMostRecentlyResolvedByFingerprint` looks for the most recently resolved issue sharing it
+  (ordered by `resolvedAt` — a recurrence chain can leave more than one resolved issue with the
+  same fingerprint). Inside the reopen window → `transition` to `investigating` then
+  `recordOccurrence`; outside it (or nothing was ever resolved) → `create`, now carrying an
+  optional `recurrenceOf`, which writes the `recurrence_of` `issue_relationship` row and a
+  `related`-type `issue_event` in the same transaction as the issue.
+- New migration `20260927050000_issue_reopen_recurrence` adds `issue.resolved_at` — set the moment
+  `state` becomes `resolved`, cleared on reopen. The acceptance scenarios measure the window from
+  *when the issue was resolved*, not from its last signal, and that timestamp isn't cheaply
+  derivable from `issue_event` on the ingestion hot path; same denormalized-status-timestamp shape
+  `stale_at` already uses.
+- Reopen window is 14 days — `docs/stage-0.md` S0-7 names this exact value as deliberately left
+  unset pending real incident-cadence data; documented as a placeholder next to the constant.
+- The window compares against the signal's own `observedAt` (R-10, source clock, not receipt
+  time); a negative difference (the signal predates the resolution) routes to recurrence rather
+  than reopen — a real, documented edge case.
+- Ten new `issue-repository.e2e.test.ts` cases (24/24), two new `ingest-signal.e2e.test.ts` cases
+  replacing its T018-era placeholder (6/6): `resolvedAt` set/cleared correctly, the new finder's
+  four scenarios, `create`-with-`recurrenceOf` writing both rows atomically, a real reopen and a
+  real recurrence proven end to end.
+- `make ci`: 49 unit files / 262 tests, 15 e2e files / 120 tests, all gates pass.
+
 ## 0.32.0 — 2026-09-27
 
 **001 T020/T021**: `X-Delivery-Id` idempotency — the same batch posted twice is a no-op.

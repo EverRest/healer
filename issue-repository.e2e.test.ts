@@ -240,6 +240,114 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       expect(found).toBeNull();
     }));
 
+  it('transition sets resolvedAt on resolving and clears it on reopen (001 T022, FR-005)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+
+      const beforeResolve = new Date();
+      const resolved = await repo.transition(
+        scope(CONTEXT, { id: input.id }),
+        'resolved',
+        'human',
+        'pavlo',
+      );
+      expect(resolved.resolvedAt).not.toBeNull();
+      expect(resolved.resolvedAt!.getTime()).toBeGreaterThanOrEqual(beforeResolve.getTime());
+
+      const reopened = await repo.transition(
+        scope(CONTEXT, { id: input.id }),
+        'investigating',
+        'ingestion',
+        'ingestion',
+      );
+      expect(reopened.resolvedAt).toBeNull();
+    }));
+
+  it('findMostRecentlyResolvedByFingerprint finds a resolved issue by its fingerprint (001 T022, FR-005)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'resolved', 'human', 'pavlo');
+
+      const found = await repo.findMostRecentlyResolvedByFingerprint(
+        scope(CONTEXT, { fingerprint: input.fingerprint }),
+      );
+      expect(found).toMatchObject({ id: input.id, state: 'resolved' });
+    }));
+
+  it('findMostRecentlyResolvedByFingerprint returns null when nothing sharing the fingerprint is resolved', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+
+      const found = await repo.findMostRecentlyResolvedByFingerprint(
+        scope(CONTEXT, { fingerprint: input.fingerprint }),
+      );
+      expect(found).toBeNull();
+    }));
+
+  it('findMostRecentlyResolvedByFingerprint never returns another tenant’s issue', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'resolved', 'human', 'pavlo');
+
+      const found = await repo.findMostRecentlyResolvedByFingerprint(
+        scope(OTHER_CONTEXT, { fingerprint: input.fingerprint }),
+      );
+      expect(found).toBeNull();
+    }));
+
+  it('findMostRecentlyResolvedByFingerprint picks the most recently resolved issue when a recurrence chain left more than one', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const fingerprint = `fp-${randomUUID()}`;
+      const older = newIssue({ fingerprint });
+      await repo.create(scope(CONTEXT, older));
+      await repo.transition(scope(CONTEXT, { id: older.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: older.id }), 'resolved', 'human', 'pavlo');
+
+      const newer = newIssue({ fingerprint, recurrenceOf: older.id });
+      await repo.create(scope(CONTEXT, newer));
+      await repo.transition(scope(CONTEXT, { id: newer.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: newer.id }), 'resolved', 'human', 'pavlo');
+
+      const found = await repo.findMostRecentlyResolvedByFingerprint(
+        scope(CONTEXT, { fingerprint }),
+      );
+      expect(found?.id).toBe(newer.id);
+    }));
+
+  it('create with recurrenceOf writes the recurrence_of relationship and its issue_event in the same transaction as the issue (001 T022, FR-005, FR-020)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const original = newIssue();
+      await repo.create(scope(CONTEXT, original));
+
+      const recurrence = newIssue({
+        fingerprint: original.fingerprint,
+        recurrenceOf: original.id,
+      });
+      const created = await repo.create(scope(CONTEXT, recurrence));
+      expect(created.id).toBe(recurrence.id);
+
+      const relationship = await query(
+        pg,
+        `select kind, rule, removed_at from "issue"."issue_relationship"
+         where issue_id = '${recurrence.id}' and other_issue_id = '${original.id}'`,
+      );
+      expect(relationship).toBe('recurrence_of|reopen_window_exceeded|');
+
+      const event = await query(
+        pg,
+        `select type from "issue"."issue_event"
+         where issue_id = '${recurrence.id}' and type = 'related'`,
+      );
+      expect(event).toBe('related');
+    }));
+
   it('create records the first occurrence as its own signal_received event (review finding)', () =>
     withCorrelation(newCorrelationId(), async () => {
       const input = newIssue();

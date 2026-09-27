@@ -17,6 +17,14 @@ export interface NewIssue {
   readonly rulesetVersion: number;
   readonly firstSeenAt: Date;
   readonly lastSeenAt: Date;
+  /**
+   * Set when this issue is a recurrence (001 T022, FR-005, FR-020): the id of the resolved issue
+   * a matching signal arrived for outside the reopen window. `create` writes the `recurrence_of`
+   * `issue_relationship` row in the same transaction as the issue itself — an issue created as a
+   * recurrence with no relationship row is exactly the "prose guarantee, no mechanism" shape this
+   * repository exists to make impossible.
+   */
+  readonly recurrenceOf?: string;
 }
 
 /**
@@ -36,6 +44,16 @@ export interface IssueRepository {
    * this method's to make by quietly attaching to one.
    */
   findOpenByFingerprint(
+    where: TenantScoped<{ readonly fingerprint: string }>,
+  ): Promise<Issue | null>;
+  /**
+   * The most recently resolved issue sharing this fingerprint, if any (001 T022, FR-005) — used
+   * to decide whether a new matching signal reopens it (inside the configured window) or starts
+   * a recurrence (outside it). A recurrence chain can leave more than one resolved issue with the
+   * same fingerprint over time; ordered so only the most recent resolution is ever measured
+   * against.
+   */
+  findMostRecentlyResolvedByFingerprint(
     where: TenantScoped<{ readonly fingerprint: string }>,
   ): Promise<Issue | null>;
   transition(
