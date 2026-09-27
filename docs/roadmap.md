@@ -100,15 +100,25 @@ missing `test_author` despite `boundary-contract`'s schema already expecting it,
 error in `test/containers.ts` that nothing had ever compiled before. `make ci`: 164 unit tests
 (99.0% coverage) + 33 e2e tests, ~27s cold-cache.
 
-Next: **001 phase 2** (the foundational guarantees every user story assumes — producer
-attribution, evidence-requires-a-link, the persisted issue state machine), then phase 3
-(deduplication and ingestion — genuine product logic with real design decisions, not
-infrastructure). This is also what retroactively unblocks most of what 012 deferred (T042, T045,
-T048, T080, and the persistence half of T059/T061/T070) once a real repository/controller pattern
-exists to follow. 012 phase 13 (agent-driven development) still waits on user sign-off for its
-GitHub-account-level actions (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087
-need no live GitHub interaction and can start on request. Stage 0 S0-1 still blocks realistic
-sizing of v1 and does not block this work.
+**001 phase 2 (Foundational) landed 2026-09-27** (VERSION 0.26.0): T005–T014, all 14 of phase 1–2.
+Producer attribution, evidence-requires-a-link, the persisted issue state machine (`state-machine.ts`,
+same technique as 012's `machine.ts` `step()` — a closed graph is the authority, not the caller —
+deliberately not the same `WorkflowState` union, since `issue.state` has no job-hanging concern to
+guard against), the `normalisation_ruleset` FK and append-only guarantee, outbox publishers for the
+four contract events with a real producing operation today (`IssueDetected`/`IssueStateChanged`/
+`EvidenceRecorded`/`EvidenceDetached` — 012 T012 had built only the pure outbox logic, no Prisma
+table, until now), and a per-method compile-time proof that tenant scoping cannot be omitted.
+`packages/events` gained its first real infrastructure code. `make ci` green: 76 e2e tests, all 16
+gates.
+
+Next: **001 phase 3** (US1, deduplication and ingestion — genuine product logic with real design
+decisions: fingerprint normalisation, `POST /ingest/signals`, idempotent delivery). This is also
+what retroactively unblocks most of what 012 deferred (T042, T045, T048, T080, and the persistence
+half of T059/T061/T070) once a real repository/controller pattern exists to follow. 012 phase 13
+(agent-driven development) still waits on user sign-off for its GitHub-account-level actions
+(installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub
+interaction and can start on request. Stage 0 S0-1 still blocks realistic sizing of v1 and does not
+block this work.
 
 | Spec | Covers | clarify | plan | tasks | analyze |
 |------|--------|---------|------|-------|---------|
