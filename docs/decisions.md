@@ -135,6 +135,24 @@ becomes one.
 | C-41 | **Healer's own telemetry goes to Grafana Cloud through one OpenTelemetry Collector** — logs, traces and metrics. Alerts are on state, not on log text: a workflow past its budget, dead-letter growth, `timeout` transitions, cost per issue, runner heartbeat gaps. Telemetry leaving our processes carries a **keyed hash of `tenantId`**, not the identifier; resolving it to a tenant goes through the audited operator path (012 FR-037) | Nothing to operate, and the stack is the one Healer reads at customers, so the team knows it. The hash is what keeps FR-037 true with a vendor whose query access we cannot audit per tenant: an operator reading Grafana sees which investigation, never whose, until they ask the application — which records the ask. Rejected: Sentry plus host logs (two places, and a second redaction path to keep correct). **Self-hosted Grafana is the planned next step, not a rejection**: the move is triggered by the first enterprise security review that asks for telemetry to stay in our infrastructure, or by the bill exceeding what the stack would cost to run — and because code exports only through the collector, the move is a collector configuration change |
 | C-42 | **A GitHub VCS adapter ships in v1** as the seventh adapter, so Healer's own repository is a tenant of Healer | The owner's choice: Healer becomes the first source of real incidents for its own benchmark, and US10's agents and 013's suite run against the same pipeline customers get. Cost recorded: one more adapter — pull requests, CI results, bot identity — added to S0-4 after the design partner's six, never ahead of them |
 
+## 012 gate conventions, resolved (2026-09-27)
+
+Tactical implementation-convention questions the agent flagged in `QUESTIONS.md` rather than
+inventing silently, resolved in a decision session and recorded here since each is binding for
+work that follows the same gate.
+
+| ID | Decision | Why |
+|----|----------|-----|
+| C-43 | `gate-architecture-agnostic` (T032) also bans our **own** stack vocabulary (`postgres`, `prisma`, `pgvector`, `bullmq`, `redis`) in `packages/domain/**`/`packages/agents/**`, as a second independent check alongside the existing customer-architecture-vocabulary list | Deliberately redundant with the T035 import-boundary lint: that one is structural (module resolution), this one is textual and catches vocabulary even with no import involved |
+| C-44 | `gate-isolation` (T029) keeps the `assertTenantIsolated(app, method, path)` calling convention (`test/tenant-isolation.ts`) — a real function call the gate can find precisely, not prose it has to guess at | 001 must call it this way once its endpoints land; changing the shape after is a bigger diff than confirming it now |
+| C-45 | T035 (cross-module infrastructure imports) stays on the **structural** guarantee (`moduleResolution: NodeNext` + per-package `exports`, enforced at typecheck since T002). No ADR, no `eslint-plugin-boundaries`, for now | A lint-time version would be a new dependency and a new pattern — ADR territory per this repo's own rule — for a guarantee the type system already gives for free. Revisit only if a real gap in the structural guarantee shows up |
+| C-46 | `gate-evidence` (T031) keeps the `/// @conclusion` doc-comment tag on `schema.prisma` models as how a "conclusion type" is marked | 001 tags whichever model represents a diagnosis/conclusion (a `Diagnosis` model, per 006) when it lands; the gate already requires a non-nullable `evidenceId` on any tagged model |
+| C-47 | Phase 13 (US10) T084–T087 (identity resolver, `gate-agent-scope`, `gate-red-first`) **start now**, written and tested locally against fixture repositories | No live GitHub interaction needed for these three. T088–T092 (GitHub App installation, branch-protection ruleset, a `CODEOWNERS` naming real humans) still wait on the repository owner: account-level, security-relevant actions on the real repository, not something taken without sign-off even under "don't stop to ask" |
+
+Left deferred, not decided (see `QUESTIONS.md`): T037's ADR-in-the-same-change-set diffing (waits
+for Phase 13's base-revision diff infra), T066's secret manager choice (no ADR yet), and T067/T068's
+`packages/llm` provider adapter (waits for a real build, not a throwaway minimal one).
+
 ## Deliberately unset
 
 `false-fix rate`, `30-day revert rate`, `per-incident cost ceiling`, escalation attempt cap —
