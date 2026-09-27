@@ -502,6 +502,12 @@ See [decisions.md](docs/decisions.md) C-59 (`knowledge_drift` may still be human
 whoever lands 004), C-61 (`GET /issues` does N+1 relationship fetches, accepted until profiled),
 C-62 (`assertTenantIsolatedList`, a third isolation helper for list endpoints).
 
+## 001 T041 — resolved
+
+See [decisions.md](docs/decisions.md) C-63: closed with no new test file — `gate-isolation`
+already is the continuously-enforced matrix for every endpoint that exists; timeline/audit don't
+exist yet. **Phase 5 (US3) is now complete.**
+
 ## Deployment, release automation and smoke/regression testing of our own environment — not recorded anywhere until now
 
 Not decided, genuinely open — asked directly ("чи зафіксовано десь"), checked, and it was not.

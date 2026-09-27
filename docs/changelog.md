@@ -95,6 +95,16 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.41.0 — 2026-09-28
+
+**001 T041**: the isolation matrix — closed with no new code. `gate-isolation` (`make ci`) already
+continuously enforces exactly this for every endpoint that exists (`POST /ingest/signals`,
+`GET /issues`, `GET /issues/{id}`, `GET /issues/{id}/evidence`) — a hand-written matrix test would
+only duplicate it and could drift. Timeline and audit endpoints don't exist yet (Phases 6-7,
+0% built); the same gate will require their isolation tests the moment those tasks land.
+
+**001 Phase 5 (US3, one pipeline for every source) is now complete — T037 through T041.**
+
 ## 0.40.0 — 2026-09-28
 
 **001 T037–T040**: the `knowledge_drift` termination guard, deterministic issue correlation, and
