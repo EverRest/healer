@@ -9,9 +9,10 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
-  enqueueSignalBatch,
+  ingestSignalBatch,
   SignalQueueUnavailableError,
   type ErrorSignature,
+  type IngestionDeliveryRepository,
   type Signal,
   type SignalQueue,
 } from '@healer/domain-issues';
@@ -52,18 +53,23 @@ function toSignal(dto: IngestSignalsRequest['signals'][number]): Signal {
 }
 
 /**
- * The DI token for `SignalQueue` (see `HEALTH_META` for why a token, not a bare type).
+ * DI tokens (see `HEALTH_META` for why a token, not a bare type).
  */
 export const SIGNAL_QUEUE = Symbol('SIGNAL_QUEUE');
+export const INGESTION_DELIVERY_REPOSITORY = Symbol('INGESTION_DELIVERY_REPOSITORY');
 
 /**
- * `POST /ingest/signals` (001 T019, FR-019): validate and enqueue, never process inline. A slow
- * or failing signal must never block a provider — this controller never calls `ingestSignal`
- * itself and never awaits anything past the enqueue.
+ * `POST /ingest/signals` (001 T019/T020/T021, FR-004, FR-019): validate, deduplicate by
+ * `(tenant, provider, X-Delivery-Id)`, and enqueue — never process inline. A slow or failing
+ * signal must never block a provider — this controller never calls `ingestSignal` itself and
+ * never awaits anything past the enqueue.
  */
 @Controller()
 export class IngestController {
-  constructor(@Inject(SIGNAL_QUEUE) private readonly queue: SignalQueue) {}
+  constructor(
+    @Inject(SIGNAL_QUEUE) private readonly queue: SignalQueue,
+    @Inject(INGESTION_DELIVERY_REPOSITORY) private readonly deliveries: IngestionDeliveryRepository,
+  ) {}
 
   @Post('ingest/signals')
   @HttpCode(202)
@@ -74,6 +80,12 @@ export class IngestController {
     // pretending to parse a bearer token would be; `forTrustedInternalUse` below makes the gap
     // greppable. Must be replaced before this endpoint is reachable from outside a trusted network.
     @Headers('x-tenant-id') tenantIdHeader?: string,
+    // Required by the contract (`contracts/openapi.yaml`); a repeat is acknowledged and dropped.
+    @Headers('x-delivery-id') deliveryIdHeader?: string,
+    // TODO(001 T020, security): same stub-auth gap as X-Tenant-Id above — `ingestBearer` would
+    // carry provider identity for real; until then a bare header stands in for it, kept
+    // deliberately as honest and greppable as the tenant stub next to it.
+    @Headers('x-provider-id') providerIdHeader?: string,
   ): Promise<{ accepted: number; duplicate: boolean }> {
     // One correlation id per request (review finding), not one per signal — every job a batch
     // produces (`BullmqSignalQueue` reads `currentCorrelationId()`) traces back to the delivery
@@ -94,11 +106,23 @@ export class IngestController {
         throw error;
       }
 
+      if (!deliveryIdHeader) {
+        throw new BadRequestException('X-Delivery-Id header is required');
+      }
+      if (!providerIdHeader) {
+        throw new BadRequestException('X-Provider-Id header is required');
+      }
+
       const signals: Signal[] = parsed.data.signals.map(toSignal);
 
-      let accepted: number;
       try {
-        accepted = await enqueueSignalBatch(this.queue, context, signals);
+        return await ingestSignalBatch(
+          this.queue,
+          this.deliveries,
+          context,
+          { provider: providerIdHeader, deliveryId: deliveryIdHeader },
+          signals,
+        );
       } catch (error) {
         // FR-019 "never blocks the provider": a queue that cannot be reached within budget
         // must fail loudly and fast, not hang and not surface as an opaque 500 — 503 tells the
@@ -108,9 +132,6 @@ export class IngestController {
         }
         throw error;
       }
-      // X-Delivery-Id idempotency (001 T020/T021) is not implemented here — every delivery is
-      // treated as new.
-      return { accepted, duplicate: false };
     });
   }
 }

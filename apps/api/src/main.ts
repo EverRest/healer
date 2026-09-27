@@ -3,9 +3,19 @@ import { Module, type Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { createLogger, loadConfig } from '@healer/shared';
-import { BullmqSignalQueue, type SignalQueue } from '@healer/domain-issues';
+import {
+  BullmqSignalQueue,
+  PrismaIngestionDeliveryRepository,
+  type IngestionDeliveryRepository,
+  type SignalQueue,
+} from '@healer/domain-issues';
+import { createPrismaClient } from './infrastructure/prisma.js';
 import { HEALTH_META, HealthController, type HealthMeta } from './health/health.controller.js';
-import { IngestController, SIGNAL_QUEUE } from './ingest/ingest.controller.js';
+import {
+  INGESTION_DELIVERY_REPOSITORY,
+  IngestController,
+  SIGNAL_QUEUE,
+} from './ingest/ingest.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -22,19 +32,24 @@ export function configureIngestBodyLimit(app: NestExpressApplication): void {
 }
 
 /**
- * Built from a plain `HealthMeta` and an explicit `SignalQueue`, not from `loadConfig()`
- * directly — so a test or a script (contract generation, an e2e test booting the real HTTP
- * server) can build the module without needing `DATABASE_URL`/`REDIS_URL` or any other
- * environment variable validated only by `bootstrap()`. `signalQueue` is always required and
+ * Built from a plain `HealthMeta` and explicit dependencies, not from `loadConfig()` directly —
+ * so a test or a script (contract generation, an e2e test booting the real HTTP server) can
+ * build the module without needing `DATABASE_URL`/`REDIS_URL` or any other environment variable
+ * validated only by `bootstrap()`. Both `signalQueue` and `deliveries` are always required and
  * `IngestController` is always registered: a module shape that varies by caller is the same
  * contract drift that keeping one `createApiModule` was meant to prevent.
  */
-export function createApiModule(meta: HealthMeta, signalQueue: SignalQueue): Type<unknown> {
+export function createApiModule(
+  meta: HealthMeta,
+  signalQueue: SignalQueue,
+  deliveries: IngestionDeliveryRepository,
+): Type<unknown> {
   @Module({
     controllers: [HealthController, IngestController],
     providers: [
       { provide: HEALTH_META, useValue: meta },
       { provide: SIGNAL_QUEUE, useValue: signalQueue },
+      { provide: INGESTION_DELIVERY_REPOSITORY, useValue: deliveries },
     ],
   })
   class ApiModule {}
@@ -46,6 +61,7 @@ export async function bootstrap(): Promise<void> {
   // `undefined` three layers in (FR-043).
   const config = loadConfig();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: config.SERVICE_NAME });
+  const prisma = createPrismaClient(config.DATABASE_URL);
   const ApiModule = createApiModule(
     {
       service: config.SERVICE_NAME,
@@ -54,6 +70,7 @@ export async function bootstrap(): Promise<void> {
       runnerProtocolVersion: config.RUNNER_PROTOCOL_VERSION,
     },
     new BullmqSignalQueue({ url: config.REDIS_URL }),
+    new PrismaIngestionDeliveryRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureIngestBodyLimit(app);

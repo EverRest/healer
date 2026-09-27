@@ -294,3 +294,38 @@ Re-ran the full suite after all five fixes: 48 unit files / 257 tests, 14 e2e fi
 (9 in `ingest.e2e.test.ts`, up from 5), all `make ci` gates pass. The one remaining e2e failure is
 the pre-existing, already-documented `issue-repository.e2e.test.ts` flake above — unrelated to any
 of this (re-confirmed via `git stash`: fails identically on the pre-T019 tree).
+
+## 001 T020/T021 — `X-Delivery-Id` idempotency: judgment calls
+
+- **`X-Provider-Id` is a second stub header, same pattern as `X-Tenant-Id`.** The idempotency key
+  is `(tenant, provider, deliveryId)` (data-model.md), but nothing in the contract or the
+  `Signal` schema names a provider — `ingestBearer` is described only as "provider ingestion
+  credential, tenant-scoped", implying a real implementation would derive it from that credential.
+  Since T019 already established the pattern of a bare, TODO-flagged header standing in for a
+  missing auth claim, extending it to a second header is the consistent, mechanical choice here —
+  not a new fork, so not escalated to `AskUserQuestion`.
+- **Enqueue happens before recording the delivery, not after.** The alternative (claim the
+  delivery id first, then enqueue) would be race-safer for the rare concurrent-duplicate case, but
+  its failure mode is worse: a process death between the claim and the enqueue leaves a delivery
+  marked `accepted` with nothing ever actually enqueued — a silently lost batch, which FR-019
+  ("must not lose events") rules out outright. Enqueue-then-record's own failure mode is milder: a
+  genuinely concurrent identical delivery can pass the duplicate check twice and enqueue twice,
+  with only one delivery row winning the unique-constraint race — a narrow, accepted race, the
+  same precedent as the fingerprint's own documented first-arrival race. The common real-world
+  case (a provider's at-least-once redelivery after a timeout) is sequential, not concurrent, so
+  this ordering handles the case T020 actually describes correctly and loses no events.
+- **`DuplicateDeliveryError` lives in the domain module, not the infrastructure one.** First draft
+  defined it in `PrismaIngestionDeliveryRepository`'s file and had the application-layer
+  `ingestSignalBatch` import it from there — caught before it typechecked as a layering violation
+  (`backend-nestjs.md`: "domain and application depend on repository interfaces", not concrete
+  infrastructure classes). Moved the error to `domain/ingestion-delivery.ts`, alongside the
+  `IngestionDeliveryRepository` port it belongs to; the Prisma implementation now translates its
+  own P2002 into that shared, port-level type.
+- **`apps/api` needed its first `infrastructure/` folder.** Constructing a `PrismaClient` in
+  `main.ts` directly tripped the repo-wide lint rule confining `@healer/prisma-client` to
+  `infrastructure/**` and `prisma/**` — added `apps/api/src/infrastructure/prisma.ts` with a
+  one-function `createPrismaClient(url)` wrapper so `main.ts` never imports the package directly.
+- Re-ran the full suite after T020/T021: 49 unit files / 262 tests, 15 e2e files / 113 tests
+  (`ingest.e2e.test.ts` grew from 9 to 13; new `ingestion-delivery-repository.e2e.test.ts`, 6/6),
+  all `make ci` gates pass. The one remaining e2e failure is the same pre-existing, already
+  documented `issue-repository.e2e.test.ts` flake — unrelated.

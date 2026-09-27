@@ -1,11 +1,15 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
-import type { SignalQueue } from '@healer/domain-issues';
+import type { IngestionDeliveryRepository, SignalQueue } from '@healer/domain-issues';
 import { createApiModule } from './main.js';
 
-// Route shape only — this queue is never enqueued to, contract generation never sends a request.
+// Route shape only — neither is ever called, contract generation never sends a request.
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
+const noopDeliveries: IngestionDeliveryRepository = {
+  findByDeliveryId: () => Promise.resolve(null),
+  recordDelivery: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -23,6 +27,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
       runnerProtocolVersion: 0,
     },
     noopSignalQueue,
+    noopDeliveries,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   const config = new DocumentBuilder().setTitle('Healer API').setVersion('0.0.0').build();

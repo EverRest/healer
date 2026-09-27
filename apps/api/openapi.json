@@ -26,6 +26,18 @@
             "required": true,
             "in": "header",
             "schema": { "type": "string" }
+          },
+          {
+            "name": "x-delivery-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-provider-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
           }
         ],
         "responses": { "202": { "description": "" } },

@@ -57,20 +57,23 @@ export async function assertTenantScopedEnqueue(
     readonly expectStatus: number;
     bodyFor(marker: string): unknown;
     tenantIdFor(marker: string): Promise<string | undefined>;
+    /** Extra per-marker headers (e.g. an idempotency key derived from the marker itself). */
+    headersFor?(marker: string): Record<string, string>;
   },
 ): Promise<void> {
   const markerA = `isolation-check-a-${randomUUID()}`;
   const markerB = `isolation-check-b-${randomUUID()}`;
   const httpMethod = method.toLowerCase() as 'post' | 'patch' | 'put';
+  const headersFor = config.headersFor ?? (() => ({}));
 
   await request(app.getHttpServer())
     [httpMethod](path)
-    .set(config.tenantHeader, config.tenantA)
+    .set({ [config.tenantHeader]: config.tenantA, ...headersFor(markerA) })
     .send(config.bodyFor(markerA))
     .expect(config.expectStatus);
   await request(app.getHttpServer())
     [httpMethod](path)
-    .set(config.tenantHeader, config.tenantB)
+    .set({ [config.tenantHeader]: config.tenantB, ...headersFor(markerB) })
     .send(config.bodyFor(markerB))
     .expect(config.expectStatus);
 

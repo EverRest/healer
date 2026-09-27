@@ -2,10 +2,14 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
-import type { SignalQueue } from '@healer/domain-issues';
+import type { IngestionDeliveryRepository, SignalQueue } from '@healer/domain-issues';
 import { createApiModule } from './main.js';
 
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
+const noopDeliveries: IngestionDeliveryRepository = {
+  findByDeliveryId: () => Promise.resolve(null),
+  recordDelivery: () => Promise.reject(new Error('not implemented in this test')),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -27,6 +31,7 @@ describe('api boots and serves health/ready over HTTP', () => {
         runnerProtocolVersion: 1,
       },
       noopSignalQueue,
+      noopDeliveries,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     await app.init();

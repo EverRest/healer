@@ -17,6 +17,7 @@
   "dependencies": {
     "@healer/domain-issues": "workspace:*",
     "@healer/events": "workspace:*",
+    "@healer/prisma-client": "workspace:*",
     "@healer/shared": "workspace:*",
     "@healer/workflow": "workspace:*",
     "@nestjs/common": "^12.1.0",

@@ -95,6 +95,33 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.32.0 — 2026-09-27
+
+**001 T020/T021**: `X-Delivery-Id` idempotency — the same batch posted twice is a no-op.
+
+- `packages/domain/issues` gains an `IngestionDeliveryRepository` port (`findByDeliveryId`,
+  `recordDelivery`) and an `ingestSignalBatch` application command composing it with T019's
+  `enqueueSignalBatch`: an existing `(tenant, provider, deliveryId)` short-circuits to
+  `{ accepted: <original count>, duplicate: true }` with nothing enqueued; otherwise the batch
+  enqueues first and the delivery is recorded *after* — deliberately, not incidentally (see
+  QUESTIONS.md: the reverse ordering risks silently losing a batch if the process dies between
+  claiming the delivery and actually enqueueing it, which FR-019 rules out).
+- `PrismaIngestionDeliveryRepository` translates the table's own unique-constraint violation
+  (P2002) into a port-level `DuplicateDeliveryError` — the database is the actual safety net,
+  same precedent as `PrismaNormalisationRulesetRepository.publish`. New
+  `ingestion-delivery-repository.e2e.test.ts` (6/6) proves it against real Postgres: tenant-scoped
+  reads, a genuine repeat throws, and the same delivery id is never a false duplicate across
+  tenants or across providers.
+- `IngestController` gained `X-Delivery-Id` (required by the contract) and a stub `X-Provider-Id`
+  header — the same TODO-flagged pattern as T019's `X-Tenant-Id`, since nothing in the contract
+  names a provider outside the not-yet-real `ingestBearer` credential.
+- `apps/api` gained its first `infrastructure/` folder (`infrastructure/prisma.ts`) so `main.ts`
+  can construct a `PrismaClient` without tripping the repo-wide "Prisma confined to
+  `infrastructure/**`" lint rule.
+- `apps/api/ingest.e2e.test.ts` grew from 9 to 13 tests (duplicate delivery, cross-provider
+  non-duplicate, missing `X-Delivery-Id`/`X-Provider-Id`).
+- `make ci`: 49 unit files / 262 tests, 15 e2e files / 113 tests, all gates pass.
+
 ## 0.31.0 — 2026-09-27
 
 **001 T019**: `POST /ingest/signals` — batch ≤ 1000, always `202`, never blocks the provider.
