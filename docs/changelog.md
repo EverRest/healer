@@ -95,6 +95,31 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.37.0 — 2026-09-27
+
+**001 T026**: load check (SC-006) — the last task of Phase 3 (US1). Found and fixed a real
+correctness bug, which is exactly what this task exists to do.
+
+- `plan.md` never actually names a signal rate or a latency budget, and it was missing from
+  `docs/stage-0.md` S0-7's own tracked list of deliberately-unset numbers (added there now).
+  `apps/api/load.e2e.test.ts` documents `TARGET_SIGNALS_PER_SECOND = 100` /
+  `LATENCY_BUDGET_MS = 5_000` as named placeholders, same status as the reopen window.
+- **The "narrow" check-then-act race T018 flagged was not narrow**: under real load through the
+  full HTTP → BullMQ → worker → Postgres path, a burst of a brand-new fingerprint's first
+  arrivals fragmented into up to 16 separate issues (`QUEUE_CLASSES.ingestion.concurrency`), none
+  of them ever reaching the real total alone. Fixed with a unique partial index
+  (`issue_tenant_id_fingerprint_open_key`, scoped to genuinely open states only, so a resolved
+  issue and its later recurrence still share a fingerprint fine) plus a new
+  `FingerprintAlreadyOpenError` `create` throws on the losing side, which `ingestSignal` catches
+  and retries as an attach to whichever call won.
+- Proven at three levels: `issue-repository.e2e.test.ts` (16 concurrent `create`s → one issue),
+  `ingest-signal.e2e.test.ts` (same race through `ingestSignal`), and the real load test itself
+  (500 signals over the real path, ~90-100/s, one issue, inside the 5s budget, stable across
+  repeated runs). A second load test confirms zero loss when the worker is entirely absent while
+  signals arrive, not just when a job throws.
+- **001 Phase 3 (US1, deduplication and ingestion) is now complete — T015 through T026.**
+- `make ci` green: 131 e2e tests, all 16 gates.
+
 ## 0.36.0 — 2026-09-27
 
 **001 T023/T024/T025**: the last three Phase 3 (US1) tasks besides the load check. T025 was the

@@ -4,7 +4,11 @@ import { Prisma, type Issue as IssueRow, type PrismaClient } from '@healer/prism
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { Issue } from '../domain/issue.js';
 import { issueDetectedEvent, issueStateChangedEvent } from '../domain/events.js';
-import type { IssueRepository, NewIssue } from '../domain/repository.js';
+import {
+  FingerprintAlreadyOpenError,
+  type IssueRepository,
+  type NewIssue,
+} from '../domain/repository.js';
 import {
   ConcurrentModificationError,
   transitionIssue,
@@ -13,6 +17,18 @@ import {
 
 /** The one rule name `create`'s `recurrenceOf` path ever writes (001 T022) — see its call site. */
 const RECURRENCE_RULE = 'reopen_window_exceeded';
+
+/**
+ * `issue_tenant_id_fingerprint_open_key` (migration 20260927060000) isn't declared in
+ * `schema.prisma` — Prisma can't express a partial unique index — so its P2002 reports the raw
+ * database column names in `meta.target` (confirmed empirically: `["tenant_id", "fingerprint"]`,
+ * snake_case, not this repository's own `tenantId`/`fingerprint` field names), not a constraint
+ * name string the way a schema-declared `@@unique` would.
+ */
+function isTenantFingerprintTarget(meta: unknown): boolean {
+  const target = (meta as { target?: unknown } | undefined)?.target;
+  return Array.isArray(target) && target.includes('tenant_id') && target.includes('fingerprint');
+}
 
 function toDomain(row: IssueRow): Issue {
   return {
@@ -38,6 +54,25 @@ export class PrismaIssueRepository implements IssueRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async create(issue: TenantScoped<NewIssue>): Promise<Issue> {
+    try {
+      return await this.createInTransaction(issue);
+    } catch (error) {
+      // 001 T026 review finding: `issue_tenant_id_fingerprint_open_key` (migration
+      // 20260927060000) is the actual safety net for the race this translates — see
+      // `FingerprintAlreadyOpenError`'s own doc comment for why the caller, not this method,
+      // decides what to do about it.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        isTenantFingerprintTarget(error.meta)
+      ) {
+        throw new FingerprintAlreadyOpenError(issue.fingerprint);
+      }
+      throw error;
+    }
+  }
+
+  private async createInTransaction(issue: TenantScoped<NewIssue>): Promise<Issue> {
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.issue.create({
         data: {

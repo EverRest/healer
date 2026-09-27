@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import {
   ConcurrentModificationError,
+  FingerprintAlreadyOpenError,
   InvalidIssueTransitionError,
   PrismaIssueRepository,
   type NewIssue,
@@ -326,6 +327,12 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
     withCorrelation(newCorrelationId(), async () => {
       const original = newIssue();
       await repo.create(scope(CONTEXT, original));
+      // Resolved first (001 T026 review finding): the new unique partial index only allows one
+      // *open* issue per fingerprint, so a recurrence sharing a fingerprint with a still-open
+      // issue is exactly the state that index now correctly refuses — matching the real flow a
+      // recurrence goes through (data-model.md: resolved --outside window--> new issue).
+      await repo.transition(scope(CONTEXT, { id: original.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: original.id }), 'resolved', 'human', 'pavlo');
 
       const recurrence = newIssue({
         fingerprint: original.fingerprint,
@@ -436,4 +443,54 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
         repo.recordOccurrence(scope(OTHER_CONTEXT, { id: input.id }), new Date()),
       ).rejects.toBeInstanceOf(NotFoundError);
     }));
+
+  it('create throws FingerprintAlreadyOpenError for a second open issue sharing a fingerprint (001 T026 review finding)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const fingerprint = `fp-${randomUUID()}`;
+      await repo.create(scope(CONTEXT, newIssue({ fingerprint })));
+
+      await expect(repo.create(scope(CONTEXT, newIssue({ fingerprint })))).rejects.toBeInstanceOf(
+        FingerprintAlreadyOpenError,
+      );
+    }));
+
+  it('create allows a second issue sharing a fingerprint once the first is resolved — the unique index is scoped to open states only', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const fingerprint = `fp-${randomUUID()}`;
+      const first = await repo.create(scope(CONTEXT, newIssue({ fingerprint })));
+      await repo.transition(scope(CONTEXT, { id: first.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: first.id }), 'resolved', 'human', 'pavlo');
+
+      const second = await repo.create(
+        scope(CONTEXT, newIssue({ fingerprint, recurrenceOf: first.id })),
+      );
+      expect(second.id).not.toBe(first.id);
+    }));
+
+  it(
+    'concurrently creating the same brand-new fingerprint sixteen times over produces exactly one issue',
+    () =>
+      withCorrelation(newCorrelationId(), async () => {
+        // The exact shape 001 T026's real load test caught: `QUEUE_CLASSES.ingestion.concurrency`
+        // is 16 — this is that race, reproduced directly against the repository rather than
+        // through the full HTTP → BullMQ → worker path.
+        const fingerprint = `fp-${randomUUID()}`;
+        const attempts = Array.from({ length: 16 }, () =>
+          repo.create(scope(CONTEXT, newIssue({ fingerprint }))).catch((error) => {
+            if (error instanceof FingerprintAlreadyOpenError) return null;
+            throw error;
+          }),
+        );
+        const results = await Promise.all(attempts);
+        const succeeded = results.filter((result) => result !== null);
+        expect(succeeded).toHaveLength(1);
+
+        const rows = await query(
+          pg,
+          `select count(*) from "issue"."issue" where fingerprint = '${fingerprint}'`,
+        );
+        expect(rows).toBe('1');
+      }),
+    15_000,
+  );
 });

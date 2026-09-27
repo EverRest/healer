@@ -308,4 +308,44 @@ describe('ingestSignal (001 T018, FR-002)', () => {
       expect(receivedAt.getTime()).toBeLessThanOrEqual(afterIngest.getTime());
       expect(receivedAt.getTime()).toBeLessThan(observedAt.getTime());
     }));
+
+  it(
+    'sixteen concurrent first-occurrences of a brand-new fingerprint collapse to one issue with occurrenceCount 16 (001 T026 review finding)',
+    () =>
+      withCorrelation(newCorrelationId(), async () => {
+        // The exact race 001 T026's real load test caught, reproduced through `ingestSignal`
+        // itself rather than the repository directly: every one of these sees no open issue, but
+        // only one may ever win `create` — the rest must retry as an attach, not surface a
+        // failure or silently create a sibling issue.
+        const exceptionType = 'ConcurrentFirstArrivalCase';
+        const attempts = Array.from({ length: 16 }, (_unused, i) =>
+          ingestSignal(
+            rulesetRepo,
+            issueRepo,
+            CONTEXT,
+            signal({
+              errorSignature: { exceptionType },
+              observedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+            }),
+          ),
+        );
+        const results = await Promise.all(attempts);
+
+        const createdCount = results.filter((result) => result.created).length;
+        expect(createdCount).toBe(1);
+        const issueIds = new Set(results.map((result) => result.issue.id));
+        expect(issueIds.size).toBe(1);
+
+        const fingerprint = results[0]!.issue.fingerprint;
+        const rows = await query(
+          pg,
+          `select count(*) from "issue"."issue" where fingerprint = '${fingerprint}'`,
+        );
+        expect(rows).toBe('1');
+
+        const final = await issueRepo.findById(scope(CONTEXT, { id: [...issueIds][0]! }));
+        expect(final?.occurrenceCount).toBe(16n);
+      }),
+    15_000,
+  );
 });

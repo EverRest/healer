@@ -28,6 +28,21 @@ export interface NewIssue {
 }
 
 /**
+ * Two concurrent *first* occurrences of a brand-new fingerprint both saw `findOpenByFingerprint`
+ * return null and both called `create` (001 T026, reproduced under real load — up to
+ * `QUEUE_CLASSES.ingestion.concurrency` issues for one fingerprint, not the "narrow" race it was
+ * once assumed to be). `create` throws this instead of committing a second open issue for the
+ * same fingerprint; the caller (`ingestSignal`) is the one place that knows the right response is
+ * "someone else already created it — attach to theirs", not "this failed".
+ */
+export class FingerprintAlreadyOpenError extends Error {
+  constructor(readonly fingerprint: string) {
+    super(`an open issue for fingerprint ${fingerprint} already exists`);
+    this.name = 'FingerprintAlreadyOpenError';
+  }
+}
+
+/**
  * Create, read, transition and record-occurrence only (FR-006) — there is no generic update.
  * `transition` and `recordOccurrence` are the two legitimate mutations, and both always write
  * the `issue_event` that records what happened in the same operation: a state change or a signal

@@ -97,13 +97,19 @@ change. Flagging now so whoever builds 004's ingestion integration knows to look
 than rediscover it.
 
 **3. `findOpenByFingerprint` + `create`/`recordOccurrence` is a check-then-act, not one atomic
-operation.** Two concurrent *first* occurrences of a brand-new fingerprint could each see "not
-found" and both create an issue — a real race, narrow (only matters for a fingerprint's very
-first arrival) but real. Not fixed here: 001 T026 ("load check") is the task that would actually
-exercise concurrent ingestion and notice if this matters in practice. A fix, if it turns out to:
-a unique partial index on `(tenant_id, fingerprint) where state not in ('merged','removed')`,
-catching the resulting unique-violation on `create` and retrying as an attach — one migration,
-not a redesign.
+operation.** **Resolved by 001 T026**: this was called "narrow" here, and it was not — a real
+load test (`apps/api/load.e2e.test.ts`, real HTTP → BullMQ → worker → Postgres) fragmented a
+single burst of a brand-new fingerprint into up to `QUEUE_CLASSES.ingestion.concurrency` (16)
+separate issues, exactly the failure this note predicted, just far more likely than "narrow"
+suggested. Fixed exactly the way this note proposed: a unique partial index
+(`issue_tenant_id_fingerprint_open_key`, migration `20260927060000`, scoped to `state NOT IN
+('resolved','merged','removed')` — narrower than T002's existing non-unique index, so a resolved
+issue and its later recurrence can still share a fingerprint) plus a new `FingerprintAlreadyOpenError`
+`create` throws on the losing side of the race, which `ingestSignal` catches and retries as an
+attach to whichever call actually won. Proven at three levels: `issue-repository.e2e.test.ts`
+(16 concurrent `create` calls → one issue), `ingest-signal.e2e.test.ts` (same race through
+`ingestSignal`, `occurrenceCount` ends at 16), and the real load test (500 signals over the full
+HTTP path → exactly one issue, `occurrenceCount` 500).
 
 ## Deep review of T011–T018 — 8 findings fixed, 1 test left honestly red rather than faked green
 
@@ -453,3 +459,26 @@ domain object containing a `bigint` field (any `occurrenceCount`-shaped value, c
 values" mechanically today — worth a lint rule or a typed `JobResult` boundary if a second handler
 ever needs to return something richer than `undefined`/`{issueId, created}`-shaped data, flagged
 here rather than built speculatively for a problem with exactly one occurrence so far.
+
+## 001 T026 — "the design signal rate" and "the plan's latency budget" don't exist
+
+Not decided, genuinely open — a real spec gap, not a value this task could read off anywhere.
+
+SC-006 says ingestion must sustain "the design signal rate" with latency "under the target
+defined in the plan." Grepped `plan.md`, `spec.md`, `research.md` and `docs/stage-0.md`: no such
+rate or budget is defined anywhere, and it isn't in S0-7's own tracked list of deliberately-unset
+numbers (001's row there names only the reopen/stale windows and the excerpt limit — this one was
+missed entirely, not merely deferred).
+
+Applied S0-7's own rule for a number nobody measured yet rather than blocking on it:
+`apps/api/load.e2e.test.ts` documents `TARGET_SIGNALS_PER_SECOND = 100` and
+`LATENCY_BUDGET_MS = 5_000` as named, reasoned-about placeholders — a starting value chosen to
+fail closed, same status as the reopen window (001 T022) and `MAX_FINGERPRINT_FRAMES` (T016).
+Measured on this machine: ~90-100/s sustained through the real HTTP → BullMQ → worker → Postgres
+path, fully visible well inside the 5s budget, once the T026 race fix (above) was in place —
+before that fix, the same load did not even reliably finish inside 60s, because it was creating
+up to 16 issues instead of one and none of them ever reached the target count alone.
+
+Whoever adds "ingestion signal rate" and "ingestion latency budget" to S0-1's real, measured list
+should update these two constants to match, and update `docs/stage-0.md` S0-7's table to actually
+carry this row.

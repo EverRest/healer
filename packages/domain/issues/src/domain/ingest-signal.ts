@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { scope, type TenantContext } from '@healer/shared';
+import { NotFoundError, scope, type TenantContext } from '@healer/shared';
 import type { Issue } from './issue.js';
-import type { IssueRepository } from './repository.js';
+import { FingerprintAlreadyOpenError, type IssueRepository } from './repository.js';
 import type { NormalisationRulesetRepository } from './normalisation-ruleset.js';
 import { resolveFingerprint } from './resolve-fingerprint.js';
 import type { Signal } from './signal.js';
@@ -57,20 +57,21 @@ const REOPEN_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
  *    `Component`, today's fingerprints may need recomputing under a new `normalisation_ruleset`
  *    version — the exact mechanism 001 T011 built to make that recompute possible.
  *  - This is a plain check-then-act (`findOpenByFingerprint`/`findMostRecentlyResolvedByFingerprint`
- *    then `create`/`transition`/`recordOccurrence`), not one atomic operation. Two concurrent
- *    *first* occurrences of a brand new fingerprint could each see "not found" and both create an
- *    issue — a real race, not something this function's tests can exercise meaningfully. 001 T026
- *    ("load check") is where that needs to be measured; a fix (a unique partial index on
- *    `(tenant_id, fingerprint) where state not in ('merged','removed')`, catching the resulting
- *    conflict and retrying as an attach) is one migration away if it turns out to matter.
+ *    then `create`/`transition`/`recordOccurrence`), not one atomic operation — **and 001 T026's
+ *    load check confirmed this was a real, load-bearing bug, not a narrow theoretical one**: a
+ *    burst of a brand-new fingerprint's first arrivals fragmented into as many as
+ *    `QUEUE_CLASSES.ingestion.concurrency` (16) separate issues, one per worker slot that all read
+ *    "not found" before any of them committed. Fixed at the database (a unique partial index,
+ *    `issue_tenant_id_fingerprint_open_key`, migration `20260927060000`) rather than by trying to
+ *    serialize the check-then-act in application code: `create` now throws
+ *    `FingerprintAlreadyOpenError` when it loses the race, and this function catches exactly that
+ *    to attach to whichever concurrent call actually won, instead of surfacing the loser's create
+ *    as a failure.
  */
-export async function ingestSignal(
-  rulesetRepo: NormalisationRulesetRepository,
-  issueRepo: IssueRepository,
-  context: TenantContext,
-  signal: Signal,
-): Promise<IngestSignalResult> {
-  const { fingerprint, rulesetVersion } = await resolveFingerprint(rulesetRepo, {
+/** `resolveFingerprint`'s input, built only from whichever of `errorSignature`'s optional fields
+ *  the signal actually carries — `exactOptionalPropertyTypes` rejects a key present with `undefined`. */
+function toFingerprintInput(signal: Signal) {
+  return {
     component: signal.component,
     environment: signal.environment,
     ...(signal.errorSignature.exceptionType !== undefined
@@ -83,7 +84,65 @@ export async function ingestSignal(
     ...(signal.errorSignature.errorCode !== undefined
       ? { errorCode: signal.errorSignature.errorCode }
       : {}),
-  });
+  };
+}
+
+/**
+ * Attempts `create`; on losing the race (`FingerprintAlreadyOpenError`, see the module comment),
+ * attaches to whichever concurrent call actually won instead of surfacing the loser's create as
+ * a failure — the whole point of the unique index is that exactly one caller creates and every
+ * other one becomes an ordinary attach.
+ */
+async function createOrAttachToWinner(
+  issueRepo: IssueRepository,
+  context: TenantContext,
+  signal: Signal,
+  fingerprint: string,
+  rulesetVersion: number,
+  resolved: Issue | null,
+): Promise<IngestSignalResult> {
+  try {
+    const created = await issueRepo.create(
+      scope(context, {
+        id: randomUUID(),
+        kind: 'monitoring_alert',
+        environment: signal.environment,
+        severity: signal.severity ?? 'medium',
+        fingerprint,
+        rulesetVersion,
+        firstSeenAt: signal.observedAt,
+        lastSeenAt: signal.observedAt,
+        ...(resolved !== null ? { recurrenceOf: resolved.id } : {}),
+      }),
+    );
+    return { issue: created, created: true };
+  } catch (error) {
+    if (!(error instanceof FingerprintAlreadyOpenError)) throw error;
+    const winner = await issueRepo.findOpenByFingerprint(scope(context, { fingerprint }));
+    if (winner === null) {
+      // The winner resolved or was removed between its commit and this read — vanishingly
+      // narrow, and not silently swallowed: surfacing it as not-found is honest about what this
+      // function could not do, not a fabricated success.
+      throw new NotFoundError('Issue');
+    }
+    const attached = await issueRepo.recordOccurrence(
+      scope(context, { id: winner.id }),
+      signal.observedAt,
+    );
+    return { issue: attached, created: false };
+  }
+}
+
+export async function ingestSignal(
+  rulesetRepo: NormalisationRulesetRepository,
+  issueRepo: IssueRepository,
+  context: TenantContext,
+  signal: Signal,
+): Promise<IngestSignalResult> {
+  const { fingerprint, rulesetVersion } = await resolveFingerprint(
+    rulesetRepo,
+    toFingerprintInput(signal),
+  );
 
   const existing = await issueRepo.findOpenByFingerprint(scope(context, { fingerprint }));
   if (existing !== null) {
@@ -118,18 +177,5 @@ export async function ingestSignal(
     return { issue: reopened, created: false };
   }
 
-  const created = await issueRepo.create(
-    scope(context, {
-      id: randomUUID(),
-      kind: 'monitoring_alert',
-      environment: signal.environment,
-      severity: signal.severity ?? 'medium',
-      fingerprint,
-      rulesetVersion,
-      firstSeenAt: signal.observedAt,
-      lastSeenAt: signal.observedAt,
-      ...(resolved !== null ? { recurrenceOf: resolved.id } : {}),
-    }),
-  );
-  return { issue: created, created: true };
+  return createOrAttachToWinner(issueRepo, context, signal, fingerprint, rulesetVersion, resolved);
 }

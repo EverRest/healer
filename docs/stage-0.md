@@ -194,7 +194,7 @@ that "configuration tuned on the pilot" is a tracked commitment rather than a ph
 
 | Spec | Value | Depends on |
 |------|-------|-----------|
-| 001 | reopen window, stale window, excerpt size limit | S0-1 incident cadence |
+| 001 | reopen window, stale window, excerpt size limit, ingestion signal rate, ingestion latency budget (SC-006) | S0-1 incident cadence |
 | 002 | escalation attempt cap, per-issue and per-tenant budgets, soft-threshold percentages, approval expiry, cooldown windows, rate limits | S0-2 benchmark cost data |
 | 003 | ranking term weights, per-source timeouts, time-window defaults, context budget, inclusion cut, follow-up cap | S0-1 |
 | 004 | confidence term constants (R-15 gives starting values), drift detection window, staleness window | S0-4 discovery accuracy |
