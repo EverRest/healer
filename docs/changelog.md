@@ -95,6 +95,34 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.23.0 — 2026-09-27
+
+**001 T011**: `normalisation_ruleset` as versioned data, the two guarantees the task actually asks
+for (R-01, FR-003). The table existed from earlier scaffolding; nothing enforced "a fingerprint
+records the version that produced it" or "never edited" yet.
+
+- `issue.ruleset_version` gained a foreign key to `normalisation_ruleset.version` (migration
+  `20260927020000`) — before this it was a plain int a caller could invent, not a guarantee.
+  `normalisation_ruleset` also gained the same append-only trigger 001 T003 built for
+  evidence/audit_entry, matching data-model.md's own "never edited" text. **Test first**:
+  UPDATE/DELETE/TRUNCATE rejected, the FK rejecting an unpublished version, 7/7
+  (`normalisation-ruleset.e2e.test.ts`). One real subtlety the first draft missed: a plain
+  `TRUNCATE` on this table is already rejected by Postgres's own referential-integrity check
+  (`issue.issue` references it) before the trigger ever runs — proving the *trigger* itself works
+  needed `TRUNCATE ... CASCADE`, not a plain one.
+- `PrismaNormalisationRulesetRepository` (`packages/domain/issues`, this package's first real
+  code): read plus publish only, no update — `publish` always mints the next version, matching
+  the same "don't expose the shape" pattern `EvidenceRepository` already uses. 6/6
+  (`normalisation-ruleset-repository.e2e.test.ts`).
+- Adding the FK required inserting a real `normalisation_ruleset` row in four existing e2e tests'
+  `beforeAll` blocks — they had been inserting `issue.ruleset_version = 1` against a version that
+  never existed as a row, which the FK now correctly catches.
+- `rules` stays untyped (`Json`/`unknown`) on purpose — its concrete shape (which fields strip
+  identifiers, timestamps, memory addresses, URL segments) is T017's design, not this task's to
+  invent ahead of it.
+- `make ci` green cold-cache: 68 e2e tests, all 16 gates including the schema-drift check
+  (`prisma migrate diff` empty against the updated `schema.prisma`).
+
 ## 0.22.0 — 2026-09-27
 
 **001 T009–T010**: no conclusion without evidence (FR-009, quickstart 9) — the last of Phase 2's

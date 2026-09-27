@@ -44,6 +44,10 @@ describe('PrismaEvidenceLinkRepository (001 T008, FR-008, R-06)', () => {
     }
     await query(
       pg,
+      `insert into "issue"."normalisation_ruleset" (version, rules) values (1, '{}')`,
+    );
+    await query(
+      pg,
       `insert into "issue"."issue"
          (id, tenant_id, kind, environment, severity, state, fingerprint, ruleset_version,
           occurrence_count, first_seen_at, last_seen_at)
@@ -136,6 +140,10 @@ describe('assertHasEvidence (001 T009, FR-009, quickstart 9)', () => {
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await query(
+      pg,
+      `insert into "issue"."normalisation_ruleset" (version, rules) values (1, '{}')`,
+    );
     await query(
       pg,
       `insert into "issue"."issue"

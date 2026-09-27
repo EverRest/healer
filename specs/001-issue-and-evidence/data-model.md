@@ -15,7 +15,7 @@ Every table carries `tenant_id` with an index `(tenant_id, …)`.
 | severity | enum | `critical` · `high` · `medium` · `low` |
 | state | enum | see transitions |
 | fingerprint | text | |
-| ruleset_version | int | which normalisation produced the fingerprint (R-01) |
+| ruleset_version | int | which normalisation produced the fingerprint (R-01); FK `normalisation_ruleset.version` — a version that was never published cannot be recorded |
 | occurrence_count | bigint | |
 | first_seen_at, last_seen_at | timestamptz | source clock (R-10) |
 | stale_at | timestamptz? | set by the staleness job (R-11) |
@@ -84,8 +84,12 @@ guaranteed globally unique across tenants.
 
 ## issue.normalisation_ruleset
 
-`version` (PK), `rules` jsonb, `published_at`, `note`. Never edited; a change is a new version.
-Recomputing a historical fingerprint uses the version the issue recorded.
+`version` (PK), `rules` jsonb, `published_at`, `note`. Never edited; a change is a new version —
+enforced the same way as `evidence`/`audit_entry` (R-03): a database trigger rejecting `UPDATE`,
+`DELETE` and `TRUNCATE`, not application discipline. Not tenant-scoped: one ruleset governs
+fingerprinting for every tenant. Recomputing a historical fingerprint uses the version the issue
+recorded — `issue.ruleset_version` is a foreign key into this table (001 T011), so a fingerprint
+can never name a version that does not exist.
 
 ## evidence.evidence (append-only)
 

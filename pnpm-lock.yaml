@@ -132,7 +132,11 @@ importers:
         specifier: workspace:*
         version: link:../../shared
 
-  packages/domain/issues: {}
+  packages/domain/issues:
+    dependencies:
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../../prisma-client
 
   packages/domain/knowledge: {}
 

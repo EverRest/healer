@@ -33,6 +33,10 @@ describe('append-only enforcement (001 T003, T004, R-03, quickstart 8)', () => {
     }
     await query(
       pg,
+      `insert into "issue"."normalisation_ruleset" (version, rules) values (1, '{}')`,
+    );
+    await query(
+      pg,
       `insert into "issue"."issue"
          (id, tenant_id, kind, environment, severity, state, fingerprint, ruleset_version,
           occurrence_count, first_seen_at, last_seen_at)
