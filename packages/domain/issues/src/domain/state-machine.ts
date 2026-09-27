@@ -63,6 +63,29 @@ const GRAPH: Readonly<Record<IssueState, readonly IssueState[]>> = {
   removed: [],
 };
 
+/**
+ * `knowledge_drift` MUST terminate at human adjudication and MUST NOT be reproduced, patched or
+ * auto-resolved in either direction (FR-001a, 001 T038) — only a person knows whether the
+ * disagreeing document is stale or the code is wrong. The graph itself carries no `kind`, so this
+ * is the one place that narrows it: `acting` (data-model.md: "action taken", the only state
+ * representing an executed change) is refused unconditionally, and `resolved` is refused unless
+ * a human caused it — "auto-resolve in either direction" is exactly an automated cause reaching
+ * `resolved`, not a person choosing to close it (FR-021 already allows that for any kind).
+ */
+function checkKnowledgeDriftGuard(issue: Issue, to: IssueState, cause: IssueEventCause): void {
+  if (issue.kind !== 'knowledge_drift') return;
+  if (to === 'acting') {
+    throw new InvalidIssueTransitionError(
+      `knowledge_drift issues cannot enter acting — they terminate at human adjudication (FR-001a)`,
+    );
+  }
+  if (to === 'resolved' && cause !== 'human') {
+    throw new InvalidIssueTransitionError(
+      `knowledge_drift issues cannot be auto-resolved (cause: ${cause}) — only a human resolution is allowed (FR-001a)`,
+    );
+  }
+}
+
 /** Refuses a transition the graph does not declare — see the module comment. */
 export function transitionIssue(
   issue: Issue,
@@ -74,6 +97,7 @@ export function transitionIssue(
   if (!allowed.includes(to)) {
     throw new InvalidIssueTransitionError(`${issue.state} -> ${to} is not a declared transition`);
   }
+  checkKnowledgeDriftGuard(issue, to, cause);
   return {
     issue: { ...issue, state: to },
     event: { issueId: issue.id, fromState: issue.state, toState: to, cause, actorRef },

@@ -1,7 +1,7 @@
 import { withCorrelation } from '@healer/shared';
 import { describe, expect, it } from 'vitest';
-import { issueDetectedEvent, issueStateChangedEvent } from './events.js';
-import type { Issue } from './issue.js';
+import { issueDetectedEvent, issueRelatedEvent, issueStateChangedEvent } from './events.js';
+import type { Issue, IssueRelationship } from './issue.js';
 
 const ISSUE: Issue = {
   id: 'issue-1',
@@ -59,6 +59,26 @@ describe('issueDetectedEvent / issueStateChangedEvent (001 T013, contracts/event
         cause: 'agent',
         actorRef: 'context-resolver',
       },
+    });
+  });
+
+  it('issueRelatedEvent carries the key payload the contract names (001 T039, FR-020)', () => {
+    const relationship: IssueRelationship = {
+      id: 'rel-1',
+      tenantId: 'tenant-1',
+      issueId: 'issue-1',
+      otherIssueId: 'issue-2',
+      kind: 'related',
+      rule: 'component_environment_window',
+      createdAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    const event = withCorrelation('corr-3', () => issueRelatedEvent('tenant-1', relationship));
+    expect(event).toMatchObject({
+      name: 'IssueRelated',
+      tenantId: 'tenant-1',
+      subjectId: 'issue-1',
+      correlationId: 'corr-3',
+      payload: { otherIssueId: 'issue-2', rule: 'component_environment_window' },
     });
   });
 

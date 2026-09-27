@@ -21,6 +21,10 @@ const repo: IssueRepository = {
     Promise.reject(new Error('type-proof stub, never called')),
   transition: () => Promise.reject(new Error('type-proof stub, never called')),
   recordOccurrence: () => Promise.reject(new Error('type-proof stub, never called')),
+  findOpenCorrelationCandidates: () => Promise.reject(new Error('type-proof stub, never called')),
+  correlate: () => Promise.reject(new Error('type-proof stub, never called')),
+  list: () => Promise.reject(new Error('type-proof stub, never called')),
+  findRelationships: () => Promise.reject(new Error('type-proof stub, never called')),
 };
 
 const NEW_ISSUE: NewIssue = {
@@ -48,6 +52,20 @@ function typeProofNeverCalled(): void {
   repo.transition({ id: 'issue-1' }, 'investigating', 'agent', 'x');
   // @ts-expect-error recordOccurrence's `where` requires TenantScoped<{ id }>, not a plain { id }
   repo.recordOccurrence({ id: 'issue-1' }, new Date());
+  // @ts-expect-error findOpenCorrelationCandidates requires a TenantScoped filter, not a plain one
+  repo.findOpenCorrelationCandidates({
+    componentId: 'c1',
+    environment: 'prod',
+    excludeId: 'issue-1',
+    since: new Date(),
+    until: new Date(),
+  });
+  // @ts-expect-error correlate's `where` requires a TenantScoped filter, not a plain one
+  repo.correlate({ id: 'issue-1', otherId: 'issue-2', rule: 'x' });
+  // @ts-expect-error list requires a TenantScoped filter, not a plain one
+  repo.list({});
+  // @ts-expect-error findRelationships requires a TenantScoped<{ id }>, not a plain { id }
+  repo.findRelationships({ id: 'issue-1' });
 }
 void typeProofNeverCalled;
 

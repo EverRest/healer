@@ -95,3 +95,48 @@ export async function assertTenantScopedEnqueue(
     );
   }
 }
+
+/**
+ * The tenant-isolation contract for a list endpoint (001 T040) — neither of the two shapes above
+ * fits: a list always returns 200 with no id to look up and nothing enqueued to trace by marker.
+ * This function itself performs the request against `(app, method, path)`, same as
+ * `assertTenantScopedEnqueue` (see that review finding above) — a helper whose gate-recognized
+ * arguments it never actually used would prove nothing about what ran. Proof here is that a
+ * resource created under tenant A appears in the list returned for tenant A and never in the one
+ * returned for tenant B.
+ */
+export async function assertTenantIsolatedList(
+  app: INestApplication,
+  method: 'GET',
+  path: string,
+  config: {
+    readonly tenantA: string;
+    readonly tenantB: string;
+    readonly tenantHeader: string;
+    /** Creates a resource under tenant A and returns a marker identifying it in a list response. */
+    createUnderA(): Promise<string>;
+    /** Whether `marker` appears in this list response's body. */
+    responseContainsMarker(body: unknown, marker: string): boolean;
+  },
+): Promise<void> {
+  const marker = await config.createUnderA();
+  const httpMethod = method.toLowerCase() as 'get';
+
+  const responseA = await request(app.getHttpServer())
+    [httpMethod](path)
+    .set(config.tenantHeader, config.tenantA);
+  if (!config.responseContainsMarker(responseA.body, marker)) {
+    throw new Error(
+      `assertTenantIsolatedList: ${marker} does not even appear in its own tenant's list`,
+    );
+  }
+
+  const responseB = await request(app.getHttpServer())
+    [httpMethod](path)
+    .set(config.tenantHeader, config.tenantB);
+  if (config.responseContainsMarker(responseB.body, marker)) {
+    throw new Error(
+      `assertTenantIsolatedList: ${marker} leaked into tenant ${config.tenantB}'s list`,
+    );
+  }
+}

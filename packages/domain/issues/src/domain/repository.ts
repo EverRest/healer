@@ -1,5 +1,5 @@
 import type { TenantScoped } from '@healer/shared';
-import type { Issue, IssueKind, IssueSeverity } from './issue.js';
+import type { Issue, IssueKind, IssueRelationship, IssueSeverity } from './issue.js';
 import type { IssueEventCause } from './state-machine.js';
 
 /**
@@ -84,4 +84,46 @@ export interface IssueRepository {
    * timeline is a union over this table).
    */
   recordOccurrence(where: TenantScoped<{ readonly id: string }>, observedAt: Date): Promise<Issue>;
+  /**
+   * Deterministic correlation candidates (001 T039, FR-020): open issues sharing `componentId`
+   * and `environment`, first seen inside `[since, until]`, excluding the subject issue itself.
+   * A pre-filter, not the final say — `correlates()` (domain/correlation.ts) is still run on each
+   * candidate the caller receives, the same "query narrows, pure function decides" split every
+   * other repository method in this file already uses.
+   */
+  findOpenCorrelationCandidates(
+    where: TenantScoped<{
+      readonly componentId: string;
+      readonly environment: string;
+      readonly excludeId: string;
+      readonly since: Date;
+      readonly until: Date;
+    }>,
+  ): Promise<readonly Issue[]>;
+  /**
+   * Records a `related` relationship between two issues (001 T039, FR-020) — idempotent: a second
+   * call for the same `(id, otherId)` pair returns `null` rather than a duplicate row or an error,
+   * backed by the same unique index `create`'s `recurrenceOf` path already relies on
+   * (`issue_relationship_tenant_id_issue_id_other_kind_key`). Never touches either issue's state.
+   */
+  correlate(
+    where: TenantScoped<{ readonly id: string; readonly otherId: string; readonly rule: string }>,
+  ): Promise<IssueRelationship | null>;
+  /** `GET /issues` (001 T040): every filter is optional and narrows further, never widens. */
+  list(
+    where: TenantScoped<{
+      readonly state?: Issue['state'];
+      readonly componentId?: string;
+      readonly since?: Date;
+    }>,
+  ): Promise<readonly Issue[]>;
+  /**
+   * Every non-removed relationship touching this issue, in *either* direction (001 T040, FR-020):
+   * `recurrence_of`/`merged_into` are written with this issue as the subject (`issueId`), while a
+   * `related` correlation may name this issue as either side — the caller (the pure
+   * `projectIssueRelationships`, domain/issue.ts) is what tells the two apart, not this query.
+   */
+  findRelationships(
+    where: TenantScoped<{ readonly id: string }>,
+  ): Promise<readonly IssueRelationship[]>;
 }

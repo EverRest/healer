@@ -325,6 +325,10 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     findMostRecentlyResolvedByFingerprint: () => Promise.resolve(null),
     transition: () => Promise.reject(new Error('not implemented in this test')),
     recordOccurrence: () => Promise.reject(new Error('not implemented in this test')),
+    findOpenCorrelationCandidates: () => Promise.reject(new Error('not implemented in this test')),
+    correlate: () => Promise.reject(new Error('not implemented in this test')),
+    list: () => Promise.resolve([]),
+    findRelationships: () => Promise.reject(new Error('not implemented in this test')),
   };
   const noopEvidence: EvidenceRepository = {
     record: () => Promise.reject(new Error('not implemented in this test')),

@@ -495,6 +495,13 @@ See [decisions.md](docs/decisions.md) C-56 (`check:*` scripts talk to a live dat
 no ADR — matches `db-seed.mjs`'s existing precedent), C-57 (`check:evidence-coverage` correctly
 checks zero tables today), C-58 (every check's live query proven against a real Postgres).
 
+## 001 T037–T040 — resolved
+
+See [decisions.md](docs/decisions.md) C-59 (`knowledge_drift` may still be human-resolved), C-60
+(deterministic correlation built but not yet wired into `ingestSignal` — real call site named for
+whoever lands 004), C-61 (`GET /issues` does N+1 relationship fetches, accepted until profiled),
+C-62 (`assertTenantIsolatedList`, a third isolation helper for list endpoints).
+
 ## Deployment, release automation and smoke/regression testing of our own environment — not recorded anywhere until now
 
 Not decided, genuinely open — asked directly ("чи зафіксовано десь"), checked, and it was not.

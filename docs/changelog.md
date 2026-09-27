@@ -95,6 +95,32 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.40.0 — 2026-09-28
+
+**001 T037–T040**: the `knowledge_drift` termination guard, deterministic issue correlation, and
+`GET /issues`/`GET /issues/{id}` — Phase 5 (US3, one pipeline for every source), four of five tasks.
+
+- T037 proved a structural claim rather than building one: `state-machine.ts`'s `transitionIssue`
+  never took `kind` as an input, so nothing could special-case by it — a new parametrized test
+  creates and transitions all six `IssueKind` values identically through the real repository.
+- **T037's own proof found the real gap T038 exists to close**: nothing stopped a `knowledge_drift`
+  issue from reaching `acting` (an executed code change) exactly like any other kind. Fixed with a
+  new guard: `acting` is refused unconditionally for `knowledge_drift`, and `resolved` is refused
+  unless a human caused it — FR-001a's "must not auto-resolve in either direction", not a block on
+  a human closing it.
+- **Deterministic correlation** (T039): a new named rule (`component_environment_window`), two new
+  `IssueRepository` methods, a new application command, and `IssueRelated` publishing — backed by a
+  unique index T002 already put in place two months of work ago, no new migration needed. Built and
+  proven at the repository layer, deliberately not yet wired into live ingestion: every issue
+  created there has `componentId: null` until 004 lands, and the rule's own null-guard means wiring
+  it in today would be a real per-request query that can never match anything.
+- **`GET /issues` and `GET /issues/{id}`**: both project the contract's `mergedIntoId`/
+  `recurrenceOfId`/`relatedIssueIds` from the same `issue_relationship` rows T039 introduced.
+  `occurrenceCount` converts `bigint` to a JSON-safe number — the same class of bug 001 T025 already
+  found and fixed for a BullMQ job's return value. A third tenant-isolation helper,
+  `assertTenantIsolatedList`, joins the other two for the first list-shaped endpoint in this API.
+- `make ci` green: 308 unit tests, 168 e2e tests, all 16 gates.
+
 ## 0.39.0 — 2026-09-28
 
 **001 T032–T036**: the 40 MB oversized-excerpt proof, all three continuous invariant checks, and

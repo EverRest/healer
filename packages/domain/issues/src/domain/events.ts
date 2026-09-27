@@ -1,15 +1,15 @@
 import { currentCorrelationId } from '@healer/shared';
 import type { DomainEvent } from '@healer/events';
-import type { Issue } from './issue.js';
+import type { Issue, IssueRelationship } from './issue.js';
 import type { NewIssueStateChangedEvent } from './state-machine.js';
 
 /**
- * Outbox events this package publishes (001 T013, contracts/events.md). Only the two events
- * with a real producing operation today — `create` and `transition` (001 T012) — the other nine
- * in the contract (`IssueReopened`, `IssueRecurred`, `IssueRelated`, `IssueMerged`/`Unmerged`,
+ * Outbox events this package publishes (001 T013, contracts/events.md). `create`, `transition`
+ * (001 T012) and `correlate` (001 T039) each have a real producing operation; the remaining
+ * events in the contract (`IssueReopened`, `IssueRecurred`, `IssueMerged`/`Unmerged`,
  * `IssueStale`, `IssueResolved`, `IssueDeleted`) have no operation to hang off yet and are wired
- * when the task that builds it lands (T018, T049, T051, T053 and friends) — flagged in
- * QUESTIONS.md rather than guessed at ahead of them.
+ * when the task that builds it lands (T049, T051, T053 and friends) — flagged in QUESTIONS.md
+ * rather than guessed at ahead of them.
  */
 
 /**
@@ -36,6 +36,21 @@ export function issueDetectedEvent(issue: Issue): DomainEvent {
       component: issue.componentId,
       severity: issue.severity,
       fingerprint: issue.fingerprint,
+    },
+  };
+}
+
+/** contracts/events.md: "deterministic correlation linked two issues" — payload is exactly the
+ * two fields that let a consumer explain the link without a second lookup (FR-020). */
+export function issueRelatedEvent(tenantId: string, relationship: IssueRelationship): DomainEvent {
+  return {
+    name: 'IssueRelated',
+    tenantId,
+    subjectId: relationship.issueId,
+    correlationId: requireCorrelationId(),
+    payload: {
+      otherIssueId: relationship.otherIssueId,
+      rule: relationship.rule,
     },
   };
 }

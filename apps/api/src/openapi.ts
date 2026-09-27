@@ -22,6 +22,11 @@ const noopIssues: IssueRepository = {
   findMostRecentlyResolvedByFingerprint: () => Promise.resolve(null),
   transition: () => Promise.reject(new Error('not implemented for contract generation')),
   recordOccurrence: () => Promise.reject(new Error('not implemented for contract generation')),
+  findOpenCorrelationCandidates: () =>
+    Promise.reject(new Error('not implemented for contract generation')),
+  correlate: () => Promise.reject(new Error('not implemented for contract generation')),
+  list: () => Promise.resolve([]),
+  findRelationships: () => Promise.resolve([]),
 };
 const noopEvidence: EvidenceRepository = {
   record: () => Promise.reject(new Error('not implemented for contract generation')),

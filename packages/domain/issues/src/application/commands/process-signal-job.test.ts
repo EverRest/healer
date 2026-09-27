@@ -59,6 +59,10 @@ function issueRepoRecording(created: Issue[], onCreate?: () => void): IssueRepos
     findMostRecentlyResolvedByFingerprint: async () => null,
     transition: () => Promise.reject(new Error('not used in this test')),
     recordOccurrence: () => Promise.reject(new Error('not used in this test')),
+    findOpenCorrelationCandidates: () => Promise.reject(new Error('not used in this test')),
+    correlate: () => Promise.reject(new Error('not used in this test')),
+    list: () => Promise.reject(new Error('not used in this test')),
+    findRelationships: () => Promise.reject(new Error('not used in this test')),
     create: async (issue) => {
       onCreate?.();
       const row = issueRow(issue);

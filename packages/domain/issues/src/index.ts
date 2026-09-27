@@ -1,4 +1,5 @@
 export * from './domain/issue.js';
+export * from './domain/correlation.js';
 export * from './domain/events.js';
 export * from './domain/fingerprint.js';
 export * from './domain/ingest-signal.js';
@@ -10,6 +11,7 @@ export * from './domain/resolve-fingerprint.js';
 export * from './domain/signal.js';
 export * from './domain/signal-queue.js';
 export * from './domain/state-machine.js';
+export * from './application/commands/correlate-issue.js';
 export * from './application/commands/enqueue-signal-batch.js';
 export * from './application/commands/ingest-signal-batch.js';
 export * from './application/commands/process-signal-job.js';

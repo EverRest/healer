@@ -58,6 +58,13 @@ describe('gate-isolation (012 T029, FR-013, quickstart 10)', () => {
     expect(uncovered).toEqual(['DELETE /issues/:id']);
   });
 
+  it('is satisfied by a real assertTenantIsolatedList call naming the route (001 T040)', () => {
+    const uncovered = findUncoveredEndpoints(openapi, [
+      "await assertTenantIsolatedList(app, 'GET', '/issues/:id', { tenantA, tenantB, tenantHeader, createUnderA, responseContainsMarker });",
+    ]);
+    expect(uncovered).toEqual(['DELETE /issues/:id']);
+  });
+
   it('does not count a call inside describe.skip as coverage', () => {
     const uncovered = findUncoveredEndpoints(openapi, [
       `describe.skip('issues', () => {

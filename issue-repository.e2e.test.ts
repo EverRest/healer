@@ -141,6 +141,31 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       ).rejects.toThrow(/detected -> acting is not a declared transition/);
     }));
 
+  it('a knowledge_drift issue cannot enter acting or be auto-resolved through the real repository (001 T038, FR-001a)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue({ kind: 'knowledge_drift' });
+      await repo.create(scope(CONTEXT, input));
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'diagnosed', 'agent', 'x');
+
+      await expect(
+        repo.transition(scope(CONTEXT, { id: input.id }), 'acting', 'agent', 'change-agent'),
+      ).rejects.toThrow(/knowledge_drift/);
+
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'needs_human', 'policy', 'gate');
+      await expect(
+        repo.transition(scope(CONTEXT, { id: input.id }), 'resolved', 'agent', 'x'),
+      ).rejects.toThrow(/knowledge_drift/);
+
+      const resolved = await repo.transition(
+        scope(CONTEXT, { id: input.id }),
+        'resolved',
+        'human',
+        'pavlo',
+      );
+      expect(resolved.state).toBe('resolved');
+    }));
+
   it('transition throws NotFoundError rather than leaking whether another tenant’s issue exists', () =>
     withCorrelation(newCorrelationId(), async () => {
       const input = newIssue();
@@ -497,4 +522,128 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       }),
     15_000,
   );
+
+  it.each([
+    'production_incident',
+    'user_report',
+    'monitoring_alert',
+    'regression',
+    'automated_detection',
+    'knowledge_drift',
+  ] as const)(
+    'every issue kind enters the same pipeline: %s creates and transitions identically (001 T037, FR-001)',
+    (kind) =>
+      withCorrelation(newCorrelationId(), async () => {
+        // The shared graph in `state-machine.ts` carries no kind-conditional edges of its own —
+        // every kind creates and moves through the identical detected -> investigating -> resolved
+        // path. A human-caused resolve is used here (not `agent`) so this proves the *shared*
+        // mechanics without tripping T038's own, deliberately narrow exception (knowledge_drift
+        // alone cannot be auto-resolved by a non-human cause, FR-001a) — a documented carve-out on
+        // top of the shared pipeline, not evidence the pipeline itself is no longer shared.
+        const input = newIssue({ kind });
+        const created = await repo.create(scope(CONTEXT, input));
+        expect(created.kind).toBe(kind);
+
+        await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+        const resolved = await repo.transition(
+          scope(CONTEXT, { id: input.id }),
+          'resolved',
+          'human',
+          'pavlo',
+        );
+        expect(resolved.state).toBe('resolved');
+        // Transitioning never touches kind — it is immutable identity, not workflow state.
+        expect(resolved.kind).toBe(kind);
+      }),
+  );
+
+  it('findOpenCorrelationCandidates finds a same-component, same-environment issue inside the window, and only that (001 T039, FR-020)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const checkout = randomUUID();
+      const billing = randomUUID();
+      const subject = await repo.create(
+        scope(CONTEXT, newIssue({ componentId: checkout, environment: 'prod' })),
+      );
+      const withinWindow = await repo.create(
+        scope(
+          CONTEXT,
+          newIssue({
+            componentId: checkout,
+            environment: 'prod',
+            firstSeenAt: new Date(subject.firstSeenAt.getTime() + 60_000),
+          }),
+        ),
+      );
+      // Each excluded for a different reason: different component, different environment,
+      // outside the window, and the subject's own tenant-isolated twin.
+      await repo.create(scope(CONTEXT, newIssue({ componentId: billing, environment: 'prod' })));
+      await repo.create(
+        scope(CONTEXT, newIssue({ componentId: checkout, environment: 'staging' })),
+      );
+      await repo.create(
+        scope(
+          CONTEXT,
+          newIssue({
+            componentId: checkout,
+            environment: 'prod',
+            firstSeenAt: new Date(subject.firstSeenAt.getTime() + 2 * 60 * 60 * 1000),
+          }),
+        ),
+      );
+      await repo.create(
+        scope(OTHER_CONTEXT, newIssue({ componentId: checkout, environment: 'prod' })),
+      );
+
+      const candidates = await repo.findOpenCorrelationCandidates(
+        scope(CONTEXT, {
+          componentId: checkout,
+          environment: 'prod',
+          excludeId: subject.id,
+          since: new Date(subject.firstSeenAt.getTime() - 60 * 60 * 1000),
+          until: new Date(subject.firstSeenAt.getTime() + 60 * 60 * 1000),
+        }),
+      );
+
+      expect(candidates.map((c) => c.id)).toEqual([withinWindow.id]);
+    }));
+
+  it('correlate records a related relationship, publishes IssueRelated, and is idempotent (001 T039, FR-020)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const a = await repo.create(scope(CONTEXT, newIssue()));
+      const b = await repo.create(scope(CONTEXT, newIssue()));
+
+      const relationship = await repo.correlate(
+        scope(CONTEXT, { id: a.id, otherId: b.id, rule: 'component_environment_window' }),
+      );
+      expect(relationship).toMatchObject({
+        issueId: a.id,
+        otherIssueId: b.id,
+        kind: 'related',
+        rule: 'component_environment_window',
+      });
+
+      const rows = await query(
+        pg,
+        `select kind, rule from "issue"."issue_relationship"
+         where issue_id = '${a.id}' and other_issue_id = '${b.id}'`,
+      );
+      expect(rows).toBe('related|component_environment_window');
+
+      // Correlating the identical pair again is a no-op, not a duplicate row or an error.
+      const again = await repo.correlate(
+        scope(CONTEXT, { id: a.id, otherId: b.id, rule: 'component_environment_window' }),
+      );
+      expect(again).toBeNull();
+      const count = await query(
+        pg,
+        `select count(*) from "issue"."issue_relationship" where issue_id = '${a.id}' and other_issue_id = '${b.id}'`,
+      );
+      expect(count).toBe('1');
+
+      // Neither issue's state changed — a `related` link is never itself a state transition.
+      const subjectAfter = await repo.findById(scope(CONTEXT, { id: a.id }));
+      const otherAfter = await repo.findById(scope(CONTEXT, { id: b.id }));
+      expect(subjectAfter?.state).toBe('detected');
+      expect(otherAfter?.state).toBe('detected');
+    }));
 });

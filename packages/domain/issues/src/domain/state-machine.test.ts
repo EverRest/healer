@@ -8,11 +8,11 @@ import type { Issue } from './issue.js';
  * graph is the one authority on what may happen next, not the caller, and every transition
  * produces the event that records who or what caused it.
  */
-function issue(state: Issue['state']): Issue {
+function issue(state: Issue['state'], kind: Issue['kind'] = 'production_incident'): Issue {
   return {
     id: 'issue-1',
     tenantId: 'tenant-1',
-    kind: 'production_incident',
+    kind,
     componentId: null,
     environment: 'prod',
     severity: 'high',
@@ -149,5 +149,46 @@ describe('transitionIssue (001 T012, FR-006)', () => {
     expect(() => transitionIssue(issue('stale'), 'investigating', 'ingestion', 'signal')).toThrow(
       InvalidIssueTransitionError,
     );
+  });
+});
+
+describe('knowledge_drift terminates at human adjudication (001 T038, FR-001a, quickstart 25)', () => {
+  it('cannot enter acting — no kind of automated change is ever taken on it', () => {
+    expect(() =>
+      transitionIssue(issue('diagnosed', 'knowledge_drift'), 'acting', 'agent', 'change-agent'),
+    ).toThrow(/knowledge_drift/);
+  });
+
+  it('cannot be auto-resolved in either direction — only a human resolution counts', () => {
+    for (const cause of ['ingestion', 'agent', 'policy', 'system'] as const) {
+      expect(() =>
+        transitionIssue(issue('needs_human', 'knowledge_drift'), 'resolved', cause, 'x'),
+      ).toThrow(/knowledge_drift/);
+    }
+  });
+
+  it('a human can still resolve it — FR-001a blocks automated resolution, not a person closing it', () => {
+    expect(
+      transitionIssue(issue('needs_human', 'knowledge_drift'), 'resolved', 'human', 'pavlo').issue
+        .state,
+    ).toBe('resolved');
+  });
+
+  it('can still reach needs_human — the one path FR-001a requires it to terminate at', () => {
+    expect(
+      transitionIssue(issue('diagnosed', 'knowledge_drift'), 'needs_human', 'policy', 'gate').issue
+        .state,
+    ).toBe('needs_human');
+  });
+
+  it('every other kind is unaffected — acting and automated resolution stay open to them', () => {
+    expect(
+      transitionIssue(issue('diagnosed', 'production_incident'), 'acting', 'agent', 'x').issue
+        .state,
+    ).toBe('acting');
+    expect(
+      transitionIssue(issue('needs_human', 'production_incident'), 'resolved', 'agent', 'x').issue
+        .state,
+    ).toBe('resolved');
   });
 });
