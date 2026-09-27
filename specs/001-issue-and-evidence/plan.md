@@ -79,13 +79,14 @@ packages/domain/issues/
 ├── domain/           # Issue, IssueEvent, state machine, fingerprint rules
 ├── application/
 │   ├── commands/     # IngestSignal, TransitionIssue, MergeIssues, UnmergeIssues, DeleteIssue
-│   └── queries/      # GetIssue, ListIssues, GetTimeline, GetEvidenceGraph, GetAuditTrail
+│   └── queries/      # GetIssue, ListIssues, GetAuditTrail (GetTimeline is a repository — see below)
 ├── infrastructure/   # Prisma repositories, outbox publisher
 └── presentation/     # controllers, DTOs
 
 packages/domain/evidence/
 ├── domain/           # Evidence, EvidenceLink, reference state
 ├── application/      # RecordEvidence, AttachLink, DetachEvidence, PurgeExpired
+│                     # GetEvidenceGraph is a repository (over the two tables this package owns)
 └── infrastructure/   # append-only repository, excerpt bounding
 ```
 
@@ -93,6 +94,14 @@ packages/domain/evidence/
 Evidence outlives the investigation that produced it, is consumed by 006, 008, 009 and 011, and
 has a different mutability contract. Nesting it under `issues` would invite a foreign key in the
 wrong direction the first time something else needed it.
+
+**Views are repositories, not query handlers**: `GetTimeline` (a `UNION ALL` in
+`issues/infrastructure`, reading `issue_event`, 012's `workflow_transition` and `evidence` by table
+name, never by import) and `GetEvidenceGraph` (`evidence/infrastructure`, over `evidence` and
+`evidence_link`, which that package owns) have no logic a handler would add — same shape as
+`GET /issues/{id}/evidence`, which already calls its repository directly. A future route checks the
+issue exists first (404 for another tenant's id, quickstart 22); the repositories return an empty
+result, never an error, for an id they cannot see.
 
 ## Phase 0 — research
 

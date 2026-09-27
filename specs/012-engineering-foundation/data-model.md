@@ -26,7 +26,8 @@ timeline of 001 FR-013 — there is no second store *of them*, and none of them 
 | deadline_at | timestamptz? | the state's own timeout, enforced by a scheduled tick |
 | terminal_state | text? | set once; a terminal run never transitions again |
 
-Index `(tenant_id, state)`, `(deadline_at) where terminal_state is null`.
+Index `(tenant_id, state)`, `(tenant_id, issue_id)` (001 GetTimeline joins an issue's machine steps
+through it), `(deadline_at) where terminal_state is null`.
 
 ### workflow_transition (append-only)
 

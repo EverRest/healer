@@ -532,3 +532,32 @@ target, a release tool and a smoke-check design is new-infrastructure/new-depend
 this repo's own rule sends that to an ADR first, not a silent choice made while working through
 an unrelated task list. Whoever picks this up next should decide the hosting target before
 anything else; the release workflow and smoke checks follow from that choice, not the reverse.
+
+## 001 T046 — which `cause` does a timeline entry carry when its table has none?
+
+`TimelineEntry.cause` follows the contract's set (`ingestion | agent | human | policy | system`).
+`workflow_transition.cause` is `job | callback | timeout | human | policy` and `evidence` has no
+cause column, so: `human`/`policy` pass through, everything else — the three machine causes and
+every evidence row — reads as `system`, with the producing step as `actorRef` for evidence.
+Chosen because a step's name does not say whether an agent or plain code ran it, and calling
+evidence `agent` would be a claim nothing recorded. Revisit if the audit trail (T042) ends up
+carrying a real actor type per step; then the timeline can read it from there instead.
+
+## 001 T042 — `AuditRepository.record` has no real caller yet
+
+Not decided, genuinely open — a real, named dependency block, not a corner cut.
+
+FR-012 requires `action` to be a registered `policy_action.action_key` (002), and requires "every
+agent action and every policy decision" to get an entry. 002 (the policy engine and its action-key
+registry) does not exist anywhere in this repo, and no agent execution path exists either (012
+never built a caller for `agent_run`, only the schema — confirmed via `prisma/agent-run-single-
+store.test.ts`, which only proves the table stays the single store, not that anything writes to
+it). Inventing action-key strings now would be guessing at a closed list this feature does not
+own — the same reasoning behind not inventing 002's own values anywhere else in 001.
+
+Built and proven anyway (`AuditRepository`, `audit-repository.e2e.test.ts`, T042/T043): the write
+mechanism, the append-only guarantee (already covered by `append-only.e2e.test.ts` since T004),
+and the SC-007 `agent_run` resolution. `GET /issues/{id}/audit` (T044) is real and correctly
+returns nothing today, since nothing has ever called `record`. Whoever builds 002 or a real agent
+execution path is the one who wires a real call into `transition`/`create`/wherever the first
+real action lives — not this task, and not guessed at here.

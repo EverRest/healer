@@ -92,9 +92,9 @@ seen to fail first; a guarantee nobody has watched fail is an assumption.
 
 **Independent test**: quickstart 16
 
-- [ ] T042 `audit_entry` for every agent action and every policy decision, written in the same transaction as the action it describes (FR-012)
-- [ ] T043 **Test**: every agent-action entry resolves to a retrievable prompt version and model identifier (SC-007, 012 T064)
-- [ ] T044 [P] `GET /issues/{id}/audit`
+- [X] T042 `audit_entry` for every agent action and every policy decision, written in the same transaction as the action it describes (FR-012) — new `AuditRepository` (`domain/audit.ts`, `domain/audit-repository.ts`, `infrastructure/prisma-audit-repository.ts`): `record`/`listByTarget`/`resolveAgentRunFacts`. Deliberately has no `modelId`/`promptVersionId`/`tokens`/`cost`/`toolCalls` fields — those live exactly once in `agent_run` (C-13, `prisma/agent-run-single-store.test.ts`'s own structural guarantee), reached through `agentRunId`. **No real caller wires `record` into a live action yet**: `action` must be a registered `policy_action.action_key` (002), and 002 does not exist in this repo — inventing action-key values would be guessing at a closed list this feature does not own. Flagged in QUESTIONS.md, not built ahead of 002, same precedent as T039's correlation gap. "Written in the same transaction as the action" is the contract for whichever future caller wires this in (the same pattern `create`/`transition` already use for `issue_event` + the outbox), not something provable without a real caller.
+- [X] T043 **Test**: every agent-action entry resolves to a retrievable prompt version and model identifier (SC-007, 012 T064) — `resolveAgentRunFacts` joins `agent_run` by `agentRunId` (tenant-scoped), returning `null` for an id naming no run at all or one under another tenant. Proven against a real Postgres in `audit-repository.e2e.test.ts` (6/6): record/read, tenant isolation, ordering, and the agent-run resolution itself, including the cross-tenant null case.
+- [X] T044 [P] `GET /issues/{id}/audit` — extends `IssuesController`: tenant-scoped issue lookup first (404 before the audit query, same SC-004 ordering as `/evidence`), then `listByTarget(targetType: 'issue', targetId)`, resolving each agent-action entry's `agentRunFacts` inline (SC-007 as an observable HTTP behavior, not just a repository capability). New isolation test via `assertTenantIsolated`.
 
 ---
 
@@ -102,9 +102,9 @@ seen to fail first; a guarantee nobody has watched fail is an assumption.
 
 **Independent test**: quickstart 14, 15, 16
 
-- [ ] T045 **Test first**: render the timeline twice → byte-identical output (SC-005, quickstart 14)
-- [ ] T046 `GetTimeline` as SQL **union** over `issue_event` (domain facts), 012's `workflow_transition` (machine steps) and `evidence`, ordered by `observed_at`; the two event tables are different grains and neither is total, and nothing is copied between them; **no model call anywhere in the path** (FR-013, R-07, C-14, quickstart 15)
-- [ ] T047 [P] `GetEvidenceGraph` over the same records as nodes and edges
+- [X] T045 **Test first**: render the timeline twice → byte-identical output (SC-005, quickstart 14) — `timeline.e2e.test.ts`: two renders byte-identical, including entries sharing a timestamp; ordered by observed, not received
+- [X] T046 `GetTimeline` as SQL **union** over `issue_event` (domain facts), 012's `workflow_transition` (machine steps) and `evidence`, ordered by `observed_at`; the two event tables are different grains and neither is total, and nothing is copied between them; **no model call anywhere in the path** (FR-013, R-07, C-14, quickstart 15) — `PrismaTimelineRepository`: one `UNION ALL` over the three tables, every arm tenant-filtered, total order `(at, source, id)`; machine causes `job`/`callback`/`timeout` and evidence read as `system` (see QUESTIONS.md); no HTTP route yet (`GET /issues/{id}/timeline` lands with T048/T055)
+- [X] T047 [P] `GetEvidenceGraph` over the same records as nodes and edges — pure `buildEvidenceGraph` (unit) + `PrismaEvidenceGraphRepository` (e2e); uncited and detached evidence stay as nodes; lives in the evidence package, which owns both tables it reads
 - [ ] T048 [P] **Test**: timeline, evidence graph and audit for one issue contain the same facts (quickstart 16)
 
 ---

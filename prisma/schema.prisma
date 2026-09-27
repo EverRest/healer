@@ -48,6 +48,8 @@ model WorkflowRun {
   // rather than merely unindexed (FR-048).
   @@unique([id, tenantId])
   @@index([tenantId, state])
+  // 001 T046: GetTimeline joins an issue's machine steps through this column.
+  @@index([tenantId, issueId])
   // The deadline index is partial — `where terminal_state is null` — because the sweep
   // only ever looks at live runs. Prisma cannot express a partial index, so it is created
   // in the migration and deliberately not declared here; declaring a plain index as well
