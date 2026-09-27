@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import {
+  DEFAULT_NORMALISATION_RULES,
   ingestSignal,
   PrismaIssueRepository,
   PrismaNormalisationRulesetRepository,
@@ -49,10 +51,18 @@ describe('ingestSignal (001 T018, FR-002)', () => {
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
-    prisma = new PrismaClient({ datasourceUrl: pg.url });
+    // T015's 12 000-signal replay fires batches of genuinely concurrent transactions — the
+    // default connection pool and transaction maxWait are sized for ordinary request traffic,
+    // not this load-test-shaped burst, and measurably ran out of headroom when the full e2e
+    // suite's other files were competing for the same host resources ("Transaction API error:
+    // Unable to start a transaction in the given time").
+    prisma = new PrismaClient({
+      datasourceUrl: `${pg.url}?connection_limit=30`,
+      transactionOptions: { maxWait: 20_000, timeout: 20_000 },
+    });
     issueRepo = new PrismaIssueRepository(prisma);
     rulesetRepo = new PrismaNormalisationRulesetRepository(prisma);
-    await rulesetRepo.publish({ rules: { stripPatterns: ['[0-9a-f]{8}-[0-9a-f-]{27}'] } });
+    await rulesetRepo.publish({ rules: DEFAULT_NORMALISATION_RULES });
   }, 180_000);
 
   afterAll(async () => {
@@ -97,27 +107,68 @@ describe('ingestSignal (001 T018, FR-002)', () => {
       expect(second.issue.lastSeenAt).toEqual(new Date('2026-01-02T00:00:00Z'));
     }));
 
-  it('replaying 200 signals sharing a signature collapses to one issue with the right count (SC-001)', () =>
-    withCorrelation(newCorrelationId(), async () => {
-      const burstSignature = signal({ errorSignature: { exceptionType: 'BurstError' } });
-      let last = await ingestSignal(rulesetRepo, issueRepo, CONTEXT, burstSignature);
-      for (let i = 1; i < 200; i++) {
-        last = await ingestSignal(
-          rulesetRepo,
-          issueRepo,
-          CONTEXT,
+  it(
+    'replaying 12 000 signals sharing a signature from two providers collapses to one issue with the right count (001 T015, SC-001, quickstart 1)',
+    () =>
+      withCorrelation(newCorrelationId(), async () => {
+        const TOTAL = 12_000;
+        const CONCURRENCY = 25;
+
+        // Two providers, two different volatile shapes for the *same* underlying failure — a
+        // UUID request id (provider A) and a memory address plus a generated-file line:column
+        // (provider B) — proving the burst collapses across providers, not just across literal
+        // duplicates. Both normalise away under DEFAULT_NORMALISATION_RULES to the same
+        // fingerprint (quickstart 2's guarantee, exercised here at SC-001's own scale).
+        const providerA = (i: number): Signal =>
           signal({
-            errorSignature: { exceptionType: 'BurstError' },
+            errorSignature: {
+              exceptionType: 'BurstError',
+              frames: [`${randomUUID()} at Checkout.charge(Checkout.java:${i}:7)`],
+            },
             observedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
-          }),
+          });
+        const providerB = (i: number): Signal =>
+          signal({
+            errorSignature: {
+              exceptionType: 'BurstError',
+              frames: [
+                `0x${i.toString(16).padStart(8, '0')} at Checkout.charge(Checkout.java:${i})`,
+              ],
+            },
+            observedAt: new Date(Date.UTC(2026, 0, 1, 0, 0, i)),
+          });
+
+        // The first signal alone, sequentially: it takes the `create` path (no open issue exists
+        // yet), which has a known, documented, narrow check-then-act race for concurrent *first*
+        // arrivals of a brand-new fingerprint (QUESTIONS.md, 001 T018) — deliberately not
+        // exercised here, since it would make this test assert its own known gap. Every signal
+        // after the first finds the now-open issue and only ever calls `recordOccurrence`, whose
+        // atomic GREATEST/LEAST update is already proven race-safe under real concurrency.
+        const first = await ingestSignal(rulesetRepo, issueRepo, CONTEXT, providerA(0));
+        expect(first.created).toBe(true);
+
+        for (let start = 1; start < TOTAL; start += CONCURRENCY) {
+          const batch: Promise<unknown>[] = [];
+          for (let i = start; i < Math.min(start + CONCURRENCY, TOTAL); i++) {
+            const sig = i % 2 === 0 ? providerA(i) : providerB(i);
+            batch.push(ingestSignal(rulesetRepo, issueRepo, CONTEXT, sig));
+          }
+          await Promise.all(batch);
+        }
+
+        const final = await issueRepo.findById(scope(CONTEXT, { id: first.issue.id }));
+        expect(final?.occurrenceCount).toBe(BigInt(TOTAL));
+        expect(final?.firstSeenAt).toEqual(new Date(Date.UTC(2026, 0, 1, 0, 0, 0)));
+        expect(final?.lastSeenAt).toEqual(new Date(Date.UTC(2026, 0, 1, 0, 0, TOTAL - 1)));
+
+        const issueCount = await query(
+          pg,
+          `select count(*) from "issue"."issue" where fingerprint = '${first.issue.fingerprint}'`,
         );
-      }
-      expect(last.issue.occurrenceCount).toBe(200n);
-      expect(last.issue.firstSeenAt).toEqual(new Date('2026-01-01T00:00:00Z'));
-      expect(last.issue.lastSeenAt).toEqual(new Date(Date.UTC(2026, 0, 1, 0, 0, 199)));
-      // 12 000 is SC-001's own number; a load characteristic verified by 001 T026's load check,
-      // not re-replayed literally here — this proves the arithmetic, not the throughput.
-    }));
+        expect(issueCount).toBe('1');
+      }),
+    120_000,
+  );
 
   it('a genuinely different exception type creates a separate issue on the same component', () =>
     withCorrelation(newCorrelationId(), async () => {

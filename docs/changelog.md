@@ -95,6 +95,35 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.30.0 — 2026-09-27
+
+**001 T015**: SC-001 at real scale — replay 12,000 signals from two providers, confirm they
+collapse to one issue.
+
+- `ingest-signal.e2e.test.ts` replaces the 200-signal placeholder T018 left explicitly deferred
+  ("12 000 is SC-001's own number ... not re-replayed literally here") with the literal scenario.
+  Two providers modeled as genuinely different raw shapes for the same failure — a UUID request id
+  vs. a memory address plus a bare line number — that both normalise to the identical fingerprint
+  under `DEFAULT_NORMALISATION_RULES`, proving cross-provider convergence rather than
+  literal-duplicate replay.
+- 12,000 sequential awaits would take ~20+ minutes at the existing per-signal cost. Instead the
+  first signal runs alone (sidestepping the already-documented, unfixed check-then-act race on a
+  brand-new fingerprint's very first arrival), then the remaining 11,999 fire in concurrent batches
+  of 25 — safe because `recordOccurrence`'s atomic `GREATEST`/`LEAST` update is already proven
+  race-safe. Runs in ~21-37s depending on host contention.
+- Found two real bugs while building this: a batch size of 50 concurrent transactions measurably
+  exceeded Prisma's default connection pool/`maxWait` once run alongside the rest of the e2e suite
+  ("Transaction API error: Unable to start a transaction in the given time") — fixed with an
+  explicit `connection_limit` and longer `maxWait`/`timeout` for this one heavy test's client, and
+  the batch size lowered to 25. And the first attempt at the "two providers" test data had a
+  literal `"req="` prefix that no normalisation pattern strips, silently diverging the two
+  providers into different fingerprints — caught by the test itself (exactly half the expected
+  count) before it ever needed a debugger.
+- `make ci`: 47 unit files / 252 tests, 13 e2e files / 94 tests. The pre-existing, documented
+  `issue-repository.e2e.test.ts` concurrency flakiness (QUESTIONS.md) is unrelated to this task —
+  T015's own new test passed cleanly in every run this session, including three full `make ci`
+  passes where that other, unrelated test failed.
+
 ## 0.29.0 — 2026-09-27
 
 **Deep review of 001 T011–T018** (fingerprint normalisation, the issue state machine, the

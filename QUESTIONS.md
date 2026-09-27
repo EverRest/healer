@@ -156,3 +156,12 @@ machine was the last untested hypothesis before time ran out). Left as a strict,
 assertion — an honest intermittent red is more useful than a retry loop that would hide a real
 regression just as effectively as it hides this unresolved one. Whoever picks this up next: start
 from "why does retry not help" — that's the fact that rules out the most likely explanations.
+
+**New data point (001 T015 landing)**: this test now fails noticeably more often as part of the
+*full* `make ci` (test-unit, `gate-coverage-completeness`, then the whole `test-e2e` suite
+including T015's own 12 000-signal replay) than it did running `issue-repository.e2e.test.ts` in
+isolation — 3/3 full `make ci` runs failed it, versus roughly 1/2 to 1/15 in isolation depending on
+which fix variant was being measured at the time. Consistent with "something about resource
+pressure/timing under load," not with a fix that stopped working — T015's own test (25 concurrent
+transactions, real load) passed cleanly in every one of those same runs. Raises the priority of the
+"testcontainers/Docker resource allocation" hypothesis over the others already ruled out.
