@@ -95,6 +95,23 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.34.0 — 2026-09-27
+
+**Closed three tracked open items** from a QUESTIONS.md review, decided in `docs/decisions.md`.
+
+- **C-52: `apps/api` gets a global `/api/v1` prefix** on every route
+  (`app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] })`) — closes the gap between the
+  001 contract ("All paths under /api/v1") and the running server, which had no prefix at all.
+  `/health`/`/ready` stay unprefixed permanently — an orchestrator's probe path is infrastructure
+  configuration, not an API consumer. One `configureApiPrefix` helper, reused by `bootstrap()`,
+  OpenAPI generation and every e2e test that boots a real server, so they can't drift apart.
+  `POST /ingest/signals` moves to `POST /api/v1/ingest/signals`.
+- **C-50/C-51**: the T019 auth stub (`X-Tenant-Id`/`X-Provider-Id` → `forTrustedInternalUse`) and
+  the T022 reopen-window placeholder (14 days) are recorded as deliberate, tracked gaps — not
+  resolved further now, since closing either properly needs work this task set doesn't own (real
+  `ingestBearer` auth; a tenant-configuration store). No code change; the decision is the record.
+- `make ci`: 49 unit files / 262 tests, 15 e2e files / 121 tests, all gates pass.
+
 ## 0.33.0 — 2026-09-27
 
 **001 T022**: reopen and recurrence — a matching signal inside the reopen window reopens a

@@ -3,7 +3,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
 import type { IngestionDeliveryRepository, SignalQueue } from '@healer/domain-issues';
-import { createApiModule } from './main.js';
+import { configureApiPrefix, createApiModule } from './main.js';
 
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
 const noopDeliveries: IngestionDeliveryRepository = {
@@ -34,6 +34,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopDeliveries,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
+    configureApiPrefix(app);
     await app.init();
   });
 
@@ -41,7 +42,7 @@ describe('api boots and serves health/ready over HTTP', () => {
     await app?.close();
   });
 
-  it('serves GET /health', async () => {
+  it('serves GET /health, unprefixed — a liveness probe is infrastructure config, not an API consumer', async () => {
     const response = await request(app.getHttpServer()).get('/health').expect(200);
     expect(response.body).toEqual({
       status: 'ok',
@@ -58,5 +59,9 @@ describe('api boots and serves health/ready over HTTP', () => {
       runnerProtocolVersion: 1,
       dependencies: [],
     });
+  });
+
+  it('does not also serve /health under the /api/v1 prefix', async () => {
+    await request(app.getHttpServer()).get('/api/v1/health').expect(404);
   });
 });

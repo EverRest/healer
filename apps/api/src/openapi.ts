@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
 import type { IngestionDeliveryRepository, SignalQueue } from '@healer/domain-issues';
-import { createApiModule } from './main.js';
+import { configureApiPrefix, createApiModule } from './main.js';
 
 // Route shape only — neither is ever called, contract generation never sends a request.
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
@@ -30,6 +30,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopDeliveries,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
+  configureApiPrefix(app);
   const config = new DocumentBuilder().setTitle('Healer API').setVersion('0.0.0').build();
   const document = SwaggerModule.createDocument(app, config);
   await app.close();

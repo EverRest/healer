@@ -17,7 +17,7 @@
         "tags": ["Health"]
       }
     },
-    "/ingest/signals": {
+    "/api/v1/ingest/signals": {
       "post": {
         "operationId": "IngestController_ingest",
         "parameters": [

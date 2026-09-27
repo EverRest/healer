@@ -227,10 +227,9 @@ is no longer true.
   tenant that wrote it (via the BullMQ job's own `tenantId` field) — real proof, not a presence
   filter that would pass regardless of an actual leak. `gate-isolation`'s detection regex now
   recognizes either helper by name.
-- **`/api/v1` URL prefix — still open, not decided.** The OpenAPI contract's `servers` entry says
-  `/api/v1`; `apps/api` has never had a global prefix (`/health`, `/ready` are bare, and now so is
-  `/ingest/signals`). Left as-is rather than guessed at, since changing it is a cross-cutting,
-  contract-visible decision that should cover all routes at once, not be decided per-endpoint.
+- **`/api/v1` URL prefix — was left open here, since decided.** See decisions.md C-52: a global
+  `app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] })`, applied consistently in
+  `bootstrap()`, OpenAPI generation and every e2e test that boots a real server.
 - **e2e test file placement**: `apps/api/ingest.e2e.test.ts` sits beside `src/`, not inside it.
   `apps/api/tsconfig.json`'s `rootDir` is `src`, so a file under `src/` cannot import
   `test/containers.ts` (outside that rootDir) without breaking `tsc --build`. Every other

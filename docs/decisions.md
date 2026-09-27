@@ -155,6 +155,18 @@ Left deferred, not decided (see `QUESTIONS.md`): T037's ADR-in-the-same-change-s
 for Phase 13's base-revision diff infra), T066's secret manager choice (no ADR yet), and T067/T068's
 `packages/llm` provider adapter (waits for a real build, not a throwaway minimal one).
 
+## 001 T019–T022 implementation gaps, closed (2026-09-27)
+
+Two items the agent flagged in `QUESTIONS.md` as implementation-time judgment calls while building
+`POST /ingest/signals` and reopen/recurrence — recorded here since both are binding beyond the task
+that raised them.
+
+| ID | Decision | Why |
+|----|----------|-----|
+| C-50 | `POST /ingest/signals`'s tenant and provider identity (`X-Tenant-Id`, `X-Provider-Id` headers → `TenantContext.forTrustedInternalUse`) is an **accepted, tracked stub**, not a resolved question. It stays exactly as built — no throwaway auth layer invented ahead of a real design — until 001/002 land the real `ingestBearer` credential, at which point both headers are replaced by claims decoded from that credential | Building real bearer-token verification now would be inventing an auth subsystem with no spec behind it (AGENTS.md: new pattern → ADR/design first). The stub is already maximally honest about the gap: unverified, headers named for what they stand in for, a `TODO(security)` comment on the controller method naming exactly what must change and why. Closing this properly is 001/002's job, not a patch onto this endpoint |
+| C-51 | The reopen window (`REOPEN_WINDOW_MS = 14 days`, `ingest-signal.ts`) stays a hardcoded placeholder, not configuration, until a tenant-configuration store exists to hold it | `docs/stage-0.md` S0-7 already names "reopen window" as a value this spec deliberately left unset pending S0-1's real incident-cadence data — building per-tenant configuration plumbing now would be threading a setting through the stack for a number nobody has measured yet. Revisit together with S0-1, not before |
+| C-52 | **`apps/api` gets a global `/api/v1` prefix on every route** (`app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] })`), closing the gap between the 001 contract ("All paths under /api/v1") and the running server (which had no prefix at all until now). `/health` and `/ready` are the one deliberate exception — permanently, not just until someone adds a second business endpoint | An orchestrator's liveness/readiness probe path is infrastructure configuration, not an API consumer — a future `/api/v2` must never mean reconfiguring every load balancer. Applied once, in `configureApiPrefix`, and reused by `bootstrap()`, OpenAPI generation and every e2e test that boots a real server, so contract, tests and production can never quietly disagree about which paths carry the prefix |
+
 ## Deliberately unset
 
 `false-fix rate`, `30-day revert rate`, `per-incident cost ceiling`, escalation attempt cap —

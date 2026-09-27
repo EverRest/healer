@@ -19,7 +19,7 @@ import {
   startRedis,
   type StartedPostgres,
 } from '../../test/containers.js';
-import { configureIngestBodyLimit, createApiModule } from './src/main.js';
+import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
 
 /**
  * Boots a real Redis (first consumer of `startRedis`, 012 T003), a real Postgres (for the
@@ -55,7 +55,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
   /** Every test below uses its own delivery id unless it deliberately reuses one. */
   const post = (tenantId: string, body: unknown, deliveryId = randomUUID()) =>
     request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Tenant-Id', tenantId)
       .set('X-Delivery-Id', deliveryId)
       .set('X-Provider-Id', 'sentry')
@@ -76,6 +76,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       deliveries,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
+    configureApiPrefix(app);
     configureIngestBodyLimit(app);
     await app.init();
   }, 180_000);
@@ -111,7 +112,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
   it("scopes the enqueued job to the caller's tenant header, never mixing tenants", async () => {
     const inspectQueue = createQueue('ingestion', { url: redis.url });
     try {
-      await assertTenantScopedEnqueue(app, 'POST', '/ingest/signals', {
+      await assertTenantScopedEnqueue(app, 'POST', '/api/v1/ingest/signals', {
         tenantA: '00000000-0000-0000-8000-0000000000a2',
         tenantB: '00000000-0000-0000-8000-0000000000a3',
         tenantHeader: 'X-Tenant-Id',
@@ -160,7 +161,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
 
   it('rejects a request with no X-Tenant-Id header', async () => {
     await request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Delivery-Id', randomUUID())
       .set('X-Provider-Id', 'sentry')
       .send({ signals: [validSignal()] })
@@ -169,7 +170,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
 
   it('rejects a request with no X-Delivery-Id header', async () => {
     await request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Tenant-Id', '00000000-0000-0000-8000-0000000000aa')
       .set('X-Provider-Id', 'sentry')
       .send({ signals: [validSignal()] })
@@ -178,7 +179,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
 
   it('rejects a request with no X-Provider-Id header', async () => {
     await request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Tenant-Id', '00000000-0000-0000-8000-0000000000ab')
       .set('X-Delivery-Id', randomUUID())
       .send({ signals: [validSignal()] })
@@ -230,14 +231,14 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
     const deliveryId = randomUUID();
 
     const first = await request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Tenant-Id', tenantId)
       .set('X-Delivery-Id', deliveryId)
       .set('X-Provider-Id', 'sentry')
       .send({ signals: [validSignal()] })
       .expect(202);
     const second = await request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Tenant-Id', tenantId)
       .set('X-Delivery-Id', deliveryId)
       .set('X-Provider-Id', 'datadog')
@@ -272,6 +273,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopDeliveries,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
+    configureApiPrefix(app);
     configureIngestBodyLimit(app);
     await app.init();
   });
@@ -283,7 +285,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
   it('returns 503 within a bounded time instead of hanging', async () => {
     const startedAt = Date.now();
     await request(app.getHttpServer())
-      .post('/ingest/signals')
+      .post('/api/v1/ingest/signals')
       .set('X-Tenant-Id', '00000000-0000-0000-8000-0000000000a9')
       .set('X-Delivery-Id', randomUUID())
       .set('X-Provider-Id', 'sentry')

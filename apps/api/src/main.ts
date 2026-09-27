@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { Module, type Type } from '@nestjs/common';
+import { Module, type INestApplication, type Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { createLogger, loadConfig } from '@healer/shared';
@@ -29,6 +29,17 @@ const BUILD = 'local';
  */
 export function configureIngestBodyLimit(app: NestExpressApplication): void {
   app.useBodyParser('json', { limit: '5mb' });
+}
+
+/**
+ * Every 001 route lives under `/api/v1` — the contract's own words
+ * (`contracts/openapi.yaml`: "All paths under /api/v1"). Health and readiness stay unprefixed:
+ * an orchestrator's liveness/readiness probe is infrastructure configuration, not an API
+ * consumer, and a future `/api/v2` must never mean reconfiguring every load balancer's probe
+ * path (decisions.md C-52).
+ */
+export function configureApiPrefix(app: INestApplication): void {
+  app.setGlobalPrefix('api/v1', { exclude: ['health', 'ready'] });
 }
 
 /**
@@ -73,6 +84,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaIngestionDeliveryRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
+  configureApiPrefix(app);
   configureIngestBodyLimit(app);
   await app.listen(config.HTTP_PORT);
   logger.info({ port: config.HTTP_PORT, version: VERSION }, 'api listening');
