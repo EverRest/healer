@@ -149,6 +149,28 @@ here, and an `audit_entry` reaches them through `agent_run_id`.
 Tool call arguments are stored as digests, not values: arguments routinely contain file paths,
 identifiers and excerpts, and this table is read by support.
 
+## Events
+
+### outbox
+
+The transactional outbox (FR-031, consumed by 001 FR-014, `packages/events`). Written in the same
+transaction as the state change it describes, so a rolled-back transition is never observed
+downstream and a committed one is never lost; published to the broker afterwards, from this table
+— never "publish after commit" from application code, which fails silently exactly when the
+process dies between the two.
+
+`id`, `tenant_id`, `name`, `subject_id` (the aggregate the event is about — an issue, a run, a
+tenant), `correlation_id`, `payload` jsonb, `occurred_at`, `published_at?`, `attempts`,
+`last_error?`.
+
+This feature (012 T012) built only the pure enqueue/drain logic (`packages/events/src/outbox.ts`);
+this table is its first real backing store, added when 001 T013 became its first real caller —
+recorded here rather than left implicit, since a table with no entry in this document does not
+exist as far as FR-015's own gate is concerned.
+
+Index `(tenant_id, published_at, occurred_at)` — unpublished-first, oldest-first, exactly
+`claimUnpublished`'s query shape.
+
 ## Not tables
 
 Five Key Entities of [spec.md](spec.md) are deliberately not persisted here, because each would be a

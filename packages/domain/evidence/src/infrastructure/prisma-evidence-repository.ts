@@ -1,7 +1,9 @@
 import { NotFoundError, type TenantScoped } from '@healer/shared';
 import { Prisma, type Evidence as EvidenceRow, type PrismaClient } from '@healer/prisma-client';
+import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { EvidenceRepository, NewEvidence } from '../domain/repository.js';
 import type { Evidence, EvidenceExcerpt } from '../domain/types.js';
+import { evidenceDetachedEvent, evidenceRecordedEvent } from '../domain/events.js';
 
 /** Reconstructs the `excerpt`/`excerptTruncated` union from the two flat columns Postgres holds. */
 export function toDomain(row: EvidenceRow): Evidence {
@@ -31,24 +33,30 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async record(evidence: TenantScoped<NewEvidence>): Promise<Evidence> {
-    const row = await this.prisma.evidence.create({
-      data: {
-        id: evidence.id,
-        tenantId: evidence.tenantId,
-        issueId: evidence.issueId,
-        type: evidence.type,
-        sourceSystem: evidence.sourceSystem,
-        sourceRef: evidence.sourceRef,
-        sourceLabel: evidence.sourceLabel,
-        excerpt: evidence.excerpt,
-        excerptTruncated: evidence.excerptTruncated,
-        payload: evidence.payload as Prisma.InputJsonValue,
-        producedByStep: evidence.producedByStep,
-        observedAt: evidence.observedAt,
-        expiresAt: evidence.expiresAt,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.evidence.create({
+        data: {
+          id: evidence.id,
+          tenantId: evidence.tenantId,
+          issueId: evidence.issueId,
+          type: evidence.type,
+          sourceSystem: evidence.sourceSystem,
+          sourceRef: evidence.sourceRef,
+          sourceLabel: evidence.sourceLabel,
+          excerpt: evidence.excerpt,
+          excerptTruncated: evidence.excerptTruncated,
+          payload: evidence.payload as Prisma.InputJsonValue,
+          producedByStep: evidence.producedByStep,
+          observedAt: evidence.observedAt,
+          expiresAt: evidence.expiresAt,
+        },
+      });
+      const recorded = toDomain(row);
+      // Same transaction as the row it describes (001 T013, 012 FR-031) — see
+      // PrismaIssueRepository.create() for the guarantee this exists to keep.
+      await enqueue(new PrismaOutboxTransaction(tx), evidenceRecordedEvent(recorded));
+      return recorded;
     });
-    return toDomain(row);
   }
 
   async findById(where: TenantScoped<{ readonly id: string }>): Promise<Evidence | null> {
@@ -61,17 +69,22 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
   }
 
   async detach(where: TenantScoped<{ readonly id: string }>): Promise<Evidence> {
-    try {
-      const row = await this.prisma.evidence.update({
-        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-        data: { refState: 'detached' },
-      });
-      return toDomain(row);
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-        throw new NotFoundError('Evidence');
+    return this.prisma.$transaction(async (tx) => {
+      let row: EvidenceRow;
+      try {
+        row = await tx.evidence.update({
+          where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
+          data: { refState: 'detached' },
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+          throw new NotFoundError('Evidence');
+        }
+        throw error;
       }
-      throw error;
-    }
+      const detached = toDomain(row);
+      await enqueue(new PrismaOutboxTransaction(tx), evidenceDetachedEvent(detached));
+      return detached;
+    });
   }
 }

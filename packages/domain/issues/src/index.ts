@@ -1,4 +1,5 @@
 export * from './domain/issue.js';
+export * from './domain/events.js';
 export * from './domain/normalisation-ruleset.js';
 export * from './domain/repository.js';
 export * from './domain/state-machine.js';

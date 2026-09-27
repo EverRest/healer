@@ -57,3 +57,19 @@ matching signal also revive a `stale` issue back to `investigating`, the same wa
 signal traffic should un-stale it automatically. If yes, T018 needs to add that edge to the graph
 (and decide whether the cause is `ingestion`, same as the resolved-reopen edge). If no, a stale
 issue only leaves that state through a human action — say so and this note can be deleted.
+
+## 001 T013 — seven of the eleven contract events have no publisher yet
+
+Not decided, and deliberately not built ahead of the task that owns each one.
+`contracts/events.md` names eleven events this feature publishes; T013 wired the outbox for the
+four with a real producing operation today: `IssueDetected`/`IssueStateChanged` (001 T012's
+`create`/`transition`) and `EvidenceRecorded`/`EvidenceDetached` (001 T006's `record`/`detach`).
+
+The other seven have no operation to hang a publish call off yet, because the operation itself
+doesn't exist: `IssueReopened`/`IssueRecurred` (T018, matching-signal attach), `IssueRelated`
+(deterministic correlation, no task number assigned in this phase), `IssueMerged`/`IssueUnmerged`
+(T049), `IssueStale` (T051), `IssueResolved` (needs 008/010's verification events to consume, per
+events.md's "consumes" table), `IssueDeleted` (T053). Each publisher gets built as part of the
+task that builds its producing operation, following the same pattern `events.ts` in
+`packages/domain/issues`/`packages/domain/evidence` already establishes — not invented here ahead
+of the operation it would describe.

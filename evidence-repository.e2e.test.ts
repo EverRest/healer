@@ -4,7 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import { PrismaEvidenceRepository, type NewEvidence } from '@healer/domain-evidence';
-import { NotFoundError, TenantContext, scope } from '@healer/shared';
+import {
+  NotFoundError,
+  TenantContext,
+  newCorrelationId,
+  scope,
+  withCorrelation,
+} from '@healer/shared';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from './test/containers.js';
 
 /**
@@ -78,62 +84,67 @@ describe('PrismaEvidenceRepository (001 T006, FR-010, R-03)', () => {
     await pg?.stop();
   });
 
-  it('records evidence and reads it back for the owning tenant', async () => {
-    const input = newEvidence();
-    const recorded = await repo.record(scope(CONTEXT, input));
-    expect(recorded).toMatchObject({
-      id: input.id,
-      tenantId: TENANT_ID,
-      issueId: ISSUE_ID,
-      excerpt: 'a captured excerpt',
-      excerptTruncated: false,
-      refState: 'linked',
-    });
+  it('records evidence and reads it back for the owning tenant', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      const recorded = await repo.record(scope(CONTEXT, input));
+      expect(recorded).toMatchObject({
+        id: input.id,
+        tenantId: TENANT_ID,
+        issueId: ISSUE_ID,
+        excerpt: 'a captured excerpt',
+        excerptTruncated: false,
+        refState: 'linked',
+      });
 
-    const found = await repo.findById(scope(CONTEXT, { id: input.id }));
-    expect(found).toMatchObject({ id: input.id, sourceLabel: 'from logs' });
-  });
+      const found = await repo.findById(scope(CONTEXT, { id: input.id }));
+      expect(found).toMatchObject({ id: input.id, sourceLabel: 'from logs' });
+    }));
 
-  it('never returns another tenant’s evidence — the query itself is tenant-scoped, not a post-fetch check', async () => {
-    const input = newEvidence();
-    await repo.record(scope(CONTEXT, input));
+  it('never returns another tenant’s evidence — the query itself is tenant-scoped, not a post-fetch check', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      await repo.record(scope(CONTEXT, input));
 
-    const foundByOtherTenant = await repo.findById(scope(OTHER_CONTEXT, { id: input.id }));
-    expect(foundByOtherTenant).toBeNull();
-  });
+      const foundByOtherTenant = await repo.findById(scope(OTHER_CONTEXT, { id: input.id }));
+      expect(foundByOtherTenant).toBeNull();
+    }));
 
   it('returns null for an id that does not exist at all', async () => {
     const found = await repo.findById(scope(CONTEXT, { id: randomUUID() }));
     expect(found).toBeNull();
   });
 
-  it('detach moves ref_state linked -> detached and nothing else changes', async () => {
-    const input = newEvidence();
-    await repo.record(scope(CONTEXT, input));
+  it('detach moves ref_state linked -> detached and nothing else changes', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      await repo.record(scope(CONTEXT, input));
 
-    const detached = await repo.detach(scope(CONTEXT, { id: input.id }));
-    expect(detached).toMatchObject({
-      id: input.id,
-      refState: 'detached',
-      excerpt: input.excerpt,
-      sourceLabel: input.sourceLabel,
-    });
+      const detached = await repo.detach(scope(CONTEXT, { id: input.id }));
+      expect(detached).toMatchObject({
+        id: input.id,
+        refState: 'detached',
+        excerpt: input.excerpt,
+        sourceLabel: input.sourceLabel,
+      });
 
-    const found = await repo.findById(scope(CONTEXT, { id: input.id }));
-    expect(found?.refState).toBe('detached');
-  });
+      const found = await repo.findById(scope(CONTEXT, { id: input.id }));
+      expect(found?.refState).toBe('detached');
+    }));
 
-  it('detach throws NotFoundError rather than leaking whether another tenant’s row exists', async () => {
-    const input = newEvidence();
-    await repo.record(scope(CONTEXT, input));
+  it('detach throws NotFoundError rather than leaking whether another tenant’s row exists', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      await repo.record(scope(CONTEXT, input));
 
-    await expect(repo.detach(scope(OTHER_CONTEXT, { id: input.id }))).rejects.toBeInstanceOf(
-      NotFoundError,
-    );
-  });
+      await expect(repo.detach(scope(OTHER_CONTEXT, { id: input.id }))).rejects.toBeInstanceOf(
+        NotFoundError,
+      );
+    }));
 
-  it('rejects recording evidence against another tenant’s issue — the composite FK, not application discipline (FR-048)', async () => {
-    const input = newEvidence({ issueId: ISSUE_ID });
-    await expect(repo.record(scope(OTHER_CONTEXT, input))).rejects.toThrow();
-  });
+  it('rejects recording evidence against another tenant’s issue — the composite FK, not application discipline (FR-048)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence({ issueId: ISSUE_ID });
+      await expect(repo.record(scope(OTHER_CONTEXT, input))).rejects.toThrow();
+    }));
 });

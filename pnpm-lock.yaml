@@ -125,6 +125,9 @@ importers:
 
   packages/domain/evidence:
     dependencies:
+      '@healer/events':
+        specifier: workspace:*
+        version: link:../../events
       '@healer/prisma-client':
         specifier: workspace:*
         version: link:../../prisma-client
@@ -134,6 +137,9 @@ importers:
 
   packages/domain/issues:
     dependencies:
+      '@healer/events':
+        specifier: workspace:*
+        version: link:../../events
       '@healer/prisma-client':
         specifier: workspace:*
         version: link:../../prisma-client
@@ -153,6 +159,9 @@ importers:
 
   packages/events:
     dependencies:
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../prisma-client
       '@healer/shared':
         specifier: workspace:*
         version: link:../shared

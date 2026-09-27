@@ -14,7 +14,7 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   extensions = [vector, pg_trgm]
-  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit"]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events"]
 }
 
 // ─────────────────────────────── workflow execution ───────────────────────────────
@@ -122,6 +122,32 @@ enum CallbackKind {
 
   @@map("callback_kind")
   @@schema("workflow")
+}
+
+// ────────────────────────────────────── outbox ─────────────────────────────────────
+
+/// The transactional outbox (012 FR-031, consumed by 001 FR-014, `packages/events`). Written in
+/// the same transaction as the state change it describes; published to the broker afterwards,
+/// from this table — never "publish after commit" from application code, which fails silently
+/// exactly when the process dies between the two. 012 T012 built only the pure logic
+/// (`packages/events/src/outbox.ts`); this table is its first real backing store (001 T013).
+model Outbox {
+  id            String    @id @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  name          String
+  /// The aggregate this is about — an issue, a run, a tenant (`DomainEvent.subjectId`).
+  subjectId     String    @map("subject_id")
+  correlationId String    @map("correlation_id")
+  payload       Json
+  occurredAt    DateTime  @map("occurred_at") @db.Timestamptz(6)
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz(6)
+  attempts      Int       @default(0)
+  lastError     String?   @map("last_error")
+
+  // Unpublished-first, oldest-first — exactly `claimUnpublished`'s query shape.
+  @@index([tenantId, publishedAt, occurredAt])
+  @@map("outbox")
+  @@schema("events")
 }
 
 // ───────────────────────────────────── prompts ─────────────────────────────────────

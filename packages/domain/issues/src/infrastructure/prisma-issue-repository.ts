@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { NotFoundError, type TenantScoped } from '@healer/shared';
 import { Prisma, type Issue as IssueRow, type PrismaClient } from '@healer/prisma-client';
+import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { Issue } from '../domain/issue.js';
+import { issueDetectedEvent, issueStateChangedEvent } from '../domain/events.js';
 import type { IssueRepository, NewIssue } from '../domain/repository.js';
 import { transitionIssue, type IssueEventCause } from '../domain/state-machine.js';
 
@@ -28,22 +30,28 @@ export class PrismaIssueRepository implements IssueRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async create(issue: TenantScoped<NewIssue>): Promise<Issue> {
-    const row = await this.prisma.issue.create({
-      data: {
-        id: issue.id,
-        tenantId: issue.tenantId,
-        kind: issue.kind,
-        componentId: issue.componentId ?? null,
-        environment: issue.environment,
-        severity: issue.severity,
-        state: 'detected',
-        fingerprint: issue.fingerprint,
-        rulesetVersion: issue.rulesetVersion,
-        firstSeenAt: issue.firstSeenAt,
-        lastSeenAt: issue.lastSeenAt,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.issue.create({
+        data: {
+          id: issue.id,
+          tenantId: issue.tenantId,
+          kind: issue.kind,
+          componentId: issue.componentId ?? null,
+          environment: issue.environment,
+          severity: issue.severity,
+          state: 'detected',
+          fingerprint: issue.fingerprint,
+          rulesetVersion: issue.rulesetVersion,
+          firstSeenAt: issue.firstSeenAt,
+          lastSeenAt: issue.lastSeenAt,
+        },
+      });
+      const created = toDomain(row);
+      // Same transaction as the row it describes (001 T013, 012 FR-031) — a rolled-back create
+      // is never observed downstream, and a committed one is never lost.
+      await enqueue(new PrismaOutboxTransaction(tx), issueDetectedEvent(created));
+      return created;
     });
-    return toDomain(row);
   }
 
   async findById(where: TenantScoped<{ readonly id: string }>): Promise<Issue | null> {
@@ -90,6 +98,8 @@ export class PrismaIssueRepository implements IssueRepository {
           observedAt: now,
         },
       });
+      // Same transaction as issue_event above (001 T013, 012 FR-031) — see create().
+      await enqueue(new PrismaOutboxTransaction(tx), issueStateChangedEvent(where.tenantId, event));
       return toDomain(updated);
     });
   }

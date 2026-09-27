@@ -4,7 +4,13 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import { PrismaIssueRepository, type NewIssue } from '@healer/domain-issues';
-import { NotFoundError, TenantContext, scope } from '@healer/shared';
+import {
+  NotFoundError,
+  TenantContext,
+  newCorrelationId,
+  scope,
+  withCorrelation,
+} from '@healer/shared';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from './test/containers.js';
 
 /**
@@ -63,74 +69,94 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
     await pg?.stop();
   });
 
-  it('creates an issue in detected and reads it back for the owning tenant', async () => {
-    const input = newIssue();
-    const created = await repo.create(scope(CONTEXT, input));
-    expect(created).toMatchObject({
-      id: input.id,
-      tenantId: TENANT_ID,
-      state: 'detected',
-      fingerprint: input.fingerprint,
-      rulesetVersion: 1,
-      occurrenceCount: 1n,
-    });
+  it('creates an issue in detected and reads it back for the owning tenant', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      const created = await repo.create(scope(CONTEXT, input));
+      expect(created).toMatchObject({
+        id: input.id,
+        tenantId: TENANT_ID,
+        state: 'detected',
+        fingerprint: input.fingerprint,
+        rulesetVersion: 1,
+        occurrenceCount: 1n,
+      });
 
-    const found = await repo.findById(scope(CONTEXT, { id: input.id }));
-    expect(found).toMatchObject({ id: input.id, state: 'detected' });
-  });
+      const found = await repo.findById(scope(CONTEXT, { id: input.id }));
+      expect(found).toMatchObject({ id: input.id, state: 'detected' });
+    }));
 
-  it('never returns another tenant’s issue — the query itself is tenant-scoped', async () => {
-    const input = newIssue();
-    await repo.create(scope(CONTEXT, input));
+  it('never returns another tenant’s issue — the query itself is tenant-scoped', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
 
-    const foundByOtherTenant = await repo.findById(scope(OTHER_CONTEXT, { id: input.id }));
-    expect(foundByOtherTenant).toBeNull();
-  });
+      const foundByOtherTenant = await repo.findById(scope(OTHER_CONTEXT, { id: input.id }));
+      expect(foundByOtherTenant).toBeNull();
+    }));
 
   it('returns null for an id that does not exist at all', async () => {
     expect(await repo.findById(scope(CONTEXT, { id: randomUUID() }))).toBeNull();
   });
 
-  it('transition moves the state and records the issue_event in one operation', async () => {
-    const input = newIssue();
-    await repo.create(scope(CONTEXT, input));
+  it('transition moves the state and records the issue_event in one operation', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
 
-    const moved = await repo.transition(
-      scope(CONTEXT, { id: input.id }),
-      'investigating',
-      'agent',
-      'context-resolver',
-    );
-    expect(moved.state).toBe('investigating');
+      const moved = await repo.transition(
+        scope(CONTEXT, { id: input.id }),
+        'investigating',
+        'agent',
+        'context-resolver',
+      );
+      expect(moved.state).toBe('investigating');
 
-    const events = await query(
-      pg,
-      `select from_state, to_state, cause, actor_ref from "issue"."issue_event"
-       where issue_id = '${input.id}' and type = 'state_changed'`,
-    );
-    expect(events).toBe('detected|investigating|agent|context-resolver');
-  });
+      const events = await query(
+        pg,
+        `select from_state, to_state, cause, actor_ref from "issue"."issue_event"
+         where issue_id = '${input.id}' and type = 'state_changed'`,
+      );
+      expect(events).toBe('detected|investigating|agent|context-resolver');
+    }));
 
-  it('transition rejects an undeclared edge — the graph is the authority, not the caller', async () => {
-    const input = newIssue();
-    await repo.create(scope(CONTEXT, input));
+  it('transition rejects an undeclared edge — the graph is the authority, not the caller', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
 
-    await expect(
-      repo.transition(scope(CONTEXT, { id: input.id }), 'acting', 'human', 'pavlo'),
-    ).rejects.toThrow(/detected -> acting is not a declared transition/);
-  });
+      await expect(
+        repo.transition(scope(CONTEXT, { id: input.id }), 'acting', 'human', 'pavlo'),
+      ).rejects.toThrow(/detected -> acting is not a declared transition/);
+    }));
 
-  it('transition throws NotFoundError rather than leaking whether another tenant’s issue exists', async () => {
-    const input = newIssue();
-    await repo.create(scope(CONTEXT, input));
+  it('transition throws NotFoundError rather than leaking whether another tenant’s issue exists', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
 
-    await expect(
-      repo.transition(scope(OTHER_CONTEXT, { id: input.id }), 'investigating', 'agent', 'x'),
-    ).rejects.toBeInstanceOf(NotFoundError);
-  });
+      await expect(
+        repo.transition(scope(OTHER_CONTEXT, { id: input.id }), 'investigating', 'agent', 'x'),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    }));
 
-  it('rejects creating an issue against a ruleset_version that was never published — the FK (001 T011)', async () => {
-    const input = newIssue({ rulesetVersion: 999 });
-    await expect(repo.create(scope(CONTEXT, input))).rejects.toThrow();
-  });
+  it('rejects creating an issue against a ruleset_version that was never published — the FK (001 T011)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue({ rulesetVersion: 999 });
+      await expect(repo.create(scope(CONTEXT, input))).rejects.toThrow();
+    }));
+
+  it('publishing IssueDetected and IssueStateChanged writes the outbox row in the same transaction as the mutation', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+
+      const names = await query(
+        pg,
+        `select string_agg(name, ',' order by occurred_at) from "events"."outbox"
+         where subject_id = '${input.id}' and tenant_id = '${TENANT_ID}'`,
+      );
+      expect(names).toBe('IssueDetected,IssueStateChanged');
+    }));
 });

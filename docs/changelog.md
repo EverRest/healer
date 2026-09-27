@@ -95,6 +95,32 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.25.0 — 2026-09-27
+
+**001 T013**: outbox publishers for the events in contracts/events.md (FR-014, 012 T012).
+
+- 012 T012 built only the pure `enqueue`/`drain` logic; there was no Prisma-backed table anywhere
+  in the codebase. Closed that gap: `events.outbox` (migration `20260927030000`, a new schema —
+  documented in 012's own data-model.md, which had never recorded the table at all) plus
+  `PrismaOutboxTransaction`/`PrismaOutboxStore` (`packages/events/src/infrastructure/`).
+- Wired for the four events with a real producing operation today: `IssueDetected` /
+  `IssueStateChanged` (001 T012's `create`/`transition`) and `EvidenceRecorded` /
+  `EvidenceDetached` (001 T006's `record`/`detach`) — each repository method now runs inside
+  `$transaction`, so the outbox row commits or rolls back with the mutation it describes, never
+  published after the fact from application code.
+- `correlationId` comes from `@healer/shared`'s ambient `currentCorrelationId()`, never invented
+  per event — its own doc comment already warns that minting one here would fake a second trace
+  for the same work. Publishing outside a correlated scope throws.
+- Real gap found and fixed while landing this: the event builders (`events.ts` in both
+  `packages/domain/issues` and `packages/domain/evidence`) had only e2e coverage, which
+  `gate-coverage-completeness`'s unit-only (`all: false`) report cannot see — a change that broke
+  one silently would have passed `make test-unit`. Added proper unit tests for both.
+- The other seven contract events (`IssueReopened`, `IssueRecurred`, `IssueRelated`,
+  `IssueMerged`/`Unmerged`, `IssueStale`, `IssueResolved`, `IssueDeleted`) have no producing
+  operation yet and are not wired — flagged in `QUESTIONS.md`, wired when the task that builds
+  each operation lands (T018, T049, T051, T053 and friends).
+- `make ci` green cold-cache: 76 e2e tests, all 16 gates.
+
 ## 0.24.0 — 2026-09-27
 
 **001 T012**: `domain/issues` — `Issue`, the persisted state machine over data-model.md's nine

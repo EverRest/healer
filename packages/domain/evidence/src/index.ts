@@ -1,5 +1,6 @@
 export * from './domain/types.js';
 export * from './domain/excerpt.js';
+export * from './domain/events.js';
 export * from './domain/repository.js';
 export * from './domain/link-repository.js';
 export * from './domain/evidence-required.js';
