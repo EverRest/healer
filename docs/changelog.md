@@ -95,6 +95,23 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.26.0 — 2026-09-27
+
+**001 T014**: tenant scoping on every repository method — a query without `TenantContext` fails
+to type-check (FR-015, 012 T010). Phase 2 (Foundational) is now complete.
+
+- Already true by construction: every 001 repository method built so far takes 012 T010's
+  `TenantScoped<W>` (unexported brand, `scope()` the sole producer), never a plain filter.
+  `NormalisationRulesetRepository` is the one deliberate exception — its table has no `tenant_id`
+  column at all (001 T011: one ruleset governs every tenant).
+- This task's job was proving the claim, not building new code: `repository.test.ts` for both
+  `packages/domain/issues` and `packages/domain/evidence`, plus `link-repository.test.ts` —
+  each a real (never-invoked) stub of the interface with `@ts-expect-error` on every method,
+  checked by `tsc --build` (which fails with "unused directive" the day any method stops
+  requiring `TenantScoped`). Stronger than `packages/shared`'s existing `tenancy.test.ts`, which
+  only proves the primitive against a stand-in function, not a real repository interface.
+- `make ci` green cold-cache: 76 e2e tests, all 16 gates.
+
 ## 0.25.0 — 2026-09-27
 
 **001 T013**: outbox publishers for the events in contracts/events.md (FR-014, 012 T012).
