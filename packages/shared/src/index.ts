@@ -5,3 +5,4 @@ export * from './tenancy/index.js';
 export * from './errors/index.js';
 export * from './tracing/index.js';
 export * from './tracing/otel.js';
+export * from './step-context/index.js';

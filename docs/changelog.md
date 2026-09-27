@@ -95,6 +95,51 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.22.0 — 2026-09-27
+
+**001 T009–T010**: no conclusion without evidence (FR-009, quickstart 9) — the last of Phase 2's
+three foundational guarantees (append-only, producer attribution, this one).
+
+- **Found and resolved a real design conflict between 012 and 001, not a detail**: `gate-evidence`
+  (012 T031, built before 001 existed) checked a conclusion model for a single non-nullable
+  `evidenceId` column. 001's actual data model has no such column — `evidence_link` is a
+  many-to-many join keyed by `(conclusion_type, conclusion_id)`, since a conclusion can have
+  several supporting links and a piece of evidence can support several conclusions. Rewrote
+  `gate-evidence` to check what a static schema scan actually can — that a `@conclusion <type>`
+  tag names a real `ConclusionType` value, the list's one authority — and left the genuinely
+  runtime question (does this conclusion actually have a link) to the new `assertHasEvidence` and,
+  later, `check:evidence-coverage` (SC-002, T033).
+- `assertHasEvidence` (`packages/domain/evidence/src/domain/evidence-required.ts`): depends only
+  on `EvidenceLinkRepository`'s interface, throws `EvidenceRequiredError` — quickstart 9's
+  `EVIDENCE_REQUIRED` — when a conclusion has zero links. `EvidenceLinkRepository` gained the one
+  read method it needed (`hasLinks`) alongside the existing write-only `write`.
+- Verified against a live Postgres: a conclusion with no links rejected, one with a real link
+  passes, and one conclusion's link is never confused with another's of the same type, 3/3.
+- `make ci` green cold-cache: 38 unit files / 215 tests, 8 e2e files / 55 tests, all 16 gates.
+
+## 0.21.0 — 2026-09-27
+
+**001 T007–T008**: producer attribution on `evidence_link` (FR-008, R-06) — "a link created by a
+step other than the one that observed the fact is detectable," enforced independently at the
+database and at the repository, same pattern as the append-only guarantee.
+
+- New migration `20260927010000_step_attribution` (not an edit to the already-pushed 001
+  migration — that's now closed off by the standing rule in `.claude/rules/prisma-migrations.md`):
+  a `BEFORE INSERT` trigger on `evidence_link` rejects a row whose `asserted_by_step` doesn't
+  match `healer.current_step`, a transaction-local `set_config` value (same scoping as
+  `healer.privileged_write`). No step declared at all is rejected too — an anonymous write has no
+  attribution to falsify. `step-attribution.e2e.test.ts` proves all three cases against a live
+  Postgres, 3/3.
+- `@healer/shared` gained a `step-context` module: `withStep`/`currentStep`, an `AsyncLocalStorage`
+  shaped exactly like the existing `withCorrelation`/`currentCorrelationId`. `PrismaEvidenceLinkRepository.write`
+  reads the ambient step and refuses before ever touching the database if none is set.
+- `NewEvidenceLink` has no `assertedByStep` field — not unused, structurally absent, so the
+  "attributed to a different step" scenario the database rejects isn't expressible through the
+  repository at all, only through raw SQL bypassing it entirely. `evidence-link-repository.e2e.test.ts`
+  proves the legitimate `withStep(...)` path and that two different steps are each attributed to
+  themselves, 3/3.
+- `make ci` green cold-cache: 37 unit files / 213 tests, 8 e2e files / 52 tests, all 16 gates.
+
 ## 0.20.0 — 2026-09-27
 
 **001 T006**: the append-only evidence repository — `PrismaEvidenceRepository`, the first real

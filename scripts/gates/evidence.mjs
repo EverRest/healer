@@ -1,32 +1,52 @@
 #!/usr/bin/env node
-// `gate-evidence` (012 T031, 001 FR-009, FR-016a): no persisted conclusion type may have a
-// nullable evidence reference. The rule belongs to 001 ("evidence or silence"); this gate only
-// enforces it mechanically against the schema.
+// `gate-evidence` (012 T031, 001 FR-009, T010, FR-016a): every persisted conclusion must be
+// registered against a real member of the closed `ConclusionType` list — the same list
+// `evidence_link.conclusion_type` is drawn from. That list is the one authority (a closed list has
+// exactly one authority, docs/patterns.md): this gate cannot see whether a given conclusion row
+// actually has an `evidence_link` (that's a data question, not a schema question — checked at
+// runtime by `assertHasEvidence`, packages/domain/evidence, and continuously in production by
+// `check:evidence-coverage`, SC-002), but it can catch a conclusion table wired to a type that
+// isn't in the list at all — the same class of drift a typo would otherwise ship silently.
 //
-// A model opts in by a `/// @conclusion` doc comment directly above it in schema.prisma — no
-// conclusion-type model exists yet (001 has not landed), so this is a real, working scanner with
-// nothing to scan today, the same shape as every other Phase-4 gate waiting on a later spec.
+// A model opts in with `/// @conclusion <type>` directly above it in schema.prisma, `<type>`
+// naming one `ConclusionType` value. Originally (before 001 landed) this checked for a
+// non-nullable `evidenceId` column directly on the conclusion model — that assumed a one-to-one FK
+// that 001's actual design never uses: `evidence_link` is a many-to-many join keyed by
+// `(conclusion_type, conclusion_id)`, not a column on the conclusion table itself.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
 const SCHEMA_PATH = fileURLToPath(new URL('../../prisma/schema.prisma', import.meta.url));
-const EVIDENCE_FIELD_PATTERN = /^\s*evidenceId\s+(\S+)/m;
 
 /** @param {string} schemaSource */
-export function findConclusionTypesWithNullableEvidence(schemaSource) {
+function conclusionTypeValues(schemaSource) {
+  const match = schemaSource.match(/enum\s+ConclusionType\s*\{([^}]*)\}/);
+  if (!match) return [];
+  return match[1]
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('@@') && !line.startsWith('///'));
+}
+
+/** @param {string} schemaSource */
+export function findConclusionTagsWithUnknownType(schemaSource) {
+  const validTypes = conclusionTypeValues(schemaSource);
   const issues = [];
-  const modelPattern =
-    /\/\/\/[ \t]*@conclusion[^\n]*\n(?:[ \t]*\/\/\/[^\n]*\n)*[ \t]*model\s+(\w+)\s*\{([^}]*)\}/g;
-  for (const match of schemaSource.matchAll(modelPattern)) {
-    const [, name, body] = match;
-    const fieldMatch = EVIDENCE_FIELD_PATTERN.exec(body);
-    if (!fieldMatch) {
-      issues.push(`${name}: tagged @conclusion but declares no evidenceId field`);
+  const tagPattern =
+    /\/\/\/[ \t]*@conclusion([^\n]*)\n(?:[ \t]*\/\/\/[^\n]*\n)*[ \t]*model\s+(\w+)/g;
+  for (const match of schemaSource.matchAll(tagPattern)) {
+    const [, rest, name] = match;
+    const taggedType = rest.trim();
+    if (taggedType === '') {
+      issues.push(`${name}: tagged @conclusion with no type — must name a ConclusionType value`);
       continue;
     }
-    if (fieldMatch[1].endsWith('?')) {
-      issues.push(`${name}: evidenceId is nullable (${fieldMatch[1]})`);
+    if (!validTypes.includes(taggedType)) {
+      issues.push(
+        `${name}: tagged @conclusion ${taggedType}, which is not a ConclusionType value ` +
+          `(${validTypes.join(', ')})`,
+      );
     }
   }
   return issues;
@@ -35,7 +55,7 @@ export function findConclusionTypesWithNullableEvidence(schemaSource) {
 /* v8 ignore start -- CLI wiring; the check it calls is unit tested above */
 if (isMainModule(import.meta.url)) {
   const result = await runGate('gate-evidence', () => {
-    const issues = findConclusionTypesWithNullableEvidence(readFileSync(SCHEMA_PATH, 'utf8'));
+    const issues = findConclusionTagsWithUnknownType(readFileSync(SCHEMA_PATH, 'utf8'));
     if (issues.length > 0) throw new Error(issues.join('; '));
   });
   reportAndExit(result);
