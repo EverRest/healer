@@ -1,6 +1,6 @@
 {
-  "name": "@healer/domain-evidence",
-  "version": "0.5.0",
+  "name": "@healer/prisma-client",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -15,7 +15,6 @@
     "typecheck": "tsc --build tsconfig.json"
   },
   "dependencies": {
-    "@healer/prisma-client": "workspace:*",
-    "@healer/shared": "workspace:*"
+    "@healer/prisma-generated": "link:../../prisma/generated/client"
   }
 }

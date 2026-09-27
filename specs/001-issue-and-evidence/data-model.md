@@ -23,8 +23,12 @@ Every table carries `tenant_id` with an index `(tenant_id, …)`.
 
 Issue-to-issue links live in `issue_relationship`, not in columns here — see below.
 
-Indexes: `(tenant_id, fingerprint) where state <> 'closed'`, `(tenant_id, state, last_seen_at)`,
-`(tenant_id, component_id, last_seen_at)`.
+Indexes: `(tenant_id, fingerprint) where state not in ('merged', 'removed')` — a fingerprint lookup
+during ingestion must still find a `resolved` issue (FR-005's reopen window) and a `stale` one
+(R-11: surfaced, not closed); only `merged` and `removed` issues are no longer the fingerprint's
+canonical row. (There is no `closed` state — the state set is exactly the nine below; an earlier
+draft of this line referenced one that was never defined, corrected here.) Also
+`(tenant_id, state, last_seen_at)`, `(tenant_id, component_id, last_seen_at)`.
 
 `knowledge_drift` issues terminate at human adjudication and never enter reproduction or change
 (FR-001a).
@@ -74,8 +78,9 @@ that keeps them from becoming two stores of one fact.
 ## issue.ingestion_delivery
 
 `provider`, `delivery_id`, `tenant_id`, `received_at`, `signal_count`, `outcome`
-(`accepted` · `duplicate` · `partial` · `failed`). Unique `(provider, delivery_id)` — the
-idempotency key (R-09).
+(`accepted` · `duplicate` · `partial` · `failed`). The idempotency key (R-09) is unique
+`(tenant_id, provider, delivery_id)` — tenant-scoped, since a provider's delivery id is not
+guaranteed globally unique across tenants.
 
 ## issue.normalisation_ruleset
 
