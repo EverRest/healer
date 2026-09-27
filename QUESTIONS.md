@@ -51,12 +51,12 @@ Not decided, and deliberately not invented ahead of the task that should decide 
 `resolved -> investigating` (matching signal inside the reopen window, FR-005). A `stale` issue
 has no edge back to `investigating` at all — only to `resolved`/`merged`/`removed`.
 
-Question for whoever builds T018 (fingerprint attachment of matching signals): should a new
-matching signal also revive a `stale` issue back to `investigating`, the same way it reopens a
-`resolved` one? R-11 only says staleness is "surfaced, not closed"; it doesn't say whether new
-signal traffic should un-stale it automatically. If yes, T018 needs to add that edge to the graph
-(and decide whether the cause is `ingestion`, same as the resolved-reopen edge). If no, a stale
-issue only leaves that state through a human action — say so and this note can be deleted.
+**Update after T018 landed**: T018 did *not* touch this — it deliberately excludes `resolved`
+(and `merged`/`removed`) from its fingerprint match, per FR-002's own words ("attach ... to the
+same **open** issue"), and creates a fresh issue instead when the only fingerprint match is
+resolved. `stale` was left exactly as it was: reachable, but with no edge back to
+`investigating`. The question above is now squarely **001 T022**'s (reopen and recurrence) to
+answer, not T018's — T018 turned out not to need an opinion on it at all.
 
 ## 001 T013 — seven of the eleven contract events have no publisher yet
 
@@ -66,10 +66,41 @@ four with a real producing operation today: `IssueDetected`/`IssueStateChanged` 
 `create`/`transition`) and `EvidenceRecorded`/`EvidenceDetached` (001 T006's `record`/`detach`).
 
 The other seven have no operation to hang a publish call off yet, because the operation itself
-doesn't exist: `IssueReopened`/`IssueRecurred` (T018, matching-signal attach), `IssueRelated`
+doesn't exist: `IssueReopened`/`IssueRecurred` (T022, reopen/recurrence — see below), `IssueRelated`
 (deterministic correlation, no task number assigned in this phase), `IssueMerged`/`IssueUnmerged`
 (T049), `IssueStale` (T051), `IssueResolved` (needs 008/010's verification events to consume, per
 events.md's "consumes" table), `IssueDeleted` (T053). Each publisher gets built as part of the
 task that builds its producing operation, following the same pattern `events.ts` in
 `packages/domain/issues`/`packages/domain/evidence` already establishes — not invented here ahead
 of the operation it would describe.
+
+## 001 T018 — three real judgment calls, flagged for review before T019+ builds on them
+
+All three are load-bearing for the ingestion pipeline; happy to reverse any of them.
+
+**1. `Issue.kind` and `severity` defaults for the `/ingest/signals` path.** `Signal` (openapi)
+carries no `kind` field, and `Issue.kind` has six values with no spec text saying which one a
+provider-pushed signal produces. Chose `monitoring_alert` (a monitoring provider pushed this,
+as opposed to `production_incident`'s implied higher-severity manual declaration, or
+`automated_detection`'s implied non-provider-triggered discovery). `severity` defaults to
+`medium` when the signal omits it (openapi marks it optional). Both are one-line changes in
+`ingest-signal.ts` if wrong.
+
+**2. `componentId` stays `null` — 004 (architecture-graph) isn't implemented.** `Signal.component`
+is a raw string from the provider; there is no `Component` row to resolve it against yet, so
+`issue.component_id` is left unset and the fingerprint hashes the **raw string** instead. Real
+consequence: once 004 lands and groups several raw component strings under one canonical
+`Component`, today's fingerprints could under- or over-split issues relative to what a
+component-aware fingerprint would produce. The fix is exactly what 001 T011 built for this: publish
+a new `normalisation_ruleset` version once 004 exists and recompute — not a schema change, a data
+change. Flagging now so whoever builds 004's ingestion integration knows to look at this rather
+than rediscover it.
+
+**3. `findOpenByFingerprint` + `create`/`recordOccurrence` is a check-then-act, not one atomic
+operation.** Two concurrent *first* occurrences of a brand-new fingerprint could each see "not
+found" and both create an issue — a real race, narrow (only matters for a fingerprint's very
+first arrival) but real. Not fixed here: 001 T026 ("load check") is the task that would actually
+exercise concurrent ingestion and notice if this matters in practice. A fix, if it turns out to:
+a unique partial index on `(tenant_id, fingerprint) where state not in ('merged','removed')`,
+catching the resulting unique-violation on `create` and retrying as an attach — one migration,
+not a redesign.

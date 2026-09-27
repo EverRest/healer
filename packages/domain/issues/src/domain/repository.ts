@@ -20,18 +20,35 @@ export interface NewIssue {
 }
 
 /**
- * Create, read and transition only (FR-006) — there is no generic update. `transition` is the
- * one legitimate mutation of `state`, and it always writes the `issue_event` that records the
- * cause in the same operation: a state change with no event is exactly the "prose guarantee, no
- * mechanism" shape this repository exists to make impossible (docs/patterns.md).
+ * Create, read, transition and record-occurrence only (FR-006) — there is no generic update.
+ * `transition` and `recordOccurrence` are the two legitimate mutations, and both always write
+ * the `issue_event` that records what happened in the same operation: a state change or a signal
+ * with no event is exactly the "prose guarantee, no mechanism" shape this repository exists to
+ * make impossible (docs/patterns.md).
  */
 export interface IssueRepository {
   create(issue: TenantScoped<NewIssue>): Promise<Issue>;
   findById(where: TenantScoped<{ readonly id: string }>): Promise<Issue | null>;
+  /**
+   * The same fingerprint lookup 001 T002's partial index exists for, narrowed to genuinely
+   * *open* issues (FR-002's own words) — `resolved` excluded on purpose: whether a matching
+   * signal reopens a resolved issue or starts a recurrence is 001 T022's decision (R-02), not
+   * this method's to make by quietly attaching to one.
+   */
+  findOpenByFingerprint(
+    where: TenantScoped<{ readonly fingerprint: string }>,
+  ): Promise<Issue | null>;
   transition(
     where: TenantScoped<{ readonly id: string }>,
     to: Issue['state'],
     cause: IssueEventCause,
     actorRef: string,
   ): Promise<Issue>;
+  /**
+   * A matching signal attaching to an already-open issue (FR-002): `occurrenceCount` increments,
+   * `lastSeenAt` advances to the later of the two (never backwards — out-of-order delivery must
+   * not move it earlier), and an `issue_event` of type `signal_received` records it (FR-013's
+   * timeline is a union over this table).
+   */
+  recordOccurrence(where: TenantScoped<{ readonly id: string }>, observedAt: Date): Promise<Issue>;
 }

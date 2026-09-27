@@ -159,4 +159,77 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       );
       expect(names).toBe('IssueDetected,IssueStateChanged');
     }));
+
+  it('findOpenByFingerprint finds a detected issue by its fingerprint (001 T018, FR-002)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+
+      const found = await repo.findOpenByFingerprint(
+        scope(CONTEXT, { fingerprint: input.fingerprint }),
+      );
+      expect(found).toMatchObject({ id: input.id });
+    }));
+
+  it('findOpenByFingerprint does not match a resolved issue — that decision belongs to T022', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'x');
+      await repo.transition(scope(CONTEXT, { id: input.id }), 'resolved', 'human', 'pavlo');
+
+      const found = await repo.findOpenByFingerprint(
+        scope(CONTEXT, { fingerprint: input.fingerprint }),
+      );
+      expect(found).toBeNull();
+    }));
+
+  it('findOpenByFingerprint never returns another tenant’s issue', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+
+      const found = await repo.findOpenByFingerprint(
+        scope(OTHER_CONTEXT, { fingerprint: input.fingerprint }),
+      );
+      expect(found).toBeNull();
+    }));
+
+  it('recordOccurrence increments occurrenceCount and advances lastSeenAt, and records a signal_received event', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue({ lastSeenAt: new Date('2026-01-01T00:00:00Z') });
+      await repo.create(scope(CONTEXT, input));
+
+      const later = new Date('2026-01-02T00:00:00Z');
+      const attached = await repo.recordOccurrence(scope(CONTEXT, { id: input.id }), later);
+      expect(attached.occurrenceCount).toBe(2n);
+      expect(attached.lastSeenAt).toEqual(later);
+
+      const events = await query(
+        pg,
+        `select type, cause from "issue"."issue_event" where issue_id = '${input.id}'`,
+      );
+      expect(events).toBe('signal_received|ingestion');
+    }));
+
+  it('recordOccurrence never moves lastSeenAt backwards for an out-of-order (earlier) signal', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue({ lastSeenAt: new Date('2026-01-02T00:00:00Z') });
+      await repo.create(scope(CONTEXT, input));
+
+      const earlier = new Date('2026-01-01T00:00:00Z');
+      const attached = await repo.recordOccurrence(scope(CONTEXT, { id: input.id }), earlier);
+      expect(attached.occurrenceCount).toBe(2n);
+      expect(attached.lastSeenAt).toEqual(input.lastSeenAt);
+    }));
+
+  it('recordOccurrence throws NotFoundError rather than leaking whether another tenant’s issue exists', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+
+      await expect(
+        repo.recordOccurrence(scope(OTHER_CONTEXT, { id: input.id }), new Date()),
+      ).rejects.toBeInstanceOf(NotFoundError);
+    }));
 });

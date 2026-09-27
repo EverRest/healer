@@ -63,6 +63,54 @@ export class PrismaIssueRepository implements IssueRepository {
     return row === null ? null : toDomain(row);
   }
 
+  async findOpenByFingerprint(
+    where: TenantScoped<{ readonly fingerprint: string }>,
+  ): Promise<Issue | null> {
+    // `resolved` excluded on purpose (001 T018, FR-002, see the interface's own comment) — the
+    // narrower half of T002's own `(tenant_id, fingerprint) where state not in ('merged',
+    // 'removed')` index.
+    const row = await this.prisma.issue.findFirst({
+      where: {
+        tenantId: where.tenantId,
+        fingerprint: where.fingerprint,
+        state: { notIn: ['resolved', 'merged', 'removed'] },
+      },
+    });
+    return row === null ? null : toDomain(row);
+  }
+
+  async recordOccurrence(
+    where: TenantScoped<{ readonly id: string }>,
+    observedAt: Date,
+  ): Promise<Issue> {
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.issue.findUnique({
+        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
+      });
+      if (current === null) throw new NotFoundError('Issue');
+
+      // Never backwards (R-10): an out-of-order signal must not make lastSeenAt look stale.
+      const lastSeenAt = observedAt > current.lastSeenAt ? observedAt : current.lastSeenAt;
+      const updated = await tx.issue.update({
+        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
+        data: { occurrenceCount: { increment: 1 }, lastSeenAt },
+      });
+      await tx.issueEvent.create({
+        data: {
+          id: randomUUID(),
+          tenantId: where.tenantId,
+          issueId: where.id,
+          type: 'signal_received',
+          cause: 'ingestion',
+          actorRef: 'ingestion',
+          payload: {} as Prisma.InputJsonValue,
+          observedAt,
+        },
+      });
+      return toDomain(updated);
+    });
+  }
+
   async transition(
     where: TenantScoped<{ readonly id: string }>,
     to: Issue['state'],

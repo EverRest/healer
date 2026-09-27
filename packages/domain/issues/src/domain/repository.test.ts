@@ -16,7 +16,9 @@ import type { IssueRepository, NewIssue } from './repository.js';
 const repo: IssueRepository = {
   create: () => Promise.reject(new Error('type-proof stub, never called')),
   findById: () => Promise.reject(new Error('type-proof stub, never called')),
+  findOpenByFingerprint: () => Promise.reject(new Error('type-proof stub, never called')),
   transition: () => Promise.reject(new Error('type-proof stub, never called')),
+  recordOccurrence: () => Promise.reject(new Error('type-proof stub, never called')),
 };
 
 const NEW_ISSUE: NewIssue = {
@@ -36,8 +38,12 @@ function typeProofNeverCalled(): void {
   repo.create(NEW_ISSUE);
   // @ts-expect-error findById requires TenantScoped<{ id }>, not a plain { id }
   repo.findById({ id: 'issue-1' });
+  // @ts-expect-error findOpenByFingerprint requires TenantScoped<{ fingerprint }>, not a plain one
+  repo.findOpenByFingerprint({ fingerprint: 'fp1' });
   // @ts-expect-error transition's `where` requires TenantScoped<{ id }>, not a plain { id }
   repo.transition({ id: 'issue-1' }, 'investigating', 'agent', 'x');
+  // @ts-expect-error recordOccurrence's `where` requires TenantScoped<{ id }>, not a plain { id }
+  repo.recordOccurrence({ id: 'issue-1' }, new Date());
 }
 void typeProofNeverCalled;
 

@@ -95,6 +95,33 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.28.0 — 2026-09-27
+
+**001 T018**: fingerprint computation and attachment of matching signals to the open issue
+(FR-002). `ingestSignal` composes T016/T017's pure fingerprinting with two new
+`IssueRepository` methods.
+
+- `findOpenByFingerprint`: T002's own fingerprint index, narrowed to `state not in
+  ('resolved','merged','removed')` — FR-002 says "the same **open** issue"; a match on a
+  resolved issue deliberately does not attach here, that decision belongs to 001 T022
+  (reopen/recurrence).
+- `recordOccurrence`: increments `occurrenceCount`, advances `lastSeenAt` to the later of the
+  two (never backwards, R-10), writes an `issue_event` of type `signal_received` in the same
+  transaction. No match creates a new issue via T012's `create`.
+- **Test first**: `issue-repository.e2e.test.ts` gained 6 cases (14/14 total);
+  `ingest-signal.e2e.test.ts` is new (5/5) — no-match create, attach-and-advance, 200 replayed
+  signals collapsing to one issue with the exact count (SC-001's arithmetic — the literal
+  12 000 is T026's load characteristic, not re-replayed here), a distinct exception type
+  creating a separate issue, and a resolved-only match creating a new issue rather than
+  silently attaching.
+- Three real judgment calls, flagged in `QUESTIONS.md` for review rather than buried: the
+  `kind`/`severity` defaults this path uses (no spec text pins either down), `componentId`
+  staying `null` until 004 (architecture-graph) exists — fingerprinting on the raw component
+  string meanwhile, with a real (if narrow) consequence once 004 lands — and a check-then-act
+  race on a fingerprint's very first arrival, left for 001 T026's load check to notice if it
+  matters, with a one-migration fix already identified (a unique partial index).
+- `make ci` green cold-cache: 87 e2e tests, all 16 gates.
+
 ## 0.27.0 — 2026-09-27
 
 **001 T016/T017**: fingerprint normalisation, and computing it against the real
