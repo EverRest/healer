@@ -1,5 +1,27 @@
 # Research wiki — log
 
+## 2026-09-27 — a real concurrency bug, and the deployment gap nobody had named
+
+**001's Phase 3 (US1, deduplication and ingestion) landed complete**, T015 through T026. The load
+check (T026) did what a load check is for: a race flagged as "narrow" when T018 shipped
+(`findOpenByFingerprint` then `create` is a check-then-act, not one atomic operation) turned out
+to fragment a burst of a brand-new fingerprint's first arrivals into as many as sixteen separate
+issues under real concurrency — not narrow at all. Fixed with a unique partial index scoped to
+genuinely open states, plus a retry-as-attach on the losing side of the race. `plan.md` also
+turned out to name a "design signal rate" and "the plan's latency budget" that plan.md itself
+never defines — a real gap in the spec chain, not a value anyone deferred on purpose; added to
+`docs/stage-0.md` S0-7's tracked list, which had missed it entirely.
+
+**The deployment gap.** Asked whether Healer's own control-plane deployment, automated
+smoke/regression checks against a running environment, and release automation are recorded
+anywhere. They are not. [operating-healer.md](operating-healer.md) covers observing a *running*
+control plane; nothing covers how it gets to be running at all beyond `make ci` on push/PR. 012
+FR-052 only forbids Kubernetes and Terraform — it names no positive target. Playwright's one use
+in this codebase is a **product capability** (client-side reproduction, 007/008), not a check
+against our own environments. Recorded as a new section of `operating-healer.md` and flagged in
+`QUESTIONS.md` rather than invented here — picking a hosting target and a release process is
+new-infrastructure territory, an ADR conversation, not a wiki edit.
+
 ## 2026-09-26 — the crossing nobody described, a regression suite, and agents under the gates
 
 **How it started.** A set of plain questions from the owner — how do we debug production without logs,

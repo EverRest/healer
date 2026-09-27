@@ -482,3 +482,28 @@ up to 16 issues instead of one and none of them ever reached the target count al
 Whoever adds "ingestion signal rate" and "ingestion latency budget" to S0-1's real, measured list
 should update these two constants to match, and update `docs/stage-0.md` S0-7's table to actually
 carry this row.
+
+## Deployment, release automation and smoke/regression testing of our own environment — not recorded anywhere until now
+
+Not decided, genuinely open — asked directly ("чи зафіксовано десь"), checked, and it was not.
+
+`.github/workflows/ci.yml` runs `make ci` on push/PR — that is the only workflow in this
+repository. 012 FR-052 is the only thing any spec says about the v1 control-plane deployment, and
+it is a negative constraint ("must not require Kubernetes or Terraform"), not a positive target.
+Nothing specifies:
+
+- a release workflow taking a merged commit to a running staging/production environment;
+- an automated post-deploy smoke check;
+- an automated regression suite (Playwright or otherwise) exercising a *running* Healer
+  deployment end to end — Playwright's one use in this codebase is the **product's** client-side
+  reproduction capability (007/008, C-24..C-28), a different thing entirely from a check against
+  our own environments;
+- a rollback path when a deploy fails its own smoke check (010's safe-remediation story is about
+  a *customer's* infrastructure, not ours).
+
+Recorded in [research/wiki/operating-healer.md](research/wiki/operating-healer.md)'s new
+"Getting there" section rather than left only here. Not fixed here on purpose: picking a hosting
+target, a release tool and a smoke-check design is new-infrastructure/new-dependency territory —
+this repo's own rule sends that to an ADR first, not a silent choice made while working through
+an unrelated task list. Whoever picks this up next should decide the hosting target before
+anything else; the release workflow and smoke checks follow from that choice, not the reverse.

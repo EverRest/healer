@@ -56,3 +56,30 @@ An alert on an error-log pattern is an alert on prose, and prose changes when so
 Secrets and customer content are removed where a log line or span is created (012 FR-035), not in the
 collector or the backend. A pipeline that redacts downstream has already carried the secret through
 every hop before it.
+
+## Getting there: deployment, release and smoke checks — open, not yet specified
+
+Everything above assumes the control plane is already a running, deployed system. Nothing in the
+thirteen specs says how it gets to be one, and this page did not carry the gap until now.
+
+`.github/workflows/ci.yml` runs `make ci` on every push and pull request — that is the only
+workflow that exists. 012 FR-052 is the only thing 012 says about the v1 control-plane deployment
+at all, and it is a negative constraint ("must not require Kubernetes or Terraform"), not a
+positive one. There is no:
+
+- a release workflow that takes a merged commit to a running staging or production environment;
+- a post-deploy smoke check, automated or otherwise, confirming the newly deployed build actually
+  serves traffic before it is called done;
+- an automated regression suite exercising a *running* Healer deployment end to end. Playwright
+  appears in this codebase exactly once, as a **product capability** (007/008, C-24..C-28) for
+  reproducing a customer's client-side symptom — that is not a test tool pointed at our own
+  environments, and nothing plays that second role today;
+- a rollback path when a deployed build fails its own smoke check — the product's own safe-
+  remediation story (010) is about a *customer's* infrastructure, not ours.
+
+This is the same shape as every other deliberately-unset value in this project (docs/stage-0.md
+S0-7): a real gap, better named than silently assumed. Unlike those numeric placeholders, this
+one is infrastructure and process, not a constant — picking a hosting target, a release tool and
+a smoke-check design is new-pattern territory this repo's own rule sends to an ADR first, not
+something to invent here. Flagged in `QUESTIONS.md` for whoever picks up 012's next phase or
+opens a dedicated one for it.
