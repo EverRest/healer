@@ -106,6 +106,10 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
     expect(await repo.findById(scope(CONTEXT, { id: randomUUID() }))).toBeNull();
   });
 
+  it('returns null, not a 500-causing throw, for a malformed (non-UUID) id (001 T031 review, SC-004)', async () => {
+    expect(await repo.findById(scope(CONTEXT, { id: ':issueId' }))).toBeNull();
+  });
+
   it('transition moves the state and records the issue_event in one operation', () =>
     withCorrelation(newCorrelationId(), async () => {
       const input = newIssue();

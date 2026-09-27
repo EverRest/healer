@@ -17,6 +17,24 @@ export interface NewEvidenceLink {
   readonly relation: EvidenceRelation;
 }
 
+/**
+ * A second link naming the same `(evidenceId, conclusionId, relation)` (001 T028) — the DB's own
+ * unique constraint, translated the same way `FingerprintAlreadyOpenError` translates its own
+ * (`packages/domain/issues`). A given evidence/conclusion pair can still hold more than one
+ * relation (`supports` *and* `contextualises`, say) — this rejects only the exact repeat, not the
+ * pair.
+ */
+export class DuplicateEvidenceLinkError extends Error {
+  constructor(
+    readonly evidenceId: string,
+    readonly conclusionId: string,
+    readonly relation: EvidenceRelation,
+  ) {
+    super(`evidence ${evidenceId} already has a "${relation}" link to conclusion ${conclusionId}`);
+    this.name = 'DuplicateEvidenceLinkError';
+  }
+}
+
 /** Write, plus the one read `assertHasEvidence` (FR-009) needs: does this conclusion have any
  * link at all. There is no API for creating links retrospectively (R-06): `write` always uses the
  * step executing right now, from `@healer/shared`'s `currentStep()`. */

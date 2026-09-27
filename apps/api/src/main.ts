@@ -6,9 +6,12 @@ import { createLogger, loadConfig } from '@healer/shared';
 import {
   BullmqSignalQueue,
   PrismaIngestionDeliveryRepository,
+  PrismaIssueRepository,
   type IngestionDeliveryRepository,
+  type IssueRepository,
   type SignalQueue,
 } from '@healer/domain-issues';
+import { PrismaEvidenceRepository, type EvidenceRepository } from '@healer/domain-evidence';
 import { createPrismaClient } from './infrastructure/prisma.js';
 import { HEALTH_META, HealthController, type HealthMeta } from './health/health.controller.js';
 import {
@@ -16,6 +19,11 @@ import {
   IngestController,
   SIGNAL_QUEUE,
 } from './ingest/ingest.controller.js';
+import {
+  EVIDENCE_REPOSITORY,
+  ISSUE_REPOSITORY,
+  IssuesController,
+} from './issues/issues.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -54,13 +62,17 @@ export function createApiModule(
   meta: HealthMeta,
   signalQueue: SignalQueue,
   deliveries: IngestionDeliveryRepository,
+  issues: IssueRepository,
+  evidence: EvidenceRepository,
 ): Type<unknown> {
   @Module({
-    controllers: [HealthController, IngestController],
+    controllers: [HealthController, IngestController, IssuesController],
     providers: [
       { provide: HEALTH_META, useValue: meta },
       { provide: SIGNAL_QUEUE, useValue: signalQueue },
       { provide: INGESTION_DELIVERY_REPOSITORY, useValue: deliveries },
+      { provide: ISSUE_REPOSITORY, useValue: issues },
+      { provide: EVIDENCE_REPOSITORY, useValue: evidence },
     ],
   })
   class ApiModule {}
@@ -82,6 +94,8 @@ export async function bootstrap(): Promise<void> {
     },
     new BullmqSignalQueue({ url: config.REDIS_URL }),
     new PrismaIngestionDeliveryRepository(prisma),
+    new PrismaIssueRepository(prisma),
+    new PrismaEvidenceRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

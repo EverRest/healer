@@ -19,6 +19,9 @@
       "path": "../../packages/domain/issues"
     },
     {
+      "path": "../../packages/domain/evidence"
+    },
+    {
       "path": "../../packages/prisma-client"
     }
   ]

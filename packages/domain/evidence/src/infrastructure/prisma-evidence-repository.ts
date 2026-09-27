@@ -87,4 +87,18 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
       return detached;
     });
   }
+
+  async listByIssue(
+    where: TenantScoped<{ readonly issueId: string; readonly type?: Evidence['type'] }>,
+  ): Promise<readonly Evidence[]> {
+    const rows = await this.prisma.evidence.findMany({
+      where: {
+        tenantId: where.tenantId,
+        issueId: where.issueId,
+        ...(where.type !== undefined ? { type: where.type } : {}),
+      },
+      orderBy: { observedAt: 'asc' },
+    });
+    return rows.map(toDomain);
+  }
 }

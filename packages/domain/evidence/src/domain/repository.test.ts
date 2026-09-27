@@ -12,6 +12,7 @@ const repo: EvidenceRepository = {
   record: () => Promise.reject(new Error('type-proof stub, never called')),
   findById: () => Promise.reject(new Error('type-proof stub, never called')),
   detach: () => Promise.reject(new Error('type-proof stub, never called')),
+  listByIssue: () => Promise.reject(new Error('type-proof stub, never called')),
 };
 
 const NEW_EVIDENCE: NewEvidence = {
@@ -37,6 +38,8 @@ function typeProofNeverCalled(): void {
   repo.findById({ id: 'evidence-1' });
   // @ts-expect-error detach requires TenantScoped<{ id }>, not a plain { id }
   repo.detach({ id: 'evidence-1' });
+  // @ts-expect-error listByIssue requires TenantScoped<{ issueId }>, not a plain { issueId }
+  repo.listByIssue({ issueId: 'issue-1' });
 }
 void typeProofNeverCalled;
 

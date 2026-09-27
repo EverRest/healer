@@ -15,6 +15,7 @@
     "typecheck": "tsc --build tsconfig.json"
   },
   "dependencies": {
+    "@healer/boundary-contract": "workspace:*",
     "@healer/events": "workspace:*",
     "@healer/prisma-client": "workspace:*",
     "@healer/shared": "workspace:*"

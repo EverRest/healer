@@ -1,6 +1,10 @@
-import { describe, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { TenantScoped } from '@healer/shared';
-import type { EvidenceLinkRepository, NewEvidenceLink } from './link-repository.js';
+import {
+  DuplicateEvidenceLinkError,
+  type EvidenceLinkRepository,
+  type NewEvidenceLink,
+} from './link-repository.js';
 
 /**
  * Tenant scoping on every repository method (001 T014, FR-015, 012 T010) — see
@@ -33,5 +37,18 @@ void typeProofNeverCalled;
 describe('EvidenceLinkRepository is tenant-scoped on every method (001 T014, FR-015)', () => {
   it('cannot be called without a proven tenant — the omission is a type error, not a runtime check', () => {
     expectTypeOf(repo.write).parameter(0).toEqualTypeOf<TenantScoped<NewEvidenceLink>>();
+  });
+});
+
+describe('DuplicateEvidenceLinkError (001 T028)', () => {
+  it('carries the three fields that identify the repeated link and names them in its message', () => {
+    const error = new DuplicateEvidenceLinkError('evidence-1', 'conclusion-1', 'supports');
+    expect(error.name).toBe('DuplicateEvidenceLinkError');
+    expect(error.evidenceId).toBe('evidence-1');
+    expect(error.conclusionId).toBe('conclusion-1');
+    expect(error.relation).toBe('supports');
+    expect(error.message).toBe(
+      'evidence evidence-1 already has a "supports" link to conclusion conclusion-1',
+    );
   });
 });

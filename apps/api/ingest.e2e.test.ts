@@ -9,8 +9,11 @@ import { createQueue } from '@healer/workflow';
 import {
   BullmqSignalQueue,
   PrismaIngestionDeliveryRepository,
+  PrismaIssueRepository,
   type IngestionDeliveryRepository,
+  type IssueRepository,
 } from '@healer/domain-issues';
+import { PrismaEvidenceRepository, type EvidenceRepository } from '@healer/domain-evidence';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import {
@@ -74,6 +77,8 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
       queue,
       deliveries,
+      new PrismaIssueRepository(prisma),
+      new PrismaEvidenceRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -313,6 +318,20 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     findByDeliveryId: () => Promise.resolve(null),
     recordDelivery: () => Promise.reject(new Error('not implemented in this test')),
   };
+  const noopIssues: IssueRepository = {
+    create: () => Promise.reject(new Error('not implemented in this test')),
+    findById: () => Promise.resolve(null),
+    findOpenByFingerprint: () => Promise.resolve(null),
+    findMostRecentlyResolvedByFingerprint: () => Promise.resolve(null),
+    transition: () => Promise.reject(new Error('not implemented in this test')),
+    recordOccurrence: () => Promise.reject(new Error('not implemented in this test')),
+  };
+  const noopEvidence: EvidenceRepository = {
+    record: () => Promise.reject(new Error('not implemented in this test')),
+    findById: () => Promise.resolve(null),
+    detach: () => Promise.reject(new Error('not implemented in this test')),
+    listByIssue: () => Promise.resolve([]),
+  };
 
   beforeAll(async () => {
     const queue = new BullmqSignalQueue({ url: 'redis://127.0.0.1:6399' });
@@ -320,6 +339,8 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
       queue,
       noopDeliveries,
+      noopIssues,
+      noopEvidence,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

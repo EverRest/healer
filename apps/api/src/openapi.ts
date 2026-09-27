@@ -1,14 +1,33 @@
 import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
-import type { IngestionDeliveryRepository, SignalQueue } from '@healer/domain-issues';
+import type {
+  IngestionDeliveryRepository,
+  IssueRepository,
+  SignalQueue,
+} from '@healer/domain-issues';
+import type { EvidenceRepository } from '@healer/domain-evidence';
 import { configureApiPrefix, createApiModule } from './main.js';
 
-// Route shape only — neither is ever called, contract generation never sends a request.
+// Route shape only — none of these are ever called, contract generation never sends a request.
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
 const noopDeliveries: IngestionDeliveryRepository = {
   findByDeliveryId: () => Promise.resolve(null),
   recordDelivery: () => Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopIssues: IssueRepository = {
+  create: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  findOpenByFingerprint: () => Promise.resolve(null),
+  findMostRecentlyResolvedByFingerprint: () => Promise.resolve(null),
+  transition: () => Promise.reject(new Error('not implemented for contract generation')),
+  recordOccurrence: () => Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopEvidence: EvidenceRepository = {
+  record: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  detach: () => Promise.reject(new Error('not implemented for contract generation')),
+  listByIssue: () => Promise.resolve([]),
 };
 
 /**
@@ -28,6 +47,8 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     },
     noopSignalQueue,
     noopDeliveries,
+    noopIssues,
+    noopEvidence,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import {
   assertHasEvidence,
+  DuplicateEvidenceLinkError,
   EvidenceRequiredError,
   PrismaEvidenceLinkRepository,
 } from '@healer/domain-evidence';
@@ -127,6 +128,61 @@ describe('PrismaEvidenceLinkRepository (001 T008, FR-008, R-06)', () => {
       ),
     );
     expect(written.assertedByStep).toBe('verify');
+  });
+
+  it('rejects a second link naming the same (evidence, conclusion, relation) — the closed relation set is not enough on its own (001 T028)', async () => {
+    const conclusionId = randomUUID();
+    await withStep('diagnose', () =>
+      repo.write(
+        scope(CONTEXT, {
+          id: randomUUID(),
+          evidenceId: EVIDENCE_ID,
+          conclusionType: 'diagnosis',
+          conclusionId,
+          relation: 'supports',
+        }),
+      ),
+    );
+    await expect(
+      withStep('diagnose', () =>
+        repo.write(
+          scope(CONTEXT, {
+            id: randomUUID(),
+            evidenceId: EVIDENCE_ID,
+            conclusionType: 'diagnosis',
+            conclusionId,
+            relation: 'supports',
+          }),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(DuplicateEvidenceLinkError);
+  });
+
+  it('allows the same evidence and conclusion under a different relation — uniqueness is per (evidence, conclusion, relation), not per pair', async () => {
+    const conclusionId = randomUUID();
+    await withStep('diagnose', () =>
+      repo.write(
+        scope(CONTEXT, {
+          id: randomUUID(),
+          evidenceId: EVIDENCE_ID,
+          conclusionType: 'diagnosis',
+          conclusionId,
+          relation: 'supports',
+        }),
+      ),
+    );
+    const second = await withStep('diagnose', () =>
+      repo.write(
+        scope(CONTEXT, {
+          id: randomUUID(),
+          evidenceId: EVIDENCE_ID,
+          conclusionType: 'diagnosis',
+          conclusionId,
+          relation: 'contradicts',
+        }),
+      ),
+    );
+    expect(second.relation).toBe('contradicts');
   });
 });
 

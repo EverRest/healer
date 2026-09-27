@@ -43,6 +43,27 @@
         "responses": { "202": { "description": "" } },
         "tags": ["Ingest"]
       }
+    },
+    "/api/v1/issues/{issueId}/evidence": {
+      "get": {
+        "operationId": "IssuesController_listEvidence",
+        "parameters": [
+          {
+            "name": "issueId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Issues"]
+      }
     }
   },
   "info": {

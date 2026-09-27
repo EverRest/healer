@@ -483,6 +483,12 @@ Whoever adds "ingestion signal rate" and "ingestion latency budget" to S0-1's re
 should update these two constants to match, and update `docs/stage-0.md` S0-7's table to actually
 carry this row.
 
+## 001 T027–T031 — resolved
+
+See [decisions.md](docs/decisions.md) C-53 (`assertTenantIsolated` implemented for real), C-54
+(`gate-isolation`'s literal-placeholder path convention), C-55 (`findById` treats a malformed id
+as absent, not a 500).
+
 ## Deployment, release automation and smoke/regression testing of our own environment — not recorded anywhere until now
 
 Not decided, genuinely open — asked directly ("чи зафіксовано десь"), checked, and it was not.

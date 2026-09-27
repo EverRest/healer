@@ -1,7 +1,27 @@
 import { currentStep, type TenantScoped } from '@healer/shared';
-import type { PrismaClient } from '@healer/prisma-client';
-import type { EvidenceLinkRepository, NewEvidenceLink } from '../domain/link-repository.js';
+import { Prisma, type PrismaClient } from '@healer/prisma-client';
+import {
+  DuplicateEvidenceLinkError,
+  type EvidenceLinkRepository,
+  type NewEvidenceLink,
+} from '../domain/link-repository.js';
 import type { ConclusionType, EvidenceLink } from '../domain/types.js';
+
+/** `@@unique([evidenceId, conclusionId, relation])` — confirmed empirically that Prisma reports
+ *  the raw DB column names (snake_case) in `meta.target` here, not its own camelCase field names
+ *  (same behaviour observed for `packages/domain/issues`' raw-SQL partial index). */
+function isDuplicateLinkViolation(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+  const target = (error.meta as { target?: unknown } | undefined)?.target;
+  return (
+    Array.isArray(target) &&
+    target.includes('evidence_id') &&
+    target.includes('conclusion_id') &&
+    target.includes('relation')
+  );
+}
 
 export class PrismaEvidenceLinkRepository implements EvidenceLinkRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -14,33 +34,40 @@ export class PrismaEvidenceLinkRepository implements EvidenceLinkRepository {
           'wrap the call in withStep(...)',
       );
     }
-    return this.prisma.$transaction(async (tx) => {
-      // `set_config(..., true)` is transaction-local, the same scoping `healer.privileged_write`
-      // already uses — a parameterized call, not string interpolation into raw SQL, even though
-      // `step` is an internal identifier rather than untrusted input.
-      await tx.$executeRaw`SELECT set_config('healer.current_step', ${step}, true)`;
-      const row = await tx.evidenceLink.create({
-        data: {
-          id: link.id,
-          tenantId: link.tenantId,
-          evidenceId: link.evidenceId,
-          conclusionType: link.conclusionType,
-          conclusionId: link.conclusionId,
-          relation: link.relation,
-          assertedByStep: step,
-        },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // `set_config(..., true)` is transaction-local, the same scoping `healer.privileged_write`
+        // already uses — a parameterized call, not string interpolation into raw SQL, even though
+        // `step` is an internal identifier rather than untrusted input.
+        await tx.$executeRaw`SELECT set_config('healer.current_step', ${step}, true)`;
+        const row = await tx.evidenceLink.create({
+          data: {
+            id: link.id,
+            tenantId: link.tenantId,
+            evidenceId: link.evidenceId,
+            conclusionType: link.conclusionType,
+            conclusionId: link.conclusionId,
+            relation: link.relation,
+            assertedByStep: step,
+          },
+        });
+        return {
+          id: row.id,
+          tenantId: row.tenantId,
+          evidenceId: row.evidenceId,
+          conclusionType: row.conclusionType,
+          conclusionId: row.conclusionId,
+          relation: row.relation,
+          assertedByStep: row.assertedByStep,
+          assertedAt: row.assertedAt,
+        };
       });
-      return {
-        id: row.id,
-        tenantId: row.tenantId,
-        evidenceId: row.evidenceId,
-        conclusionType: row.conclusionType,
-        conclusionId: row.conclusionId,
-        relation: row.relation,
-        assertedByStep: row.assertedByStep,
-        assertedAt: row.assertedAt,
-      };
-    });
+    } catch (error) {
+      if (isDuplicateLinkViolation(error)) {
+        throw new DuplicateEvidenceLinkError(link.evidenceId, link.conclusionId, link.relation);
+      }
+      throw error;
+    }
   }
 
   async hasLinks(

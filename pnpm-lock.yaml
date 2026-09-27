@@ -63,6 +63,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@healer/domain-evidence':
+        specifier: workspace:*
+        version: link:../../packages/domain/evidence
       '@healer/domain-issues':
         specifier: workspace:*
         version: link:../../packages/domain/issues
@@ -146,6 +149,9 @@ importers:
 
   packages/domain/evidence:
     dependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../../boundary-contract
       '@healer/events':
         specifier: workspace:*
         version: link:../../events

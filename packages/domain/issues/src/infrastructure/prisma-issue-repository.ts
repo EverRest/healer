@@ -147,10 +147,20 @@ export class PrismaIssueRepository implements IssueRepository {
   async findById(where: TenantScoped<{ readonly id: string }>): Promise<Issue | null> {
     // The composite unique key, not a plain findUnique filtered afterward — tenantId is part of
     // the query itself, never a post-fetch check (security-and-tenancy.md).
-    const row = await this.prisma.issue.findUnique({
-      where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-    });
-    return row === null ? null : toDomain(row);
+    try {
+      const row = await this.prisma.issue.findUnique({
+        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
+      });
+      return row === null ? null : toDomain(row);
+    } catch (error) {
+      // A malformed (non-UUID) id fails Postgres's own column cast (P2023) before the query ever
+      // runs — indistinguishable from "does not exist" for a caller, and must stay that way
+      // (SC-004: never a 500 that reveals the id was merely malformed rather than absent).
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2023') {
+        return null;
+      }
+      throw error;
+    }
   }
 
   async findOpenByFingerprint(

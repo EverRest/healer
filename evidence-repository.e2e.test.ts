@@ -3,13 +3,19 @@ import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
-import { PrismaEvidenceRepository, type NewEvidence } from '@healer/domain-evidence';
+import {
+  assertHasEvidence,
+  PrismaEvidenceLinkRepository,
+  PrismaEvidenceRepository,
+  type NewEvidence,
+} from '@healer/domain-evidence';
 import {
   NotFoundError,
   TenantContext,
   newCorrelationId,
   scope,
   withCorrelation,
+  withStep,
 } from '@healer/shared';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from './test/containers.js';
 
@@ -146,5 +152,86 @@ describe('PrismaEvidenceRepository (001 T006, FR-010, R-03)', () => {
     withCorrelation(newCorrelationId(), async () => {
       const input = newEvidence({ issueId: ISSUE_ID });
       await expect(repo.record(scope(OTHER_CONTEXT, input))).rejects.toThrow();
+    }));
+
+  it('detaching evidence leaves every conclusion built on it intact (001 T029, R-04, quickstart 12)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      await repo.record(scope(CONTEXT, input));
+
+      const linkRepo = new PrismaEvidenceLinkRepository(prisma);
+      const conclusionId = randomUUID();
+      await withStep('diagnose', () =>
+        linkRepo.write(
+          scope(CONTEXT, {
+            id: randomUUID(),
+            evidenceId: input.id,
+            conclusionType: 'diagnosis',
+            conclusionId,
+            relation: 'supports',
+          }),
+        ),
+      );
+
+      await repo.detach(scope(CONTEXT, { id: input.id }));
+
+      // The conclusion's evidence requirement (001 T009, FR-009) is still satisfied — detaching
+      // the source evidence is not the same as removing the link, and nothing here ever deletes
+      // the evidence_link row: the FK from evidence_link to evidence has no ON DELETE CASCADE,
+      // because detach never deletes the row it points at, only marks it.
+      await expect(
+        assertHasEvidence(linkRepo, scope(CONTEXT, { conclusionType: 'diagnosis', conclusionId })),
+      ).resolves.toBeUndefined();
+
+      const detached = await repo.findById(scope(CONTEXT, { id: input.id }));
+      expect(detached).toMatchObject({
+        refState: 'detached',
+        excerpt: input.excerpt,
+        sourceLabel: input.sourceLabel,
+      });
+    }));
+
+  it('listByIssue returns every evidence record for the issue, oldest first (001 T031, FR-007)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      // A far-future observedAt keeps these two last regardless of what earlier tests in this
+      // shared-fixture file already recorded against the same ISSUE_ID.
+      const first = newEvidence({ observedAt: new Date('2027-01-01T00:00:00Z') });
+      const second = newEvidence({
+        type: 'trace_shape',
+        observedAt: new Date('2027-01-02T00:00:00Z'),
+      });
+      await repo.record(scope(CONTEXT, first));
+      await repo.record(scope(CONTEXT, second));
+
+      const all = await repo.listByIssue(scope(CONTEXT, { issueId: ISSUE_ID }));
+      const ids = all.map((e) => e.id);
+      expect(ids.indexOf(first.id)).toBeLessThan(ids.indexOf(second.id));
+      expect(all[all.length - 2]?.id).toBe(first.id);
+      expect(all[all.length - 1]?.id).toBe(second.id);
+    }));
+
+  it('listByIssue narrows to one type when asked', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const errorEvidence = newEvidence();
+      const traceEvidence = newEvidence({ type: 'trace_shape' });
+      await repo.record(scope(CONTEXT, errorEvidence));
+      await repo.record(scope(CONTEXT, traceEvidence));
+
+      const traces = await repo.listByIssue(
+        scope(CONTEXT, { issueId: ISSUE_ID, type: 'trace_shape' }),
+      );
+      expect(traces.map((e) => e.id)).toContain(traceEvidence.id);
+      expect(traces.every((e) => e.type === 'trace_shape')).toBe(true);
+    }));
+
+  it('listByIssue never returns another tenant’s evidence', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      await repo.record(scope(CONTEXT, input));
+
+      const foundByOtherTenant = await repo.listByIssue(
+        scope(OTHER_CONTEXT, { issueId: ISSUE_ID }),
+      );
+      expect(foundByOtherTenant.some((e) => e.id === input.id)).toBe(false);
     }));
 });

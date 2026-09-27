@@ -6,7 +6,12 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createQueue } from '@healer/workflow';
-import { BullmqSignalQueue, PrismaIngestionDeliveryRepository } from '@healer/domain-issues';
+import {
+  BullmqSignalQueue,
+  PrismaIngestionDeliveryRepository,
+  PrismaIssueRepository,
+} from '@healer/domain-issues';
+import { PrismaEvidenceRepository } from '@healer/domain-evidence';
 import { PrismaClient } from '@healer/prisma-client';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
 import { start as startWorker } from '../worker/src/main.js';
@@ -111,6 +116,8 @@ describe('ingestion load and downstream-failure recovery (001 T026, SC-006)', ()
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
       queue,
       deliveries,
+      new PrismaIssueRepository(prisma),
+      new PrismaEvidenceRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

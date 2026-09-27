@@ -2,13 +2,32 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
-import type { IngestionDeliveryRepository, SignalQueue } from '@healer/domain-issues';
+import type {
+  IngestionDeliveryRepository,
+  IssueRepository,
+  SignalQueue,
+} from '@healer/domain-issues';
+import type { EvidenceRepository } from '@healer/domain-evidence';
 import { configureApiPrefix, createApiModule } from './main.js';
 
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
 const noopDeliveries: IngestionDeliveryRepository = {
   findByDeliveryId: () => Promise.resolve(null),
   recordDelivery: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopIssues: IssueRepository = {
+  create: () => Promise.reject(new Error('not implemented in this test')),
+  findById: () => Promise.resolve(null),
+  findOpenByFingerprint: () => Promise.resolve(null),
+  findMostRecentlyResolvedByFingerprint: () => Promise.resolve(null),
+  transition: () => Promise.reject(new Error('not implemented in this test')),
+  recordOccurrence: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopEvidence: EvidenceRepository = {
+  record: () => Promise.reject(new Error('not implemented in this test')),
+  findById: () => Promise.resolve(null),
+  detach: () => Promise.reject(new Error('not implemented in this test')),
+  listByIssue: () => Promise.resolve([]),
 };
 
 /**
@@ -32,6 +51,8 @@ describe('api boots and serves health/ready over HTTP', () => {
       },
       noopSignalQueue,
       noopDeliveries,
+      noopIssues,
+      noopEvidence,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

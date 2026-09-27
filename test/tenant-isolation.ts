@@ -10,20 +10,24 @@ import request from 'supertest';
  * sources for a call to this function naming each path — a real function call is a much less
  * fragile signal than pattern-matching prose in a test's `it(...)` title.
  *
- * The body is not implemented here: it needs a second tenant's authenticated request context,
- * which does not exist until 001/002 land auth and tenant provisioning. Until then there is
- * nothing to call this against — every current endpoint (`/health`, `/ready`) is exempt because
- * neither is tenant-scoped — so an unimplemented body blocks nothing today and is a loud,
- * typed reminder rather than a silent gap the day the first tenant-scoped endpoint is added.
+ * Implemented now (001 T031 review): the earlier comment held this needed "a second tenant's
+ * authenticated request context, which does not exist until 001/002 land auth" — but every
+ * endpoint in this codebase, including every one built since, resolves tenant identity from a
+ * bare, unverified `X-Tenant-Id` header (`TenantContext.forTrustedInternalUse`, the same stub
+ * `assertTenantScopedEnqueue` already exercises this way). A "second tenant" under that stub is
+ * just a second header value — no real auth is needed to prove a resource created under tenant A
+ * is invisible to a request naming tenant B, only that the query itself is scoped, which is
+ * exactly what this proves. The caller creates whatever the concrete `path` names under a real
+ * tenant of its own choosing; this sends the same request under a fresh, guaranteed-different
+ * one and asserts 404 — never 403, which would itself leak that the resource exists (SC-004).
  */
 export async function assertTenantIsolated(
-  _app: INestApplication,
-  _method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
-  _path: string,
+  app: INestApplication,
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+  path: string,
 ): Promise<void> {
-  throw new Error(
-    'assertTenantIsolated has no implementation yet — it needs a second tenant context from 001/002',
-  );
+  const httpMethod = method.toLowerCase() as 'get' | 'post' | 'patch' | 'put' | 'delete';
+  await request(app.getHttpServer())[httpMethod](path).set('X-Tenant-Id', randomUUID()).expect(404);
 }
 
 /**

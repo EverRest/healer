@@ -32,4 +32,10 @@ export interface EvidenceRepository {
   record(evidence: TenantScoped<NewEvidence>): Promise<Evidence>;
   findById(where: TenantScoped<{ readonly id: string }>): Promise<Evidence | null>;
   detach(where: TenantScoped<{ readonly id: string }>): Promise<Evidence>;
+  /** `GET /issues/{issueId}/evidence` (001 T031, FR-007). `type` narrows to one evidence kind;
+   *  omitted, every kind for this issue. Ordered oldest-first, matching the timeline's own
+   *  ordering (FR-013) rather than an arbitrary DB default. */
+  listByIssue(
+    where: TenantScoped<{ readonly issueId: string; readonly type?: Evidence['type'] }>,
+  ): Promise<readonly Evidence[]>;
 }

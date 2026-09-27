@@ -95,6 +95,37 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.38.0 — 2026-09-28
+
+**001 T027–T031**: `RecordEvidence`, `AttachLink`, the detach test/behaviour, and
+`GET /issues/{id}/evidence` — Phase 4 (US2, evidence lifecycle), five of its ten tasks
+(T032–T036 remain: the oversized-payload test, and the three continuous invariant checks).
+
+- `RecordEvidence` validates every raw payload against 012's `RunnerEvidence` boundary schemas
+  before it becomes a stored `Evidence` row (FR-007), and maps all 13 transport kinds this feature
+  owns to `Evidence.type` through the one authority `KIND_TO_EVIDENCE_TYPE` — the four
+  architecture-discovery shapes (`component_candidate`, `deployment_unit_candidate`,
+  `dependency_observation`, `repository_ref`) all collapse to `graph_fact` (FR-007a).
+- `AttachLink`/`DetachEvidence` are thin, deliberately: the closed relation set and the
+  `(evidence, conclusion, relation)` uniqueness already hold at the type/DB layer. New
+  `DuplicateEvidenceLinkError`, translated from Prisma's P2002 the same way `FingerprintAlreadyOpenError`
+  translates its own.
+- Detaching evidence never touches the conclusions built on it — proven directly (`evidence-repository.e2e.test.ts`),
+  not just implied by the FK having no cascade.
+- **`GET /issues/{id}/evidence`**, the first controller in `apps/api/src/issues/`: tenant-scoped
+  issue lookup happens before the evidence query ever runs, so a cross-tenant id 404s the same way
+  a nonexistent one does (SC-004) — never an empty list that would itself confirm the id exists.
+  `assertTenantIsolated` (`test/tenant-isolation.ts`), previously an always-throwing stub blocking
+  every future GET-endpoint isolation test, is now implemented for real.
+- **Found and fixed a real bug along the way**: a malformed (non-UUID) issue id crashed
+  `PrismaIssueRepository.findById` with a 500 (Prisma P2023) instead of the required 404 — the
+  exact case a literal-placeholder isolation-test path (`gate-isolation`'s own established
+  convention) exercises. Fixed by treating a malformed id as indistinguishable from an absent one,
+  same as SC-004 already requires.
+- New coverage-completeness gap closed: `attachLink`/`detachEvidence` are risk-weighted
+  (`packages/domain/evidence`, R-11) and were exercised by no test at all.
+- `make ci` green: 144 e2e tests, all 16 gates.
+
 ## 0.37.0 — 2026-09-27
 
 **001 T026**: load check (SC-006) — the last task of Phase 3 (US1). Found and fixed a real
