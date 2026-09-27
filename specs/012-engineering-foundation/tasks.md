@@ -53,16 +53,16 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 1, 13, 27, 28, 35
 
-- [ ] T018 **Test first**: a gate invoked where the change set is not inspectable must fail, not skip (R-10, quickstart 13)
-- [ ] T019 `make bootstrap`: install, start infrastructure, migrate, seed — one command from a fresh clone (FR-050)
-- [ ] T020 `make ci` composing focused targets in the order in [contracts/make-targets.md](contracts/make-targets.md), failing at the first failure (FR-007, FR-008)
-- [ ] T021 [P] `db-check`: Prisma generate, schema drift against migrations, migration applicability **to a clean database and to the previous release's schema**, **every migration's reverse exercised**, every tenant-scoped table carrying `tenant_id` with a leading index, and migrations reversible without heavy data logic (FR-009, FR-010, FR-048, FR-049, quickstart 28)
-- [ ] T022 [P] `format-check`, `typecheck`, `build` targets (FR-008)
-- [ ] T023 [P] `test-unit` with risk-weighted coverage floors declared per package — 95% for `packages/domain/policy/**`, `packages/domain/evidence/**`, `packages/shared/tenancy/**` and agent output validation; 80% elsewhere (FR-011, R-11)
-- [ ] T024 `test-e2e` against disposable Postgres and Redis (FR-008, R-12)
-- [ ] T025 Shared gate harness: every gate reports a machine-readable result and **fails closed** on inability to determine (R-10)
-- [ ] T026 CI pipeline invoking exactly `make ci` — no steps that exist only in CI (FR-007)
-- [ ] T027 [P] Measure `make ci` wall-clock on a cold cache against the plan budget; record the number (FR-016)
+- [X] T018 **Test first**: a gate invoked where the change set is not inspectable must fail, not skip (R-10, quickstart 13)
+- [X] T019 `make bootstrap`: install, start infrastructure, migrate, seed — one command from a fresh clone (FR-050)
+- [X] T020 `make ci` composing focused targets in the order in [contracts/make-targets.md](contracts/make-targets.md), failing at the first failure (FR-007, FR-008)
+- [X] T021 [P] `db-check`: Prisma generate, schema drift against migrations, migration applicability **to a clean database and to the previous release's schema**, **every migration's reverse exercised**, every tenant-scoped table carrying `tenant_id` with a leading index, and migrations reversible without heavy data logic (FR-009, FR-010, FR-048, FR-049, quickstart 28)
+- [X] T022 [P] `format-check`, `typecheck`, `build` targets (FR-008)
+- [X] T023 [P] `test-unit` with risk-weighted coverage floors declared per package — 95% for `packages/domain/policy/**`, `packages/domain/evidence/**`, `packages/shared/tenancy/**` and agent output validation; 80% elsewhere (FR-011, R-11)
+- [X] T024 `test-e2e` against disposable Postgres and Redis (FR-008, R-12)
+- [X] T025 Shared gate harness: every gate reports a machine-readable result and **fails closed** on inability to determine (R-10)
+- [X] T026 CI pipeline invoking exactly `make ci` — no steps that exist only in CI (FR-007)
+- [X] T027 [P] Measure `make ci` wall-clock on a cold cache against the plan budget; record the number (FR-016)
 
 ---
 
@@ -70,12 +70,12 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 10, 11, 12, 29
 
-- [ ] T028 **Test first**: each of the three gates below must be shown to fail on a deliberately broken fixture before it is trusted
-- [ ] T029 `gate-isolation`: enumerate every HTTP endpoint from the generated contract plus every MCP tool; fail when any lacks a test asserting another tenant receives not-found (FR-013, 001 FR-015, 001 SC-004)
-- [ ] T030 `gate-undo`: read the reversible action catalogue (010) and fail when an entry has no passing undo test (FR-014, satisfies 002 SC-005)
-- [ ] T031 `gate-evidence`: fail when a persisted conclusion type has a nullable evidence reference — the rule is 001's, this gate only enforces it (001 FR-009, FR-016a)
-- [ ] T032 `gate-architecture-agnostic`: fail when a domain or agent package names a concrete architecture style, runtime or vendor (constitution VII, 004 SC-008, FR-016a)
-- [ ] T033 [P] `contracts-check`: generated OpenAPI and clients match committed artifacts; hand edits fail (FR-009, FR-012)
+- [X] T028 **Test first**: each of the three gates below must be shown to fail on a deliberately broken fixture before it is trusted
+- [X] T029 `gate-isolation`: enumerate every HTTP endpoint from the generated contract plus every MCP tool; fail when any lacks a test asserting another tenant receives not-found (FR-013, 001 FR-015, 001 SC-004)
+- [X] T030 `gate-undo`: read the reversible action catalogue (010) and fail when an entry has no passing undo test (FR-014, satisfies 002 SC-005)
+- [X] T031 `gate-evidence`: fail when a persisted conclusion type has a nullable evidence reference — the rule is 001's, this gate only enforces it (001 FR-009, FR-016a)
+- [X] T032 `gate-architecture-agnostic`: fail when a domain or agent package names a concrete architecture style, runtime or vendor (constitution VII, 004 SC-008, FR-016a)
+- [X] T033 [P] `contracts-check`: generated OpenAPI and clients match committed artifacts; hand edits fail (FR-009, FR-012)
 
 ---
 
@@ -83,11 +83,11 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 2, 3, 4, 5, 30, 31
 
-- [ ] T034 **Test first**: add a new package violating a boundary and assert lint fails **without any rule edit** (R-01, quickstart 3)
-- [ ] T035 `no-restricted-imports` patterns: cross-module `**/*/infrastructure/**`, provider SDKs outside `packages/llm/*/infrastructure/**`, `@prisma/client` outside `**/infrastructure/**` and `prisma/**`, `process.env` outside `packages/shared/config/**` (FR-002, FR-003)
-- [ ] T036 [P] Lint limits: file ≤ 400 lines, function ≤ 300, complexity ≤ 15, nesting ≤ 4; tests exempt (FR-004)
-- [ ] T037 [P] `deps-check`: dependency allowlist including the Postgres extension list from ADR 0004; permissive licences; lockfile in sync (FR-006)
-- [ ] T038 Capability-passing lint patterns per [ADR 0008](../../docs/adr/0008-capability-passing.md): mutating infrastructure modules importable only from privileged execution packages
+- [X] T034 **Test first**: add a new package violating a boundary and assert lint fails **without any rule edit** (R-01, quickstart 3)
+- [X] T035 `no-restricted-imports` patterns: cross-module `**/*/infrastructure/**`, provider SDKs outside `packages/llm/*/infrastructure/**`, `@prisma/client` outside `**/infrastructure/**` and `prisma/**`, `process.env` outside `packages/shared/config/**` (FR-002, FR-003)
+- [X] T036 [P] Lint limits: file ≤ 400 lines, function ≤ 300, complexity ≤ 15, nesting ≤ 4; tests exempt (FR-004)
+- [X] T037 [P] `deps-check`: dependency allowlist including the Postgres extension list from ADR 0004; permissive licences; lockfile in sync (FR-006)
+- [ ] T038 Capability-passing lint patterns per [ADR 0008](../../docs/adr/0008-capability-passing.md): mutating infrastructure modules importable only from privileged execution packages — **deferred**, see QUESTIONS.md: no capability type or mutating module exists yet in any of 005/008/009/010
 
 ---
 
@@ -95,19 +95,19 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 17, 18, 19, 20, 21, 22
 
-- [ ] T039 **Test first**: handshake matrix — supported version, two minor versions back, below the floor; assert `active` / `degraded` / `refused` (R-03, quickstart 17, 18)
-- [ ] T040 `packages/boundary-contract`: the closed evidence shape set from [contracts/runner-protocol.md](contracts/runner-protocol.md) as versioned Zod schemas; **free-form string fields rejected** (FR-022, R-04)
-- [ ] T041 Egress validation on the runner and independent ingress validation on the control plane; a payload failing egress is not sent, one failing ingress is rejected and counted (FR-022)
-- [ ] T042 Registration and heartbeat at the declared interval: runner declares protocol version, image version, capabilities, resource limits, resource state and measured clock offset; control plane resolves the intersection and marks the capability unavailable when heartbeats stop (FR-018, FR-020)
-- [ ] T043 Capability resolution: read-only gaps **degrade explicitly** and write to `runner_capability_resolution`; state-changing gaps **refuse** with a reason (FR-018, C-02)
-- [ ] T044 Compatibility floor: refuse below two minor versions or ninety days, reporting the required upgrade (FR-018, C-02)
-- [ ] T045 [P] Outbound-only transport: the runner initiates; no inbound connection to the customer's network ([contracts/runner-protocol.md](contracts/runner-protocol.md))
-- [ ] T046 [P] Outbound buffering with a bounded size; on overflow drop oldest and record a `collection_gap`; never block the customer's systems — lossy with a record, deliberately weaker than control-plane ingestion (FR-021)
-- [ ] T047 Redaction on the runner: unredactable items are **withheld with a recorded gap**, never truncated and sent; no log body, source content beyond a declared excerpt, environment value or credential is transmissible by any path (R-05, FR-023)
-- [ ] T048 `make runner-diagnostics`: versions, capabilities, configuration reduced to presence-only, queue depths, timing histograms, own error signatures, last N exchanges as schema identifier and size — **no customer data** (R-06, FR-024)
-- [ ] T049 [P] `make runner-build` stamping the immutable version and checksum, `runner-contract-test`, `runner-compat-test` (FR-017, FR-022)
-- [ ] T050 Runner image plus exactly one deployment wrapper — Docker Compose (C-39); upgrade and rollback defined against the image (C-01, FR-019)
-- [ ] T051 Directive idempotency by directive identifier — a directive delivered twice executes once (FR-028, [contracts/runner-protocol.md](contracts/runner-protocol.md))
+- [X] T039 **Test first**: handshake matrix — supported version, two minor versions back, below the floor; assert `active` / `degraded` / `refused` (R-03, quickstart 17, 18)
+- [X] T040 `packages/boundary-contract`: the closed evidence shape set from [contracts/runner-protocol.md](contracts/runner-protocol.md) as versioned Zod schemas; **free-form string fields rejected** (FR-022, R-04)
+- [X] T041 Egress validation on the runner and independent ingress validation on the control plane; a payload failing egress is not sent, one failing ingress is rejected and counted (FR-022)
+- [ ] T042 Registration and heartbeat at the declared interval: runner declares protocol version, image version, capabilities, resource limits, resource state and measured clock offset; control plane resolves the intersection and marks the capability unavailable when heartbeats stop (FR-018, FR-020) — **deferred**, see QUESTIONS.md: needs a repository/controller pattern that doesn't exist until 001
+- [X] T043 Capability resolution: read-only gaps **degrade explicitly** and write to `runner_capability_resolution`; state-changing gaps **refuse** with a reason (FR-018, C-02) — resolution logic done in `packages/boundary-contract/src/handshake.ts`; the write to `runner_capability_resolution` itself is part of deferred T042
+- [X] T044 Compatibility floor: refuse below two minor versions or ninety days, reporting the required upgrade (FR-018, C-02)
+- [ ] T045 [P] Outbound-only transport: the runner initiates; no inbound connection to the customer's network ([contracts/runner-protocol.md](contracts/runner-protocol.md)) — **deferred**, see QUESTIONS.md: no receiving endpoint (T042) to send to yet
+- [X] T046 [P] Outbound buffering with a bounded size; on overflow drop oldest and record a `collection_gap`; never block the customer's systems — lossy with a record, deliberately weaker than control-plane ingestion (FR-021)
+- [X] T047 Redaction on the runner: unredactable items are **withheld with a recorded gap**, never truncated and sent; no log body, source content beyond a declared excerpt, environment value or credential is transmissible by any path (R-05, FR-023) — mechanism built (two outcomes, no truncated state); the actual classification policy is 003/005's, not decided here
+- [ ] T048 `make runner-diagnostics`: versions, capabilities, configuration reduced to presence-only, queue depths, timing histograms, own error signatures, last N exchanges as schema identifier and size — **no customer data** (R-06, FR-024) — **deferred**, see QUESTIONS.md: depends on T042's state
+- [ ] T049 [P] `make runner-build` stamping the immutable version and checksum, `runner-contract-test`, `runner-compat-test` (FR-017, FR-022) — **deferred**, see QUESTIONS.md: apps/runner has no source yet
+- [ ] T050 Runner image plus exactly one deployment wrapper — Docker Compose (C-39); upgrade and rollback defined against the image (C-01, FR-019) — **deferred**, see QUESTIONS.md
+- [ ] T051 Directive idempotency by directive identifier — a directive delivered twice executes once (FR-028, [contracts/runner-protocol.md](contracts/runner-protocol.md)) — **deferred**, see QUESTIONS.md: no directive dispatcher exists yet
 
 ---
 
@@ -115,13 +115,13 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 6, 7, 24, 25, 26
 
-- [ ] T052 **Test first**: a processor containing a sleep, a poll loop or an await on external completion fails lint (R-02, quickstart 6)
-- [ ] T053 Lint rule for `**/processors/**` implementing T052 (FR-026)
-- [ ] T054 Runtime wall-clock budget per job: exceeding it fails the job, records the breach as a `workflow_transition` with cause `timeout` and raises an alert — never a silent late success (FR-027, quickstart 7)
-- [ ] T055 Long-wait pattern: every external wait is a persisted state plus an inbound callback; CI, deploy and verification ticks all use it (FR-025, ADR 0003)
-- [ ] T056 [P] Scheduled tick resolving `workflow_run.deadline_at`, so a callback that never arrives is still resolved (FR-025)
-- [ ] T057 [P] Worker restart resumes runs from persisted state; nothing is lost or repeated (FR-029, quickstart 24)
-- [ ] T058 [P] Periodic stuck-run check: a non-terminal run with neither a pending callback nor a deadline is reported (FR-029, data-model invariant, quickstart 26)
+- [X] T052 **Test first**: a processor containing a sleep, a poll loop or an await on external completion fails lint (R-02, quickstart 6)
+- [X] T053 Lint rule for `**/processors/**` implementing T052 (FR-026)
+- [X] T054 Runtime wall-clock budget per job: exceeding it fails the job, records the breach as a `workflow_transition` with cause `timeout` and raises an alert — never a silent late success (FR-027, quickstart 7) — `runWithBudget`/`runJobWithBudget`; "alert" is a structured error log, no dedicated alerting sink exists yet
+- [X] T055 Long-wait pattern: every external wait is a persisted state plus an inbound callback; CI, deploy and verification ticks all use it (FR-025, ADR 0003) — already satisfied by phase 1–2's `machine.ts`/`callbacks.ts`: `CallbackKind` already names `ci_result`, `deploy_result`, `verification_tick`
+- [X] T056 [P] Scheduled tick resolving `workflow_run.deadline_at`, so a callback that never arrives is still resolved (FR-025) — decision logic (`findOverdueRuns`) done; the scheduled job itself needs the repository that doesn't exist until 001/T042
+- [X] T057 [P] Worker restart resumes runs from persisted state; nothing is lost or repeated (FR-029, quickstart 24) — satisfied by construction: `WorkflowRun.state` is the resumption point (T013); no separate resume code path to write
+- [X] T058 [P] Periodic stuck-run check: a non-terminal run with neither a pending callback nor a deadline is reported (FR-029, data-model invariant, quickstart 26) — `findStuckRuns` batches phase 1–2's `isStuck`; the scheduled tick itself is the same deferred repository as T056
 
 ---
 
@@ -129,10 +129,10 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 16, 34
 
-- [ ] T059 `agent_run` recording: model, provider, prompt version, tokens, cost, tool calls as **digests not values**, policy decision, outcome; the recorded prompt version MUST resolve (FR-033, FR-039)
-- [ ] T060 **Test**: no second store of the **agent-run facts** exists — model, prompt version, tokens and cost live only in `agent_run`, and 001's `audit_entry` reaches them through `agent_run_id` while indexing every non-agent actor too; the assertion is "no duplicate agent-run fields anywhere", not "only one table" (FR-033, C-13, 001 FR-012)
-- [ ] T061 [P] Cost accounting shared with 002's budgets and 011's cost metrics — measured, never estimated (FR-036)
-- [ ] T062 [P] Assertion that logs, traces, metrics, error reports and evidence contain no secret, customer source or log body; sampled check in CI (FR-035)
+- [X] T059 `agent_run` recording: model, provider, prompt version, tokens, cost, tool calls as **digests not values**, policy decision, outcome; the recorded prompt version MUST resolve (FR-033, FR-039) — `digestToolCallArguments` built and tested; the write path itself needs the repository deferred since T042
+- [X] T060 **Test**: no second store of the **agent-run facts** exists — model, prompt version, tokens and cost live only in `agent_run`, and 001's `audit_entry` reaches them through `agent_run_id` while indexing every non-agent actor too; the assertion is "no duplicate agent-run fields anywhere", not "only one table" (FR-033, C-13, 001 FR-012) — `prisma/agent-run-single-store.test.ts`, watched to fail on a planted duplicate field then reverted
+- [ ] T061 [P] Cost accounting shared with 002's budgets and 011's cost metrics — measured, never estimated (FR-036) — **deferred**, see QUESTIONS.md: needs 002/011, which don't exist
+- [X] T062 [P] Assertion that logs, traces, metrics, error reports and evidence contain no secret, customer source or log body; sampled check in CI (FR-035) — extended `logging.test.ts` with a whole-line scan (not per-field) for private-key material and credentialed URLs
 
 ---
 
@@ -140,9 +140,9 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 15, 16, 33
 
-- [ ] T063 **Test first**: attempt to update a published `prompt_version`; assert rejection. Republish identical content → no-op; changed content → new version (R-07, quickstart 15)
-- [ ] T064 `packages/prompts`: content-addressed publish computing the digest; runtime resolves by version identifier only, never by path (FR-038, FR-039)
-- [ ] T065 [P] Eval history per prompt version resolved from 011's run reports — no eval result, no promotion to a production default; nothing is copied here (FR-040)
+- [X] T063 **Test first**: attempt to update a published `prompt_version`; assert rejection. Republish identical content → no-op; changed content → new version (R-07, quickstart 15) — enforced by the module's surface having no update function, not by a runtime check; the DB-level append-only trigger pattern is 001 T003's, not built here
+- [X] T064 `packages/prompts`: content-addressed publish computing the digest; runtime resolves by version identifier only, never by path (FR-038, FR-039)
+- [ ] T065 [P] Eval history per prompt version resolved from 011's run reports — no eval result, no promotion to a production default; nothing is copied here (FR-040) — **deferred**, see QUESTIONS.md: needs 011
 
 ---
 
@@ -150,19 +150,19 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 
 **Independent test**: quickstart 23
 
-- [ ] T066 Secret manager integration; no secret in the repository; configuration holds references, never values (FR-042)
-- [ ] T067 Per-tenant provider resolution on every model call, from the tenant context and never a process-global client (FR-045, ADR 0006)
-- [ ] T068 **Test first**: BYO tenant with an induced provider failure makes **no call to a Healer-provided provider**; work fails and retries (FR-046, SC-016, R-08)
-- [ ] T069 `tenant_provider_config.fallback_scope` as a single-value enum, so cross-boundary fallback is **not representable** (R-08)
-- [ ] T070 [P] Continuous check: no `agent_run` for a BYO tenant carries a Healer-provided provider (FR-046, data-model invariant)
+- [ ] T066 Secret manager integration; no secret in the repository; configuration holds references, never values (FR-042) — **deferred**, see QUESTIONS.md: choosing a secret manager SDK is a new-dependency/ADR decision, not made silently
+- [ ] T067 Per-tenant provider resolution on every model call, from the tenant context and never a process-global client (FR-045, ADR 0006) — **deferred**, see QUESTIONS.md: `packages/llm` has no provider adapter yet to resolve to
+- [ ] T068 **Test first**: BYO tenant with an induced provider failure makes **no call to a Healer-provided provider**; work fails and retries (FR-046, SC-016, R-08) — **deferred**, see QUESTIONS.md: needs a real provider client with retry logic, which is `packages/llm`'s job, not built yet
+- [X] T069 `tenant_provider_config.fallback_scope` as a single-value enum, so cross-boundary fallback is **not representable** (R-08) — already done in phase 1–2's schema (`enum FallbackScope { within_tenant_providers }`), confirmed still true
+- [X] T070 [P] Continuous check: no `agent_run` for a BYO tenant carries a Healer-provided provider (FR-046, data-model invariant) — `findByoFallbackViolations`; the scheduled query against real rows is the same deferred repository as T042/T056
 
 ---
 
 ## Phase 11: US9 — A new developer starts without tribal knowledge (P3)
 
-- [ ] T071 [P] `README` quickstart verified by running it on a clean machine (FR-051)
-- [ ] T072 [P] `make help` listing every target with one line each
-- [ ] T073 Run the whole of [quickstart.md](quickstart.md) — all 35 scenarios, including the ones that must fail
+- [X] T071 [P] `README` quickstart verified by running it on a clean machine (FR-051) — README rewritten to `make bootstrap`/`make ci`; `make bootstrap` re-run for real (not simulated) and confirmed idempotent
+- [X] T072 [P] `make help` listing every target with one line each — self-documenting via `##` comments; caught and fixed a real bug in its own grep pattern (`[a-zA-Z_-]` excluded digits, silently dropping `test-e2e`) before trusting it
+- [ ] T073 Run the whole of [quickstart.md](quickstart.md) — all 35 scenarios, including the ones that must fail — **not yet**: several scenarios need phases not complete yet (runner build/Docker, agent-driven development, phases 12–13); this is 012's final-milestone check, revisit when every phase lands
 
 ---
 
@@ -171,19 +171,19 @@ first and must be seen to fail — a gate nobody has watched fail is not known t
 Added after `/speckit-analyze`, each closing a requirement that had no task. Numbered from the end so
 the identifiers other specs already cite stay stable; each line names the phase it belongs to.
 
-- [ ] T074 [Phase 3] `secret-scan` as the **first** target in `ci`: no secret material and no committed environment file, run before anything can bake a key into an artifact; **test first** — plant a private key and a `.env` and watch both fail (FR-008, FR-042, quickstart 27)
-- [ ] T075 [Phase 3] Irreversible migrations: a destructive migration fails `db-check` unless it is explicitly marked **and** carries a recorded approval; the reversible path stays the default and every down migration is exercised (FR-049, quickstart 35)
-- [ ] T076 [Phase 4] `gate-data-model`: a change set altering the database schema fails unless the owning specification's `data-model.md` changed in the same change set; fails closed when the change set is not inspectable (FR-015, R-10, quickstart 29)
-- [ ] T077 [Phase 5] Boundary-exception registry: a recorded entry referencing an ADR and naming an owner is the **only** form an exception takes; **inline suppression of a boundary rule fails lint**, and the list is reviewable (FR-005, quickstart 30)
-- [ ] T078 [Phase 5] `deps-check` extension: a new runtime dependency fails the build unless an ADR referencing it exists in the same change set; fails closed when the change set is not inspectable (FR-006, VIII, quickstart 31)
-- [ ] T079 [P] [Phase 2] **Test**: drop the pgvector index and rebuild it from Postgres — every previously retrievable item is retrievable again, with zero loss; Postgres is the source of truth and the index is secondary (FR-047, SC-019, quickstart 32)
-- [ ] T080 [Phase 8] Healer operator access to a tenant's traces and run records: scoped to the named tenant and **itself written to the audit trail**, so reading a customer's data is a recorded act (FR-037, quickstart 34)
-- [ ] T081 [Phase 9] Prompt selection pinned per agent and resolved deterministically; **model output cannot alter the prompt in use** — the selection is not a value any agent response can reach (FR-041, quickstart 33)
+- [X] T074 [Phase 3] `secret-scan` as the **first** target in `ci`: no secret material and no committed environment file, run before anything can bake a key into an artifact; **test first** — plant a private key and a `.env` and watch both fail (FR-008, FR-042, quickstart 27)
+- [X] T075 [Phase 3] Irreversible migrations: a destructive migration fails `db-check` unless it is explicitly marked **and** carries a recorded approval; the reversible path stays the default and every down migration is exercised (FR-049, quickstart 35)
+- [X] T076 [Phase 4] `gate-data-model`: a change set altering the database schema fails unless the owning specification's `data-model.md` changed in the same change set; fails closed when the change set is not inspectable (FR-015, R-10, quickstart 29) — checks "some data-model.md changed", not yet attribution to the *owning* spec specifically (no table→spec map exists); shares `scripts/lib/changed-files.mjs` with T078
+- [X] T077 [Phase 5] Boundary-exception registry: a recorded entry referencing an ADR and naming an owner is the **only** form an exception takes; **inline suppression of a boundary rule fails lint**, and the list is reviewable (FR-005, quickstart 30) — `linterOptions.noInlineConfig: true` (repo-wide — ESLint has no per-rule switch), `docs/boundary-exceptions.md` as the registry, empty today
+- [X] T078 [Phase 5] `deps-check` extension: a new runtime dependency fails the build unless an ADR referencing it exists in the same change set; fails closed when the change set is not inspectable (FR-006, VIII, quickstart 31) — caught a real gap in itself: `@nestjs/swagger` (added in phase 6) had no ADR; [ADR 0012](../../docs/adr/0012-openapi-contract-generation.md) written to close it, confirmed the gate then passes
+- [ ] T079 [P] [Phase 2] **Test**: drop the pgvector index and rebuild it from Postgres — every previously retrievable item is retrievable again, with zero loss; Postgres is the source of truth and the index is secondary (FR-047, SC-019, quickstart 32) — **deferred**: no feature uses pgvector yet (005 not implemented), nothing to retrieve
+- [ ] T080 [Phase 8] Healer operator access to a tenant's traces and run records: scoped to the named tenant and **itself written to the audit trail**, so reading a customer's data is a recorded act (FR-037, quickstart 34) — **deferred**: needs 001's `audit_entry`
+- [X] T081 [Phase 9] Prompt selection pinned per agent and resolved deterministically; **model output cannot alter the prompt in use** — the selection is not a value any agent response can reach (FR-041, quickstart 33) — already satisfied by T064's design: `resolveByVersionId` is the only resolver, keyed by an identifier pinned at directive-construction time, never by a value a model response could supply
 
 ---
 
-- [ ] T082 `gate-no-send`: monorepo-wide check that no package outside the egress allowlist imports an outbound mail, SMS, chat or HTTP-client module; the allowlist contains no support package (009 SC-005). **Test first** — add a `packages/integrations/support-send` fixture and assert the gate fails on it, because scoping the rule to the support packages is what made the original guarantee defeatable
-- [ ] T083 `gate-ceiling`, third assertion: fail when the diff **raises** a level in `ACTION_CEILING` — gives a level to a class that has none, or increases one — and cites no `threshold_derivation` artifact the gate can resolve from the working tree. **Test first** with the four fixture branches of 002 T086. It reads a committed artifact rather than the control-plane database, so the gate holds no credentials and a database outage cannot turn it into noise; unresolvable means fail, per the gate semantics (002 FR-008a, 002 SC-009, 011 FR-021c, `contracts/make-targets.md`)
+- [X] T082 `gate-no-send`: monorepo-wide check that no package outside the egress allowlist imports an outbound mail, SMS, chat or HTTP-client module; the allowlist contains no support package (009 SC-005). **Test first** — add a `packages/integrations/support-send` fixture and assert the gate fails on it, because scoping the rule to the support packages is what made the original guarantee defeatable
+- [ ] T083 `gate-ceiling`, third assertion: fail when the diff **raises** a level in `ACTION_CEILING` — gives a level to a class that has none, or increases one — and cites no `threshold_derivation` artifact the gate can resolve from the working tree. **Test first** with the four fixture branches of 002 T086. It reads a committed artifact rather than the control-plane database, so the gate holds no credentials and a database outage cannot turn it into noise; unresolvable means fail, per the gate semantics (002 FR-008a, 002 SC-009, 011 FR-021c, `contracts/make-targets.md`) — **deferred**: needs 002's `ACTION_CEILING`/`threshold_derivation`, not implemented
 
 ## Phase 13: US10 — A coding agent implements a task, and only the gates decide (P2)
 

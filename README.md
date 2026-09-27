@@ -10,24 +10,21 @@ backed by evidence, and where policy permits, into a verified change.
 
 ## Status
 
-Specifications complete for all thirteen features. **Implementation has started**: 012 phases 1–2 —
-the monorepo, the shared foundations, the workflow machine, the callback registry, the transactional
-outbox and the queue classes. See [docs/roadmap.md](docs/roadmap.md) for spec state and
-[docs/stage-0.md](docs/stage-0.md) for what still blocks realistic sizing of v1.
+Specifications complete for all thirteen features. **Implementation has started**: 012
+(engineering foundation) phases 1–7 of 13 — the monorepo, tenancy as a compile-time guarantee, the
+workflow machine, the gate suite (`make ci`), boundary lint rules, the runner protocol's schemas
+and handshake logic, never-wait-in-a-job. See [docs/roadmap.md](docs/roadmap.md) for exact phase
+state and [docs/stage-0.md](docs/stage-0.md) for what still blocks realistic sizing of v1.
 
 ## Running it locally
 
 ```bash
-pnpm install
-cp .env.example .env                      # local values only; nothing production belongs here
-docker compose -f docker/docker-compose.yml up -d
-pnpm exec prisma migrate deploy           # applies prisma/migrations
-pnpm typecheck && pnpm lint && pnpm test-unit
-pnpm test-e2e                             # starts disposable Postgres and Redis; needs Docker
+make bootstrap      # install, start Postgres + Redis, migrate, seed — one command, no manual step
+make ci             # the full gate set: secret-scan, lint, typecheck, build, tests, contract drift
 ```
 
-`make ci` and `make bootstrap` arrive with 012 phase 3; until then the npm scripts above are the
-same checks in the same order.
+Focused targets for iteration: `make lint`, `make typecheck`, `make test-unit`, `make test-e2e`
+(needs Docker), `make db-check`. `make help` lists every target.
 
 ## What v1 is
 

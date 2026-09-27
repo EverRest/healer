@@ -70,6 +70,7 @@ CREATE TABLE "workflow"."workflow_run" (
 -- CreateTable
 CREATE TABLE "workflow"."workflow_transition" (
     "id" UUID NOT NULL,
+    "tenant_id" UUID NOT NULL,
     "run_id" UUID NOT NULL,
     "from_state" TEXT NOT NULL,
     "to_state" TEXT NOT NULL,
@@ -199,13 +200,18 @@ CREATE TABLE "agent"."agent_run" (
 CREATE INDEX "workflow_run_tenant_id_state_idx" ON "workflow"."workflow_run"("tenant_id", "state");
 
 -- CreateIndex
+-- Backs WorkflowTransition's composite FK (FR-048) — id alone is already unique via the
+-- primary key, but Postgres requires a unique constraint on exactly the referenced set.
+CREATE UNIQUE INDEX "workflow_run_id_tenant_id_key" ON "workflow"."workflow_run"("id", "tenant_id");
+
+-- CreateIndex
 -- Partial on purpose: the deadline sweep reads live runs only, and a terminal run is
 -- never woken. Not expressible in schema.prisma, so it lives here (data-model.md).
 CREATE INDEX "workflow_run_deadline_at_live_idx" ON "workflow"."workflow_run"("deadline_at")
   WHERE "terminal_state" IS NULL;
 
 -- CreateIndex
-CREATE INDEX "workflow_transition_run_id_occurred_at_idx" ON "workflow"."workflow_transition"("run_id", "occurred_at");
+CREATE INDEX "workflow_transition_tenant_id_run_id_occurred_at_idx" ON "workflow"."workflow_transition"("tenant_id", "run_id", "occurred_at");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "workflow_callback_token_hash_key" ON "workflow"."workflow_callback"("token_hash");
@@ -238,10 +244,10 @@ CREATE INDEX "agent_run_tenant_id_started_at_idx" ON "agent"."agent_run"("tenant
 CREATE INDEX "agent_run_correlation_id_idx" ON "agent"."agent_run"("correlation_id");
 
 -- AddForeignKey
-ALTER TABLE "workflow"."workflow_transition" ADD CONSTRAINT "workflow_transition_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "workflow"."workflow_run"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "workflow"."workflow_transition" ADD CONSTRAINT "workflow_transition_run_id_tenant_id_fkey" FOREIGN KEY ("run_id", "tenant_id") REFERENCES "workflow"."workflow_run"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "workflow"."workflow_callback" ADD CONSTRAINT "workflow_callback_run_id_fkey" FOREIGN KEY ("run_id") REFERENCES "workflow"."workflow_run"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "workflow"."workflow_callback" ADD CONSTRAINT "workflow_callback_run_id_tenant_id_fkey" FOREIGN KEY ("run_id", "tenant_id") REFERENCES "workflow"."workflow_run"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "tenant"."tenant_provider_config" ADD CONSTRAINT "tenant_provider_config_tenant_id_fkey" FOREIGN KEY ("tenant_id") REFERENCES "tenant"."tenant"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -116,6 +116,13 @@ exactly the gate nobody runs.
 **Rationale**: a gate that cannot be reproduced locally is a gate developers route around, and the
 first time it fails in CI it is treated as CI being broken rather than the change being wrong.
 
+**Measured (T027, 2026-09-26, re-measured after the post-review fixes below)**: `make ci` with
+`dist/` and every `tsconfig.tsbuildinfo` removed — `secret-scan · db-check · format-check · lint ·
+typecheck · build · test-unit (67 tests, coverage-enforced) · test-e2e (8 tests)` — **21.7s
+wall-clock** on the implementing machine, against the plan's 10-minute budget. Phase 3 only; the
+number will move as later phases add gates and packages. (An earlier 32.3s figure was measured
+before `test-unit` actually collected coverage — see the changelog entry for what that means.)
+
 ## R-10 · Gates fail closed
 
 **Decision**: where a gate cannot determine the answer — the change set is not inspectable, the

@@ -131,6 +131,9 @@ export interface WorkflowRun {
 
 export interface Transition {
   readonly id: string;
+  /** Always the owning run's tenantId — the persisted FK is composite `(runId, tenantId)`
+   *  against `workflow_run`, so a transition naming any other tenant cannot be stored. */
+  readonly tenantId: string;
   readonly runId: string;
   readonly fromState: string;
   readonly toState: string;
@@ -176,6 +179,7 @@ export function start(
     ),
     transition: {
       id: randomUUID(),
+      tenantId: input.tenantId,
       runId: id,
       fromState: '(none)',
       toState: state.name,
@@ -223,6 +227,7 @@ export function step(
     run: moved,
     transition: {
       id: randomUUID(),
+      tenantId: run.tenantId,
       runId: run.id,
       fromState: run.state,
       toState: target.name,

@@ -95,6 +95,607 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.20.0 — 2026-09-27
+
+**001 T006**: the append-only evidence repository — `PrismaEvidenceRepository`, the first real
+`@prisma/client` consumer anywhere in this codebase (FR-010, R-03).
+
+- `packages/domain/evidence/src/infrastructure/prisma-evidence-repository.ts`: write and read
+  only — `record`, `findById`, `detach` — no generic `update`, so the one legitimate mutation
+  (`ref_state` moving `linked` to `detached`) has no method shaped to reach any other field.
+  Tenant scoping through the composite `(id, tenantId)` key inside the query itself (Prisma's
+  `id_tenantId` compound unique input), never a post-fetch check; `detach` translates Prisma's
+  "no row matched" into `@healer/shared`'s `NotFoundError` rather than leaking a raw persistence
+  error up through the domain interface.
+- **ADR 0013**: a dedicated `@healer/prisma-client` workspace package. `prisma/schema.prisma`'s
+  custom generator `output` means the generated client is its own self-contained package, not
+  `node_modules/@prisma/client` — and not a plain relative import either, since it sits outside
+  every package's `rootDir`. One small package re-exports it via pnpm's `link:` protocol
+  (`@healer/prisma-generated`) so all twelve future `packages/domain/*` repositories depend on one
+  stably-named workspace package instead of each carrying its own `link:` path to a build
+  artifact three directories up. The existing `@prisma/client`-confined-to-`infrastructure/**`
+  eslint rule now covers `@healer/prisma-client` too, closing what would otherwise have been a
+  two-character bypass of the boundary it exists to enforce.
+- Verified against a live Postgres (`evidence-repository.e2e.test.ts`, repo root — the same
+  rootDir constraint that put T004's test there): record-then-read for the owning tenant, `null`
+  for another tenant's lookup of the same id (proving the query itself is scoped, not filtered
+  after the fact), `null` for an id that never existed, `linked → detached` leaving every other
+  field untouched, `NotFoundError` on a wrong-tenant `detach`, and the composite FK (T006's own
+  prerequisite work, this session's earlier review-fix round) rejecting evidence recorded against
+  another tenant's issue. All 6 passed on the first real run.
+- **Two more real bugs found only by actually running the gates, not by reading the diff**:
+  `deps-check`'s ADR-diff check was requiring an ADR for any brand-new *internal* `@healer/*`
+  dependency edge between our own packages — FR-006 governs external dependency risk (licensing,
+  supply chain), not internal architecture wiring, so this is now excluded the same way the
+  allowlist check already excludes `@healer/*`. And a genuine vitest/v8-coverage bug: a workspace
+  package resolves to its *built* `dist/index.js` when imported by name from another package, but
+  to live-transformed `src/index.ts` when imported by relative path from within its own package —
+  two different scripts to v8, both remapped to the same reported source path, whose coverage
+  entries concatenate instead of summing. `packages/shared/src/tenancy/index.ts` dropped from
+  100% to 83% function coverage with zero lines of that file touched, purely from a new consumer
+  importing `NotFoundError` by package name for the first time from outside its own package.
+  Fixed by aliasing every workspace package name to its own `src/index.ts` in each vitest
+  project's `resolve.alias` — a root-level `resolve.alias` silently does nothing under
+  `test.projects`, it has to be declared per project.
+- **`infrastructure/**` excluded from the unit coverage floor** (documented in `QUESTIONS.md` as a
+  real, reversible-if-wrong decision): a repository's actual guarantees are only meaningful
+  against a live database, and `test-unit`/`test-e2e` run as two separate `vitest run`
+  invocations that never merge coverage — so the gate for this class of code is `make test-e2e`
+  passing, not a unit-coverage percentage that would just get gamed with shallow mocked-client
+  tests. The database-level append-only enforcement (001 T003) is an independent, DB-level
+  backstop for the one property this trade-off matters most for, regardless of what the
+  repository's TypeScript does.
+- `make ci` green cold-cache: 35 unit files / 207 tests, 6 e2e files / 46 tests, all 16 gates.
+
+## 0.19.0 — 2026-09-27
+
+**001 T005**: `packages/domain/evidence`'s first real code — `Evidence` and `EvidenceLink` domain
+types, and excerpt bounding at capture (R-05, FR-011).
+
+- `Evidence`'s `excerpt`/`excerptTruncated` pair is a discriminated union
+  (`{ excerpt: null; excerptTruncated: false } | { excerpt: string; excerptTruncated: boolean }`),
+  not two independent fields — the same technique 012's `WorkflowState` uses to make an illegal
+  combination (`excerptTruncated: true` with nothing actually captured) unrepresentable rather than
+  merely unexpected, which matters here because a misleading truncation claim is exactly the kind
+  of unsupported claim the constitution's Evidence First principle exists to prevent.
+- `boundExcerpt(raw, maxLength)`: beyond the limit, a head-and-tail extract replaces the full text
+  and `excerptTruncated` is marked (R-05's decision — "nobody reads the middle of it"). Slices by
+  Unicode code point via `Array.from`, not by UTF-16 code unit via `String.slice`: a multi-byte
+  character (an emoji in captured log text) landing on the cut boundary is dropped whole rather
+  than split into a lone surrogate that later fails to round-trip through Postgres/JSON as valid
+  UTF-8 — a real-input correctness concern for arbitrary captured text, not a hypothetical one.
+  `maxLength` is a parameter, not a constant: FR-011/spec.md's assumptions call the excerpt limit
+  configuration, tuned on the stage-0 incident audit, which has not run yet.
+- `EvidenceType`, `RefState`, `ConclusionType` and `EvidenceRelation` are mirrored here as plain
+  string unions rather than imported from `@prisma/client`'s generated enums — domain code cannot
+  import that package (infrastructure-only, 00-core.md), so the closed lists are declared twice by
+  necessity; a mismatch will surface the moment the repository (T006) tries to persist a value
+  neither side recognises. `Evidence.payload` is typed as a loose `Readonly<Record<string,
+  unknown>>` for now — mapping it to `packages/boundary-contract`'s `RunnerEvidence` union turned
+  out not to be 1:1 (`Evidence.type` has 12 values, `RunnerEvidence.kind` has 23, and two of the
+  twelve — `document_excerpt`, `budget_degradation` — have no corresponding wire shape at all yet);
+  reconciling that mapping is T027's job ("validated against 012's boundary schemas"), not T005's.
+- **A real, previously-unnoticed bug in `gate-coverage-completeness` (shipped in 0.18.0), found by
+  using it for the first time on new code**: a pure type-only file (`types.ts`, only `export type`/
+  `export interface`) or a barrel re-export (`index.ts`, only `export * from`) compiles to zero
+  v8-instrumentable statements — the gate was flagging both as "no test exercises this file at all"
+  regardless of whether anything imported them, since there is structurally nothing there for v8 to
+  ever assign coverage to. Every domain package in this spec will have exactly this shape, so left
+  unfixed this would have permanently blocked `make ci` the first time any domain package grew real
+  types. Fixed by broadening the exemption from "is exactly the `export {}` FR-001 stub" to "the
+  stripped content contains no runtime-declaration keyword (`function`/`class`/`enum`/`const`/
+  `let`/`var`)" — verified it still catches a synthetic untested real-logic file (a bare `export
+  function`) before removing the test fixture.
+- `make ci` green cold-cache: 34 unit files / 198 tests, 5 e2e files / 38 tests, all 16 gates.
+
+## 0.18.0 — 2026-09-27
+
+**Deep review (a second, independent pass) of everything since 0.9.0 — 15 findings, 14 code fixes
+verified against real failures, 1 recorded decision.** No new functionality. Every fix was
+reproduced as an actual failing test or a real command run first, then re-verified after, not
+accepted from reading the diff alone.
+
+- **Tenant isolation, closed the gap for real** (FR-048): `Evidence`, `IssueRelationship` (both
+  sides), `IssueEvent` and `WorkflowCallback` now carry composite foreign keys against their
+  parent's `(id, tenantId)`, not just `id` — a row naming another tenant's issue, run or evidence
+  is rejected by Postgres, not merely mis-indexed. `Evidence` gained a hard FK to `Issue` it did not
+  have before (reverses the call recorded in `QUESTIONS.md`: the tenant-isolation guarantee and
+  `evidence`'s package independence turned out to be orthogonal — a DB-level FK creates no
+  TypeScript dependency). `ingestion_delivery`'s idempotency key is now unique per
+  `(tenant_id, provider, delivery_id)`, not globally per `(provider, delivery_id)` — two tenants
+  using the same webhook provider could otherwise collide on each other's delivery ids.
+- **Append-only had a real gap**: `schema.prisma` claimed "the append-only enforcement pattern
+  covers every immutable table," but `workflow_transition` had no trigger at all — added, plus a
+  regression test that proves it. Every append-only table also gained a `BEFORE TRUNCATE`
+  statement-level trigger: row-level `BEFORE UPDATE OR DELETE` triggers do not fire on `TRUNCATE`,
+  so that was a silent bypass nothing had exercised. The `SET LOCAL` (never bare `SET`) requirement
+  for the privileged-write bypass is now spelled out at the point future retention/deletion code
+  (T052/T053) will need to get it right.
+- **Runner protocol boundary hardened** (`packages/boundary-contract`): the capability handshake's
+  90-day protocol floor was ageing the *current* version by its own release date — meaning every
+  runner still on the current version would eventually be refused with nothing newer to upgrade to.
+  Fixed to age only a *superseded* version, from its successor's release date. `agentDirective`'s
+  `inputRefs` is now `.strict()` (an unrecognized key silently vanished before, rather than failing
+  loud like every other shape in this contract). `toolOutputSummary.fields` is now bounded — 500
+  characters per value, 20 keys — closing the one shape in the evidence contract that could
+  otherwise smuggle an arbitrarily large raw log excerpt under a plausible-looking field name.
+  `OutboundBuffer`'s gap log is now bounded the same way its item buffer already was; a sustained
+  outage could previously grow the gap array without limit.
+- **`runWithBudget` now actually cancels**: a job that outran its wall-clock budget used to just get
+  raced and abandoned — the underlying work kept running unobserved, so a late side effect could
+  still land after the job had already been recorded as timed out. `runWithBudget`/`runJobWithBudget`
+  now pass an `AbortSignal` through to the job function that fires on breach, so cooperative work
+  (fetch calls, polling loops, spawned processes) actually stops.
+- **Two CI gates were checking less than they claimed**: `changed-files.mjs` documented itself as
+  "fails closed (R-10)" but silently treated "no base ref resolves at all" as "nothing changed" —
+  now throws, with a test proving it. `deps-check` had its own second, drifted copy of the same
+  base-ref resolution (falling back to `HEAD`, which defeated its own ADR-diff check by comparing
+  the working tree to itself) — consolidated onto the one in `changed-files.mjs`; it also only ever
+  read `dependencies`, so a new package added under `devDependencies` skipped both the allowlist and
+  the ADR-in-the-same-change-set check entirely — now checks all four dependency fields.
+  `gate-isolation` counted a commented-out or `it.skip`'d `assertTenantIsolated(...)` call as real
+  coverage, since it matched the call by regex against raw source text; now strips comments and the
+  full body of any `.skip(...)` call before scanning (`stripComments` shared with
+  `gate-architecture-agnostic`, which had the same helper duplicated locally).
+- **New gate: `gate-coverage-completeness`.** `vitest.config.ts`'s `coverage.all: false` (deliberate:
+  it stops the many still-empty scaffold packages from sinking the global 80% floor) has a side
+  effect nothing was checking for — a brand-new file under a 95%-floor path (`packages/domain/policy`,
+  `packages/domain/evidence`, `packages/shared/src/tenancy`, `packages/agents/src/output`) that no
+  test imports at all never appears in the coverage report, so it cannot fail a threshold it is
+  invisible to. The new gate walks those four directories directly and fails if any file with real
+  logic (more than an `export {}` entry surface) is missing from the coverage summary. Verified
+  against a synthetic untested file before removing it — the gate caught it — and the current tree
+  passes clean.
+- **A test was silently allowed to delete real source**: `eslint-never-wait.e2e.test.ts`'s fixture
+  directory pointed at `packages/workflow/src/processors/`, the real production directory, not a
+  scratch one — a failed cleanup step could have deleted shipped code. Scoped to a
+  `__never_wait_fixture__` subdirectory instead.
+- **Lint**: the `process.env` restriction pattern and message pointed at a path
+  (`packages/shared/config/**`) that does not exist — the real one is
+  `packages/shared/src/config/**` — and its selector missed a destructured or bare read of
+  `process.env`, only catching `process.env.X`. Both fixed, with tests for the destructured and bare
+  cases. The cross-package relative-import rule (`../../*` depth patterns) was removed rather than
+  patched: proven, via a deliberately constructed same-package-deep-import fixture, that no
+  depth-based glob can tell "reaches into a foreign package" apart from "a legitimately deep file in
+  this same package" — the real guarantee is already structural, from T002's `moduleResolution:
+  NodeNext` making a relative import that escapes a package's `rootDir` a compile error.
+- **Recorded, not fixed**: this session continued editing an already-committed migration
+  (`20260924120000_init_foundation`) rather than opening a new one, for the reasons and the hard
+  stop condition written up in `QUESTIONS.md` under "Deep review round 2."
+- **`make ci` itself caught a bug this pass introduced**: `db-check`'s irreversible-migration check
+  matches the bare word `TRUNCATE` anywhere in a migration's SQL, which flagged the new
+  `BEFORE TRUNCATE ON ...` triggers above — a trigger that *prevents* a truncate is the opposite of
+  a destructive statement, and a `-- TRUNCATE bypasses...` prose comment tripped the same check for
+  the same reason: no comment stripping, and SQL's `--` line comments aren't JS's `//` (the existing
+  shared `stripComments` helper doesn't apply). Fixed with a negative lookahead
+  (`TRUNCATE(?!\s+ON\b)`) excluding the trigger-event usage and a SQL-specific comment stripper —
+  found and fixed only because `make ci` was actually run cold-cache rather than trusted from the
+  unit suite alone.
+- `make ci` run cold-cache, end to end, all 16 gates green: 187 unit tests (99.15% line coverage)
+  across 33 files — four new suites (`coverage-completeness.test.ts`, plus two new false-positive
+  regression cases in `db-check.test.ts`) and expanded coverage in `outbound-buffer`, `job-budget`,
+  `isolation`, `deps-check`, `changed-files` — and 38 e2e tests across 5 files, including
+  `append-only.e2e.test.ts` at 10/10 (up from 7) and `prisma/migration.e2e.test.ts` at 8/8, both
+  against a live Postgres after the composite-FK schema changes.
+
+## 0.17.0 — 2026-09-27
+
+**001 issue-and-evidence begins: T001–T004, the schema and the append-only guarantee — the
+constitution's Principle I ("Evidence First"), proven at the database, not asserted in a
+repository docstring.**
+
+- **Schema** (T002): `issue`, `evidence` and `audit` — `Issue` (9-state machine, fingerprint +
+  ruleset version, a partial fingerprint index that excludes only `merged`/`removed`),
+  `IssueRelationship` (the single store for `related`/`recurrence_of`/`merged_into`, with the
+  two partial unique indexes that cap the single-valued kinds at one live row each), `IssueEvent`
+  (domain facts, deliberately not unioned with 012's `workflow_transition` — different grains),
+  `IngestionDelivery` (the idempotency key), `NormalisationRuleset` (versioned, global — the same
+  shape as 012's `prompt_version`), `Evidence`, `EvidenceLink`, `AuditEntry`, `DeletionTombstone`.
+  A new migration (`20260927000000_issue_evidence_audit`), not an edit to 012's — enough time and
+  a real second feature separate them to make that the honest choice, and it exercised the
+  multi-migration apply/reverse logic Phase 3 built for exactly this.
+- **Caught by the migration e2e suite on its first real run against this schema**: a stray
+  `'closed'` `Issue.state` value in `data-model.md` that appears nowhere in the actual 9-state
+  enum (dispatched a research pass before writing the Prisma enum rather than trusting one
+  ambiguous line; fixed the doc to `state not in ('merged', 'removed')` — logged as a judgment
+  call in `QUESTIONS.md`, since which terminal states should drop out of the fingerprint index
+  isn't fully spelled out anywhere), and two tables missing their required tenant-leading index
+  (`evidence_link`, `deletion_tombstone`) — the same class of gap that broke `workflow_transition`
+  back in phase 3, caught the same way: by actually running the check, not by re-reading the code.
+- **Append-only enforced by Postgres triggers, not application discipline** (T003, R-03):
+  `evidence_link`, `issue_event` and `audit_entry` reject every `UPDATE`/`DELETE` unconditionally;
+  `evidence` additionally permits exactly one transition, `ref_state: linked → detached`, and
+  rejects the reverse. A `SET LOCAL healer.privileged_write = 'on'` session GUC is the one
+  documented bypass, for the retention and tenant-deletion paths (T052/T053, not built yet) —
+  every use of it is meant to be its own audited action, never a silent escape hatch.
+- **`append-only.e2e.test.ts`** (T004): proves all of the above through raw SQL against a real
+  Postgres — tampering rejected, the one legitimate transition allowed, the reverse rejected,
+  DELETE rejected, the privileged bypass working, `issue_event`/`audit_entry` fully immutable.
+  7 tests, all watched to fail before the triggers existed.
+- **Two real, unrelated bugs fixed while building this**: `AgentKind` (012's own enum) was
+  missing `test_author`, even though `packages/boundary-contract`'s Zod schema already included
+  it from phase 8 (013 R-07) — a real drift between the DB enum and the schema that models it,
+  now closed. And `test/containers.ts`'s `stop()` helpers returned `Promise<StoppedTestContainer>`
+  against a declared `Promise<void>` — a real type error nothing had ever caught because the file
+  had never been part of any `tsc --build` project graph until a new root-level e2e test started
+  importing it, which is also what surfaced a real TS project-boundary violation (a test placed
+  inside a package's `src/` reaching `test/containers.ts` through a relative path that crosses
+  outside that package's `rootDir` — moved to the repository root, matching the established
+  pattern for cross-cutting e2e tests).
+- `make ci`: 164 unit tests (99.0% coverage) + 33 e2e tests (+7 for the new append-only suite),
+  ~27s cold-cache.
+- **Checkpointing here.** 001 has 53 tasks left — ingestion and fingerprinting (US1), evidence
+  recording and producer attribution (US2), correlation (US3), audit and timeline views (US4–5),
+  merge/retention/deletion (Phase 8). Real product logic with genuine design decisions (the
+  normalisation ruleset's actual rules, the ingestion API shape), not infrastructure — the right
+  place to pause and let this land before going further.
+
+## 0.16.0 — 2026-09-27
+
+**012 phase 12 (analyze-pass additions): 6 of 8 done, plus a real gap the new gate found in
+itself and fixed.**
+
+- **`scripts/lib/changed-files.mjs`** — shared base-diff utility for `gate-data-model` and
+  `deps-check`'s ADR check. Caught its own bug before it shipped: a naive `<base>...HEAD` commit
+  diff sees nothing when the working branch has diverged by zero commits (this repository's
+  actual state — everything uncommitted, standing on `master`), so it now unions committed
+  divergence with working-tree changes. Tested against real, disposable git repos (init, commit,
+  branch, diverge) — not this repository's own transient state, which would break the test the
+  moment these changes are committed.
+- **`gate-data-model`** (T076): fails when `prisma/schema.prisma` changed with no
+  `specs/*/data-model.md` change in the same change set. Attributes to "some spec's data model,"
+  not the *owning* one specifically — no table→spec map exists to check that precisely, said
+  plainly rather than pretended.
+- **Boundary-exception registry** (T077): `linterOptions.noInlineConfig: true` — confirmed
+  empirically that an `eslint-disable` comment becomes a no-op and the suppressed rule still
+  fires. Repo-wide, not scoped to boundary rules only: ESLint has no per-rule "cannot be disabled"
+  switch. `docs/boundary-exceptions.md` is the only recorded form an exception can take now.
+- **`deps-check` ADR-diff extension** (T078) — and it immediately did its job on the first real
+  run: `@nestjs/swagger`, added back in phase 6, had no ADR, and the gate correctly refused to
+  pass. [ADR 0012](docs/adr/0012-openapi-contract-generation.md) written to close the gap
+  honestly, not to route around the gate. Also fixed a design flaw before it shipped: the first
+  version flagged a dependency as "new" per package.json file, which would have demanded a second
+  ADR for `zod` just because `boundary-contract` started using a dependency `packages/shared`
+  already had — narrowed to "new to the monorepo," which is what FR-006 actually asks about.
+- **`gate-no-send`** (T082): no package outside an (empty, today) egress allowlist may import an
+  outbound mail/SMS/chat package. Deliberately monorepo-wide, not scoped to packages named
+  "support" — the task's own rationale is that a name-scoped rule is exactly the kind of gap a
+  differently-located adapter slips through.
+- **T081 confirmed, no new code**: the prompt registry's resolve-by-id-only design (phase 9)
+  already makes prompt selection unreachable from a model response.
+- **Deferred**: T079 (pgvector rebuild — nothing uses pgvector yet), T080 (operator audit trail —
+  needs 001), T083 (`gate-ceiling` — needs 002).
+- **Phase 13 (agent-driven development) not started.** Corrected an assumption before acting on
+  it: I initially wrote in `QUESTIONS.md` that no GitHub remote was configured — `git remote -v`
+  says otherwise (`origin` → `github.com:EverRest/healer.git`). The real reason to stop here:
+  T088–T092 install a GitHub App, set branch-protection rules and name real humans in
+  `CODEOWNERS` — account-level, security-relevant changes to a shared system that need your
+  sign-off, not something "keep going" extends to. T084–T087 (identity resolver,
+  `gate-agent-scope`, `gate-red-first`) can be built and tested against local fixture repos with
+  no live GitHub interaction, per the task list's own note — ready to start on request.
+- `make ci`: 164 unit tests (99.0% coverage) + 26 e2e tests, ~26s cold-cache.
+
+## 0.15.0 — 2026-09-27
+
+**012 phases 8–11 (US6–US9): self-observation, the prompt registry, the BYO fallback trap,
+onboarding.** 13 of 19 tasks done; 6 deferred, all landing on the same gap (`packages/llm` is an
+empty stub — nothing to resolve a per-tenant provider client *to* yet).
+
+- **`digestToolCallArguments`** (T059): a stable, key-order-independent SHA-256 over tool call
+  arguments — `RunnerEvidence.agentRunReport.toolCalls[].argumentDigest` (phase 6) already made
+  the raw value unrepresentable in the crossing shape; this computes what it carries.
+- **Single-store structural test** (T060): `prisma/agent-run-single-store.test.ts` scans
+  `schema.prisma` for any model other than `AgentRun` declaring a prompt-version/token/cost/model
+  field. Watched fail on a planted duplicate field in `WorkflowRun`, then reverted — same TDD
+  discipline as every other structural gate this phase.
+- **Whole-line secret scan added to `createLogger`'s tests** (T062) — caught itself: the literal
+  private-key fixture I wrote failed `secret-scan` the moment it was staged, same as
+  `secret-scan.test.ts`'s own fixture did in phase 3. Rebuilt from concatenated parts.
+- **`packages/prompts`** (T063, T064): content-addressed `publish` — republishing identical
+  content is a no-op returning the same identity, changed content is a new version, and there is
+  no update function on the module's surface at all, checked by asserting no export name matches
+  `/update/i`. `resolveByVersionId` is the only resolver; no `resolveByKey` exists to fall back to.
+- **`findByoFallbackViolations`** (T070): the read-side check for the BYO fallback trap, using
+  `agent_run.provider` against the tenant's configured provider as a proxy for "used a
+  Healer-managed key" — `agent_run` doesn't record which credential was used, only which brand.
+- **T069 confirmed, no new code**: `FallbackScope` has had exactly one value since phase 1–2.
+- **`make help`** (T072): self-documenting via `##` comments — caught and fixed a real bug in its
+  own grep pattern before trusting it: `[a-zA-Z_-]` excludes digits, so `test-e2e` silently never
+  appeared in the list.
+- **README rewritten, `make bootstrap` re-run for real** (T071), not simulated — confirmed
+  idempotent on a second run.
+- **Deferred** (T061, T065–T068): cost accounting needs 002/011; eval history needs 011;
+  secret-manager integration is a new-dependency/ADR decision I won't make silently; per-tenant
+  provider resolution and the BYO-retry test both need a real `packages/llm` provider adapter,
+  which doesn't exist. Reasoning in `QUESTIONS.md`.
+- **T073 not attempted**: running all 35 quickstart scenarios is 012's final-milestone check, not
+  a per-phase task — several scenarios need phases 12–13 and the runner build this phase deferred.
+- `make ci`: 150 unit tests (99.0% coverage) + 24 e2e tests, ~22s cold-cache.
+
+## 0.14.0 — 2026-09-27
+
+**012 phase 7 (US5) complete: never wait inside a job.** T052–T058, all seven.
+
+- **The never-wait lint rule** (T052, T053): a processor may not `setTimeout`/`setInterval` or
+  `while (true)`-poll. Scoped to `**/processors/**` (no directory exists yet — applies the moment
+  one does, no per-package listing) via a *second*, disjoint `no-restricted-syntax` block rather
+  than adding to the existing `process.env` block: `no-restricted-syntax` has no TS-specific
+  alternate rule name the way `no-restricted-imports` does, and a selector can't test the file
+  path itself, so two overlapping blocks would hit the exact same last-one-wins collision T035
+  found — documented in both blocks' comments so the next person doesn't reintroduce it.
+  `eslint-never-wait.e2e.test.ts` runs the real composed config, confirming both new selectors
+  fire, `process.env` is still caught inside `processors/`, and — importantly — a `setTimeout`
+  *outside* `processors/` is correctly left alone.
+- **`runWithBudget`/`runJobWithBudget`** (T054): races a job against its declared wall-clock
+  budget; on breach, logs a structured error (this repo's stand-in for "raises an alert" — no
+  dedicated alerting sink exists yet) and rejects with `JobBudgetExceededError` so the caller can
+  record the `timeout` transition.
+- **T055 needed no new code**: `CallbackKind` (phase 1–2) already names `ci_result`,
+  `deploy_result` and `verification_tick` — the long-wait pattern already covers what T055 asks
+  for.
+- **`findOverdueRuns`/`findStuckRuns`** (T056, T058): the decision logic a scheduled tick will
+  call once a repository exists to feed it real rows — same deferred-persistence shape as phase
+  6's T042, not duplicated here.
+- **T057 needed no new code**: a `WorkflowRun`'s `state` field *is* its resumption point by
+  construction (T013) — there is no separate "resume" code path for a restarted worker to run.
+- `make ci`: 131 unit tests (99.0% coverage) + 24 e2e tests, ~24s cold-cache.
+
+## 0.13.0 — 2026-09-27
+
+**012 phase 6 (US4) partially landed: the runner protocol's pure logic, not its transport.**
+7 of 13 tasks done as real, tested code; 6 explicitly deferred rather than half-built.
+
+- **`packages/boundary-contract`** (T040): the closed evidence/directive shape set from
+  contracts/runner-protocol.md as Zod schemas — 23 runner→control-plane shapes, 7 control-plane→
+  runner directives, every one `.strict()` so a free-form field is a validation failure, not a
+  passthrough. `isPermittedInSimulationSession` encodes C-10's restricted directive set (no
+  `remediation_directive`; `agent_directive` only for `change`/`verifier`).
+- **The capability handshake** (T039, T043, T044): `resolveHandshake` — active when every
+  requirement is met, degraded when a read-only capability is missing, refused when a
+  state-changing one is (never the reverse), refused below the two-minor-version or 90-day
+  compatibility floor. Full quickstart 17–19 matrix as tests, written and watched to fail first.
+- **Independent egress/ingress validation** (T041): two distinct call sites against the same
+  schema — the control plane does not trust that the runner's own validation ran.
+- **Bounded outbound buffer** (T046): drop-oldest-on-overflow, record a `collection_gap`, never
+  truncate an item to make it fit.
+- **Redaction mechanism** (T047): exactly two outcomes, clear or withheld — no third "truncated"
+  state to reach for. The actual classification policy is 003/005's; this is the shape a real
+  policy plugs into.
+- **Deferred, not faked** (T042, T045, T048–T051 — runner registration/heartbeat persistence,
+  outbound transport, `runner-diagnostics`, `runner-build`/Docker packaging, directive
+  idempotency): every one needs a repository/controller pattern or an actual `apps/runner`
+  codebase that doesn't exist until 001 establishes the convention. Reasoning in `QUESTIONS.md`.
+- `make ci`: 119 unit tests (98.9% coverage) + 19 e2e tests, ~23s cold-cache.
+
+## 0.12.0 — 2026-09-27
+
+**012 phase 5 (US3) complete: boundaries by pattern, not by name list.** T034–T037 done, T038
+deliberately left undone (nothing to check yet — see below).
+
+- **ESLint flat-config gotcha caught by its own test, first run.** Four `no-restricted-imports`
+  boundary rules (Prisma outside infrastructure, provider SDKs outside their adapter, `process.env`
+  outside shared/config, cross-module relative imports) were split across separate config blocks
+  for clarity — and two of the four silently never fired: flat config doesn't merge a rule's
+  options across matching blocks, the last one for a file wins outright. `eslint-boundaries.e2e.test.ts`
+  runs the real composed config against fixture files (012 T034) rather than a synthetic
+  `RuleTester`, which is exactly what caught it. Fixed by merging same-key rules into one block
+  and giving the cross-module check a distinct rule name (`@typescript-eslint/no-restricted-imports`)
+  so it can no longer collide with the others.
+- **T035**: the four boundary patterns above. The "cross-module infrastructure" pattern is
+  deliberately blunter than the spec's literal wording — a generic ban on relative imports two or
+  more `../` levels deep, not specifically infrastructure paths — because the precise version
+  already exists structurally (T002, `moduleResolution: NodeNext` + per-package `exports` maps
+  reject an undeclared subpath at typecheck) and a sharper lint-time version is its own dependency
+  decision (`eslint-plugin-boundaries`), logged in `QUESTIONS.md` rather than added silently.
+- **T036**: file/function/complexity/nesting limits, tests exempt. Verified against real
+  fixtures, not just declared.
+- **T037 `deps-check`**: dependency allowlist, ADR-0004 Postgres extension list, `pnpm licenses
+  list --json` for permissive-licence enforcement, `pnpm install --frozen-lockfile` for lockfile
+  sync. Confirmed failing on a planted unapproved dependency, then reverted. FR-006's other half —
+  a new dependency needs an ADR *in the same change set* — needs base-revision diffing this repo
+  hasn't built (Phase 13 territory); not half-built here, logged instead.
+- **T038 left unchecked, not faked.** ADR 0008's capability-passing lint pattern protects four
+  operations across four specs, none implemented yet — no capability type, no mutating module, no
+  privileged-package convention exists anywhere to write a pattern against. Every other
+  forward-looking gate this phase had at least an empty real location to check; this one has
+  nothing, and a guessed file-naming convention would be a wrong guess dressed up as
+  infrastructure.
+- Coverage floor genuinely enforced now, not just switched on: fixed a second real gap
+  (`TenantContext.forTrustedInternalUse`, in 0.10.1) and scoped `coverage.all: false` so the
+  global 80% floor measures code with tests, not the untouched future-spec package stubs. Adding
+  CLI wrapper scripts kept dragging the average down as gate scripts accumulated — added `/* v8
+  ignore */` around each script's untestable CLI-entry block (real git/fs/subprocess I/O), moving
+  the pure logic they wrap back to 100%. Coverage now 98.3%.
+- **Caught and fixed while writing gate tests, not shipped**: a copy-pasted `deps` mock in
+  `db-check.test.ts` (`const adrExists = (n) => n === '0012'`) locally shadowed the real
+  `adrExists` import added minutes earlier in the same file — same identifier, same module scope.
+  The first describe block's tests silently exercised the mock instead of the real function and
+  still reported a failure (`false` returned instead of `true`), which is what surfaced it; a
+  coincidentally-matching mock would have hidden it completely. A reminder that "the test failed"
+  is data about the test as much as the code — confirm *which* code ran before trusting either.
+- `make ci`: 92 unit tests (98.3% coverage) + 19 e2e tests, ~27s cold-cache.
+
+## 0.11.0 — 2026-09-27
+
+**012 phase 4 (US2) complete: no endpoint or reversible action ships untested.** Five gates, all
+watched to fail on a real fixture before being trusted (T028), plus a genuine, previously-latent
+bug this work exposed and fixed.
+
+- **The API has never been able to boot until now.** `HealthController`'s constructor took a
+  bare object-typed parameter; TypeScript erases that to `Object` for `design:paramtypes`, so
+  Nest's DI could not resolve it — `NestFactory.create` failed on every single invocation,
+  silently (Nest's default `abortOnError: true` calls `process.exit(1)` before anything reaching
+  a catch block gets to run). No test had ever booted the real Nest module — `health.test.ts`
+  only called the plain `buildHealthReport` function. Fixed with an explicit `@Inject(HEALTH_META)`
+  token; `main.ts` refactored to export `createApiModule(meta)` so both `bootstrap()` and contract
+  generation share one module definition instead of two that could drift; a new
+  `apps/api/src/main.e2e.test.ts` boots the app for real and hits `/health` and `/ready` over
+  HTTP with Supertest. This is exactly what "reproduce before modify" and running things for real
+  are for — a unit test of the pure function gave 100% coverage and zero signal on this.
+- **`contracts-check` (T033)**: `@nestjs/swagger` added (already named in 012's plan, no new
+  ADR needed); `apps/api/src/openapi.ts` builds the document from `createApiModule`, needing no
+  `DATABASE_URL` or any environment variable — contract generation runs the same in CI as on a
+  laptop with no `.env`. Generated output is run through Prettier before being written, or it
+  would disagree with `format-check` on every regeneration even with zero real drift.
+  `apps/api/openapi.json` is the first committed generated artifact.
+- **`gate-isolation` (T029)**, **`gate-evidence` (T031)**: both need conventions FR-013/FR-009
+  don't specify — a way to say "this test covers that endpoint" and "this model is a
+  conclusion type." Invented `assertTenantIsolated(app, method, path)` (a real, greppable
+  function call; `test/tenant-isolation.ts`, body unimplemented until 001/002 land auth) and a
+  `/// @conclusion` schema doc-comment tag. Both gates pass vacuously today — `/health`/`/ready`
+  are hand-exempted as the only non-tenant-scoped paths, and nothing is tagged `@conclusion` yet
+  — logged in `QUESTIONS.md` for review before 001 locks either convention in.
+- **`gate-undo` (T030)**: reads 010's catalogue location, which doesn't exist yet. Deliberately
+  does **not** pass vacuously forever the way the others do — 010 R-02 requires checking a
+  test-attestation format 010 hasn't designed, so the gate throws (fails closed) the day any file
+  appears in the catalogue directory, rather than rubber-stamping the first entry it sees.
+- **`gate-architecture-agnostic` (T032)**: bans customer deployment vocabulary (`monolith`,
+  `microservice`, `kubernetes`, `serverless`, `lambda`, …) in `packages/domain/**` and
+  `packages/agents/**`, exempting `adapters/`, `discovery/` and `infrastructure/` subdirectories
+  per constitution VII. Deliberately does not duplicate the T035 import-boundary lint's job
+  (our own stack, e.g. Prisma/BullMQ) — this gate is about the *customer's* architecture leaking
+  into the domain model (004 SC-008), a different failure than an import crossing a boundary.
+- `make ci` still green: 81 unit tests (coverage-enforced) + 10 e2e tests, ~21s cold-cache.
+- Four open questions from this phase recorded in `QUESTIONS.md` for review — mostly "I invented a
+  convention 001/010 will need to follow; here's why, tell me if you want it different."
+
+## 0.10.1 — 2026-09-26
+
+**Deep review of 0.10.0 before anything was pushed, then every finding fixed.** The reported green
+`make ci` in 0.10.0 was misleading: `scripts/` was untracked, so `secret-scan`'s own
+`git ls-files` never saw it. Nothing here was pushed or committed before the review ran.
+
+- **`secret-scan` would have failed on itself.** Its test fixture held a literal private-key
+  header; once tracked, the gate it tests would fail on it. Rebuilt from concatenated string
+  parts, so the source text never contains the pattern it detects.
+- **The gates silently ran nothing on a path containing a space.** The old main-module guard
+  (comparing `import.meta.url` against a `file://` string built from `argv[1]`) doesn't hold
+  once the path has a percent-encodable character — reproduced. `scripts/lib/harness.mjs` gains
+  `isMainModule()`, comparing like with like via `pathToFileURL`; `secret-scan`, `db-check` and
+  `db-seed` all use it now. `git ls-files` also gains `-z`, so a non-ASCII tracked path
+  (reproduced with a Cyrillic directory) is no longer shell-quoted past `readFileSync` and the
+  `.env` pattern.
+- **Coverage floors were declared but never checked** — `test-unit` never passed `--coverage`.
+  Turning it on immediately caught a real gap: `TenantContext.forTrustedInternalUse` had zero
+  test coverage, dropping `packages/shared/src/tenancy` to 93.9%/87.5% against its 95% floor.
+  Fixed with a real test, not a lowered threshold. Coverage scope also needed `all: false` and
+  a `prisma/generated/**` exclude — without them the global 80% floor measured empty
+  future-spec package stubs and the generated Prisma client, at 22%, which said nothing about
+  the code under test.
+- **`make bootstrap` failed on a fresh clone** — `DATABASE_URL` was never set because nothing
+  created `.env`. Added `test -f .env || cp .env.example .env`; ran the full `bootstrap` for
+  real (not a dry run) against a fresh compose stack — install, `.env`, migrate, seed all green.
+- **T021 was doing less than it claimed.** `db-check`'s previous-release check was a TODO that
+  could never fail; the migration e2e test hardcoded one migration's paths and four schema
+  names. Rewrote `prisma/migration.e2e.test.ts` to discover every migration under
+  `prisma/migrations/` and apply/reverse them in order, to derive the tenant-scoping schema set
+  from `pg_namespace` against an explicit global-table allowlist instead of a hand-maintained
+  list, and to add a real (if currently vacuous — no release is tagged yet) previous-release
+  check via `git ls-tree`/`git show` against the latest `v*` tag. Verified the mechanism
+  actually runs by tagging HEAD locally, watching it execute the real path, then deleting the
+  tag — never pushed.
+- **T075 only looked at whether `down.sql` existed.** A `DROP COLUMN` with a down-script that
+  restores the column empty passed with no approval required, because a down-script proves the
+  *shape* is reversible, never that the *data* survived. `db-check` now requires approval
+  whenever the up-script contains `DROP COLUMN` / `DROP TABLE` / `TRUNCATE`, regardless of
+  `down.sql`. The approval file's ADR is now resolved against `docs/adr/` (a citation to a
+  nonexistent ADR used to pass) and the owner line must carry a value (`Owner:` alone used to
+  pass).
+- **`db-check` used to swallow real failures as "no previous release."** A `git` error (not a
+  repository, git missing) and zero tags read identically. The two are no longer conflated:
+  git failing now fails the gate; the migrations directory being absent now throws instead of
+  silently checking zero migrations. Paths use `fileURLToPath`, not `.pathname` (which is
+  percent-encoded, not a filesystem path).
+- **Tenant integrity of `workflow_transition`.** Its `tenant_id` was a plain column with no
+  constraint tying it to its run's tenant — a caller could persist a transition under the wrong
+  tenant's run. `workflow_run` gains `@@unique([id, tenantId])`; `workflow_transition`'s FK is
+  now composite `(run_id, tenant_id) → workflow_run(id, tenant_id)`, so a mismatched tenant is
+  rejected by Postgres rather than merely unindexed. Its two single-purpose indexes collapsed
+  into one covering `(tenant_id, run_id, occurred_at)`. `packages/workflow`'s `Transition` type
+  gained `tenantId`, set from the owning run in both `start()` and `step()`.
+- **Protected paths didn't cover the gates they name.** `scripts/gate*` in
+  [make-targets.md](../specs/012-engineering-foundation/contracts/make-targets.md) matches
+  none of `secret-scan.mjs`, `db-check.mjs`, `db-seed.mjs` or the shared harness — an
+  agent-authored change could have weakened any of them undetected. Broadened to `scripts/**`.
+- **Accepted, not fixed**: `secret-scan` still scans only the final tree, not the commits
+  introduced by a change set — a key added then deleted within the same PR would still pass.
+  Building base-ref diffing now, before any gate establishes what "the change set" means
+  relative to a base revision (that lands with `gate-agent-scope`/`gate-red-first` in Phase
+  13), would be scaffolding ahead of its own foundation. `db-check` and `test-e2e` both still
+  run `prisma/migration.e2e.test.ts` once each within a full `make ci` — a few seconds of
+  duplicate container start, kept because hiding the file from `test-e2e`'s glob would make
+  `make test-e2e` report zero tests today, which reads as a new bug to the next person who
+  runs it.
+- `make ci` re-measured at **21.7s** cold-cache (67 unit tests including coverage, 8 e2e tests)
+  — recorded in 012's research.md, replacing the pre-fix 32.3s figure from a run where
+  `test-unit` was not actually collecting coverage.
+
+## 0.10.0 — 2026-09-26
+
+**012 phase 3 (US1) complete: the gates run on a laptop.** T026, T027 close it out.
+
+- `.github/workflows/ci.yml`: one job, `pnpm install --frozen-lockfile` then `make ci` — no step
+  exists only in CI (FR-007). `fetch-depth: 0` so `db-check`'s release-tag lookup sees real tags.
+- `make ci` measured cold (`dist/` and every `tsconfig.tsbuildinfo` removed): **32.3s**, against the
+  plan's 10-minute budget — recorded in 012's research.md R-09, not left as a one-off terminal
+  scrollback fact.
+- Phase 3 done: T018–T027, T074, T075. `make bootstrap && make ci` now work from a clean checkout
+  with no undocumented manual step, which was this feature's own quickstart success criterion.
+- Next per the roadmap: 012 phase 4 (US2 — no endpoint or reversible action ships untested), then
+  001 issue-and-evidence.
+
+## 0.9.5 — 2026-09-26
+
+**T019 / T020 `make bootstrap` and `make ci`**, run for the first time and green end to end:
+`secret-scan → db-check → format-check → lint → typecheck → build → test-unit → test-e2e`, 59 unit
+tests, 7 e2e tests, 16.5s wall-clock (cold-ish; T027 records a real cold-cache number separately).
+
+- `Makefile`: `ci`'s targets run as separate recursive `make` invocations rather than as
+  prerequisites, so a failure aborts immediately regardless of `-j` (prerequisite order is not
+  guaranteed under parallel make; a single recipe's command lines always are).
+- `bootstrap`: install, `docker compose up --wait`, `prisma migrate deploy`, seed.
+- `scripts/db-seed.mjs`: one idempotent local-dev tenant, so a fresh checkout has something to
+  point the API at — bootstrap's contract says "seed", and seeding nothing would make that a lie.
+- Caught by actually running the gate, not by reading it: two pre-existing files failed
+  `format-check` the first time — `.specify/feature.json` and three of the new `scripts/*` files.
+  `.specify/` (spec-kit's own rewritten state and manifests) added to `.prettierignore`, alongside
+  `prisma/generated/` for the same reason; the new files reformatted.
+- Removed `package.json`'s `gate` script (`node scripts/gate.mjs`) — the file never existed and the
+  real convention, confirmed against T084–T086, is one script per gate under `scripts/gates/`, not
+  a generic dispatcher.
+
+## 0.9.4 — 2026-09-26
+
+**T021 / T075 `db-check`**, and two more real gaps the still-unexercised initial migration was
+hiding, both caught by actually running it against a live Postgres rather than by re-reading it.
+
+- `prisma/migrations/migration_lock.toml` was missing — `prisma migrate diff --from-migrations`
+  cannot even determine the connector without it. Added, provider `postgresql`.
+- `prisma/migration.e2e.test.ts` gains two assertions: every tenant-scoped table's `tenant_id`
+  leads an index (not just carries the column — a real, closed check on `pg_index`, not name
+  matching), and the applied migration diffs to nothing against `schema.prisma` (`prisma migrate
+  diff --from-url`). Both watched to fail first: a temporarily reintroduced drift column produced
+  exactly the one expected `ALTER TABLE` statement, then was reverted.
+- `scripts/db-check.mjs`: `prisma generate`, irreversible-migration approval (a migration with no
+  `down.sql` needs a sibling `IRREVERSIBLE.md` naming an ADR and an owner, FR-049), a previous-
+  release check that says plainly there is no previous release yet rather than pass silently, then
+  delegates applicability/reverse/drift/tenant_id to the one e2e test that owns them.
+- `pnpm db-check` now actually runs — the script the command referenced did not exist before this.
+
+## 0.9.3 — 2026-09-26
+
+012 phase 3 (US1) underway, one task per version from here.
+
+- **T074 `secret-scan`**, first target in `ci`: fails on a committed `.env` file or planted private
+  key material; `.env.example` and ordinary source are not flagged. Test-first fixtures plant both.
+- **T018 / T025 shared gate harness** (`scripts/lib/harness.mjs`): a gate's result has exactly two
+  outcomes, pass or fail — there is no third "skip" state for a confused check to reach for. Any
+  thrown error becomes a fail (R-10); every gate will report through this one function.
+- **Fixed**: `workflow_transition` was missing `tenant_id` and its leading index — a real gap the
+  already-written migration e2e test caught the first time it ran against a live Postgres (Docker
+  had been down since phase 1–2 landed). Schema, the initial migration and its data model updated;
+  all 5 migration e2e assertions and all 48 unit tests green.
+
 ## 0.9.0 — 2026-09-26
 
 Specification: 013 planned and broken into tasks; ADR 0010 carried into 008. No code.

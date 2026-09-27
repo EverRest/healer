@@ -43,6 +43,11 @@ describe('tenant scoping', () => {
     expectTypeOf(scope).parameter(0).toEqualTypeOf<TenantContext>();
   });
 
+  it('builds a trusted-internal-use context the same way as authenticated claims', () => {
+    expect(TenantContext.forTrustedInternalUse(TENANT).tenantId).toBe(TENANT);
+    expect(() => TenantContext.forTrustedInternalUse('not-a-uuid')).toThrow(TenantIsolationError);
+  });
+
   it('reports a foreign identifier as not-found, never as forbidden', () => {
     const error = new NotFoundError('issue');
     expect(error.message).toContain('not found');

@@ -30,7 +30,13 @@ export async function startPostgres(): Promise<StartedPostgres> {
     .start();
 
   const url = `postgresql://healer:healer@${container.getHost()}:${container.getMappedPort(5432)}/healer`;
-  return { url, container, stop: () => container.stop() };
+  return {
+    url,
+    container,
+    stop: async () => {
+      await container.stop();
+    },
+  };
 }
 
 export async function startRedis(): Promise<{ url: string; stop(): Promise<void> }> {
@@ -41,7 +47,9 @@ export async function startRedis(): Promise<{ url: string; stop(): Promise<void>
 
   return {
     url: `redis://${container.getHost()}:${container.getMappedPort(6379)}`,
-    stop: () => container.stop(),
+    stop: async () => {
+      await container.stop();
+    },
   };
 }
 

@@ -3,6 +3,8 @@ dist/
 coverage/
 pnpm-lock.yaml
 prisma/generated/
+# spec-kit's own tool-managed state and manifests, rewritten by its scripts — not hand-authored.
+.specify/
 # Markdown in this repository is hand-wrapped at 100 columns and its tables are aligned by
 # meaning, not by column width. Prettier reflows both, so documentation is out of scope.
 **/*.md

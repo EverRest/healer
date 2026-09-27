@@ -1,0 +1,29 @@
+# The CI pipeline invokes exactly `make ci` (012 T026, FR-007) — no step exists only here.
+# A gate that only exists in CI is a gate developers route around (contracts/make-targets.md).
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: make ci

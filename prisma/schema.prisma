@@ -14,7 +14,7 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   extensions = [vector, pg_trgm]
-  schemas    = ["workflow", "prompt", "tenant", "runner", "agent"]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit"]
 }
 
 // ─────────────────────────────── workflow execution ───────────────────────────────
@@ -42,6 +42,11 @@ model WorkflowRun {
   transitions WorkflowTransition[]
   callbacks   WorkflowCallback[]
 
+  // Backs WorkflowTransition's composite FK (runId, tenantId) — id alone is already
+  // unique via @id, but Postgres requires a unique constraint on exactly the referenced
+  // column set. This is what makes a transition naming the wrong tenant unrepresentable,
+  // rather than merely unindexed (FR-048).
+  @@unique([id, tenantId])
   @@index([tenantId, state])
   // The deadline index is partial — `where terminal_state is null` — because the sweep
   // only ever looks at live runs. Prisma cannot express a partial index, so it is created
@@ -55,6 +60,7 @@ model WorkflowRun {
 /// append-only enforcement pattern for every immutable table.
 model WorkflowTransition {
   id            String          @id @db.Uuid
+  tenantId      String          @map("tenant_id") @db.Uuid
   runId         String          @map("run_id") @db.Uuid
   fromState     String          @map("from_state")
   toState       String          @map("to_state")
@@ -63,9 +69,11 @@ model WorkflowTransition {
   payloadDigest String?         @map("payload_digest")
   occurredAt    DateTime        @default(now()) @map("occurred_at") @db.Timestamptz(6)
 
-  run WorkflowRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  // Composite FK against WorkflowRun's (id, tenantId): a transition naming any tenant
+  // other than its run's is rejected by Postgres, not merely mis-indexed (FR-048).
+  run WorkflowRun @relation(fields: [runId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
-  @@index([runId, occurredAt])
+  @@index([tenantId, runId, occurredAt])
   @@map("workflow_transition")
   @@schema("workflow")
 }
@@ -94,7 +102,10 @@ model WorkflowCallback {
   /// A second delivery increments this and changes nothing else.
   receivedCount Int          @default(0) @map("received_count")
 
-  run WorkflowRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+  // Composite FK against WorkflowRun's (id, tenantId) — the same fix applied to
+  // WorkflowTransition when this gap was first found (FR-048); this table had the identical gap
+  // and was missed at the time, caught later by review.
+  run WorkflowRun @relation(fields: [runId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
   @@index([tenantId, kind])
   @@index([runId])
@@ -326,7 +337,390 @@ enum AgentKind {
   change
   verifier
   support
+  test_author
 
   @@map("agent_kind")
   @@schema("agent")
+}
+
+// ─────────────────────────── issue lifecycle and evidence substrate (001) ───────────────────────
+
+/// One aggregate for every source. `related`/`recurrence_of`/`merged_into` links live in
+/// IssueRelationship, not as columns here (FR-020) — a relationship is a row, not a column, so
+/// `related` can be many while the single-valued kinds stay at most one.
+model Issue {
+  id              String        @id @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  kind            IssueKind
+  componentId     String?       @map("component_id") @db.Uuid
+  environment     String
+  severity        IssueSeverity
+  state           IssueState
+  fingerprint     String
+  /// Which normalisation ruleset version produced the fingerprint (R-01) — a historical
+  /// fingerprint is recomputed with the version the issue recorded, never the current one.
+  rulesetVersion  Int           @map("ruleset_version")
+  occurrenceCount BigInt        @default(1) @map("occurrence_count")
+  firstSeenAt     DateTime      @map("first_seen_at") @db.Timestamptz(6)
+  lastSeenAt      DateTime      @map("last_seen_at") @db.Timestamptz(6)
+  /// Set by the staleness job (R-11) — surfaced, never auto-resolving.
+  staleAt         DateTime?     @map("stale_at") @db.Timestamptz(6)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  events          IssueEvent[]
+  relationships   IssueRelationship[] @relation("IssueRelationshipSubject")
+  relatedFrom     IssueRelationship[] @relation("IssueRelationshipOther")
+  evidenceRecords Evidence[]
+
+  // Backs the composite FKs from IssueRelationship, IssueEvent and Evidence — id alone is
+  // already unique via @id, but Postgres requires a unique constraint on exactly the referenced
+  // column set, which is what makes a row naming the wrong tenant's issue unrepresentable
+  // rather than merely unindexed (FR-048, same pattern as 012's WorkflowRun).
+  @@unique([id, tenantId])
+  // The fingerprint lookup index is partial — `where state not in ('merged', 'removed')` — since
+  // a `resolved` issue must stay findable for FR-005's reopen window and a `stale` one is
+  // "surfaced, not closed" (R-11). Prisma cannot express a partial index, so it lives in the
+  // migration only, the same pattern as WorkflowRun's deadline index (012 data-model.md).
+  @@index([tenantId, state, lastSeenAt])
+  @@index([tenantId, componentId, lastSeenAt])
+  @@map("issue")
+  @@schema("issue")
+}
+
+enum IssueKind {
+  production_incident
+  user_report
+  monitoring_alert
+  regression
+  automated_detection
+  /// Terminates at human adjudication; never enters reproduction or change (FR-001a).
+  knowledge_drift
+
+  @@map("issue_kind")
+  @@schema("issue")
+}
+
+enum IssueSeverity {
+  critical
+  high
+  medium
+  low
+
+  @@map("issue_severity")
+  @@schema("issue")
+}
+
+/// Nine states, no more: `detected → investigating → diagnosed → acting → resolved`, with
+/// `needs_human` off diagnosed/acting, `stale` off any non-terminal, `merged` off any state, and
+/// `resolved → investigating` on a reopen inside the window (data-model.md "State transitions").
+/// `knowledge_drift` issues terminate at `needs_human` and never reach `acting` (FR-001a).
+enum IssueState {
+  detected
+  investigating
+  diagnosed
+  acting
+  resolved
+  needs_human
+  stale
+  merged
+  removed
+
+  @@map("issue_state")
+  @@schema("issue")
+}
+
+/// The single store for every issue-to-issue link (FR-020).
+model IssueRelationship {
+  id           String                @id @db.Uuid
+  tenantId     String                @map("tenant_id") @db.Uuid
+  issueId      String                @map("issue_id") @db.Uuid
+  otherIssueId String                @map("other_issue_id") @db.Uuid
+  kind         IssueRelationshipKind
+  /// Which deterministic correlation rule produced it, or `human` — so a `related` link can be
+  /// explained and recomputed, never a model's proposal (FR-020).
+  rule         String
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Set when a merge is undone or a correlation is withdrawn (R-08) — never deleted, so the
+  /// history of what was once related is never lost.
+  removedAt    DateTime?             @map("removed_at") @db.Timestamptz(6)
+
+  // Composite FKs against Issue's (id, tenantId): a relationship naming a subject or other issue
+  // outside its own tenant is rejected by Postgres, not merely mis-indexed (FR-048).
+  issue      Issue @relation("IssueRelationshipSubject", fields: [issueId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  otherIssue Issue @relation("IssueRelationshipOther", fields: [otherIssueId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@index([tenantId, otherIssueId, kind])
+  @@map("issue_relationship")
+  @@schema("issue")
+}
+
+enum IssueRelationshipKind {
+  related
+  recurrence_of
+  merged_into
+
+  @@map("issue_relationship_kind")
+  @@schema("issue")
+}
+
+/// Append-only. Domain facts only — 012's `workflow_transition` holds machine steps (C-14); the
+/// timeline is a union query over both, plus `evidence`, never a copy of either into the other.
+model IssueEvent {
+  id         String          @id @db.Uuid
+  tenantId   String          @map("tenant_id") @db.Uuid
+  issueId    String          @map("issue_id") @db.Uuid
+  type       IssueEventType
+  fromState  IssueState?     @map("from_state")
+  toState    IssueState?     @map("to_state")
+  cause      IssueEventCause
+  actorRef   String          @map("actor_ref")
+  /// Bounded, no free-form customer text — a structured record, not a log line.
+  payload    Json
+  observedAt DateTime        @map("observed_at") @db.Timestamptz(6)
+  receivedAt DateTime        @default(now()) @map("received_at") @db.Timestamptz(6)
+
+  // Composite FK against Issue's (id, tenantId) — see IssueRelationship's comment (FR-048).
+  issue Issue @relation(fields: [issueId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@index([tenantId, issueId, observedAt])
+  @@map("issue_event")
+  @@schema("issue")
+}
+
+enum IssueEventType {
+  signal_received
+  state_changed
+  merged
+  unmerged
+  related
+  action_taken
+  note
+
+  @@map("issue_event_type")
+  @@schema("issue")
+}
+
+enum IssueEventCause {
+  ingestion
+  agent
+  human
+  policy
+  system
+
+  @@map("issue_event_cause")
+  @@schema("issue")
+}
+
+/// The idempotency key for signal ingestion (R-09): the same delivery posted twice is a no-op.
+model IngestionDelivery {
+  id          String           @id @db.Uuid
+  tenantId    String           @map("tenant_id") @db.Uuid
+  provider    String
+  deliveryId  String           @map("delivery_id")
+  receivedAt  DateTime         @default(now()) @map("received_at") @db.Timestamptz(6)
+  signalCount Int              @map("signal_count")
+  outcome     IngestionOutcome
+
+  // tenant_id leads the idempotency key, not just `(provider, delivery_id)` as data-model.md's
+  // prose says: a provider's delivery id is not guaranteed globally unique across tenants (a
+  // customer-facing webhook provider may hand out small, predictable ids), and without tenant_id
+  // here, tenant B's delivery "1" would collide with tenant A's — either dropped as a false
+  // duplicate or, worse, revealing that A already used that id. Isolation never rests on an
+  // upstream id happening to be unique (QUESTIONS.md).
+  @@unique([tenantId, provider, deliveryId])
+  @@index([tenantId, receivedAt])
+  @@map("ingestion_delivery")
+  @@schema("issue")
+}
+
+enum IngestionOutcome {
+  accepted
+  duplicate
+  partial
+  failed
+
+  @@map("ingestion_outcome")
+  @@schema("issue")
+}
+
+/// Never edited; a rule change is a new version, so a historical fingerprint stays explicable
+/// and recomputable a year later (R-01).
+model NormalisationRuleset {
+  version     Int      @id
+  rules       Json
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+  note        String?
+
+  @@map("normalisation_ruleset")
+  @@schema("issue")
+}
+
+/// Append-only, except `refState` moving `linked → detached` (R-03) — enforced by database rule,
+/// not application discipline (a repository that "does not expose update" is one careless method
+/// away from being wrong).
+model Evidence {
+  id               String       @id @db.Uuid
+  tenantId         String       @map("tenant_id") @db.Uuid
+  issueId          String       @map("issue_id") @db.Uuid
+  type             EvidenceType
+  sourceSystem     String       @map("source_system")
+  sourceRef        String       @map("source_ref")
+  /// Human-readable; survives detachment — "from logs, March" (R-04).
+  sourceLabel      String       @map("source_label")
+  /// Bounded at capture (R-05); null when the type carries no excerpt.
+  excerpt          String?
+  excerptTruncated Boolean      @default(false) @map("excerpt_truncated")
+  /// Structured fields for the type, schema-validated against 012's boundary schemas — no
+  /// free-form strings.
+  payload          Json
+  /// Which step observed this (R-06) — the producer, not the caller's say-so.
+  producedByStep   String       @map("produced_by_step")
+  refState         RefState     @default(linked) @map("ref_state")
+  observedAt       DateTime     @map("observed_at") @db.Timestamptz(6)
+  receivedAt       DateTime     @default(now()) @map("received_at") @db.Timestamptz(6)
+  /// Retention — shorter than issue retention.
+  expiresAt        DateTime     @map("expires_at") @db.Timestamptz(6)
+
+  links EvidenceLink[]
+
+  // Composite FK against Issue's (id, tenantId) (FR-048) — resolves the question logged in
+  // QUESTIONS.md: `evidence` stays its own package (different lifetime, different mutability),
+  // but that is a code-dependency-direction concern, not a reason to leave the DB able to store
+  // evidence under one tenant pointing at another tenant's issue. `onDelete: Restrict` does not
+  // block the retention/tenant-deletion paths (T052/T053): both go through the
+  // `healer.privileged_write` bypass already, the same one the append-only triggers check.
+  issue Issue @relation(fields: [issueId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([id, tenantId])
+  @@index([tenantId, issueId, observedAt])
+  @@map("evidence")
+  @@schema("evidence")
+}
+
+enum EvidenceType {
+  error_signature
+  trace_shape
+  metric_delta
+  deploy_ref
+  commit_ref
+  test_result
+  file_path
+  tool_output_summary
+  document_excerpt
+  collection_gap
+  /// 002 FR-012.
+  budget_degradation
+  /// All four of 004's discovery shapes — component_candidate, deployment_unit_candidate,
+  /// dependency_observation, repository_ref — persist as this one type, the shape name and its
+  /// fields in `payload`: the transport contract is closed per fact family, but "what we
+  /// observed about the architecture" is one kind of observation (001's call, FR-007a).
+  graph_fact
+
+  @@map("evidence_type")
+  @@schema("evidence")
+}
+
+enum RefState {
+  linked
+  detached
+
+  @@map("ref_state")
+  @@schema("evidence")
+}
+
+/// Append-only, no exceptions. No API creates a link for a step other than the caller, and none
+/// creates links retrospectively (R-06).
+model EvidenceLink {
+  id             String           @id @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  evidenceId     String           @map("evidence_id") @db.Uuid
+  conclusionType ConclusionType   @map("conclusion_type")
+  conclusionId   String           @map("conclusion_id") @db.Uuid
+  relation       EvidenceRelation
+  /// Must equal the step that executed the write — a mismatch is rejected, never silently
+  /// corrected (R-06).
+  assertedByStep String           @map("asserted_by_step")
+  assertedAt     DateTime         @default(now()) @map("asserted_at") @db.Timestamptz(6)
+
+  // Composite FK against Evidence's (id, tenantId) (FR-048) — a link naming another tenant's
+  // evidence is rejected by Postgres, not merely mis-indexed.
+  evidence Evidence @relation(fields: [evidenceId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([evidenceId, conclusionId, relation])
+  @@index([tenantId, conclusionType, conclusionId])
+  @@map("evidence_link")
+  @@schema("evidence")
+}
+
+enum ConclusionType {
+  classification
+  diagnosis
+  hypothesis
+  impact
+  verification
+  support_answer
+  remediation
+
+  @@map("conclusion_type")
+  @@schema("evidence")
+}
+
+enum EvidenceRelation {
+  supports
+  contradicts
+  contextualises
+
+  @@map("evidence_relation")
+  @@schema("evidence")
+}
+
+/// Append-only. Stands alongside 012's `agent_run`, never a second store of the same facts
+/// (C-13) — this indexes every actor; `agent_run` is one agent invocation, resolved through
+/// `agent_run_id`.
+model AuditEntry {
+  id               String         @id @db.Uuid
+  tenantId         String         @map("tenant_id") @db.Uuid
+  actorType        AuditActorType @map("actor_type")
+  actorRef         String         @map("actor_ref")
+  /// A registered `policy_action.action_key` (002), never free text — the join key
+  /// `check:policy-coverage` reconciles executed mutating actions against decisions on.
+  action           String
+  targetType       String         @map("target_type")
+  targetId         String         @map("target_id") @db.Uuid
+  reason           String
+  evidenceIds      String[]       @map("evidence_ids") @db.Uuid
+  agentRunId       String?        @map("agent_run_id") @db.Uuid
+  policyDecisionId String?        @map("policy_decision_id") @db.Uuid
+  outcome          String
+  occurredAt       DateTime       @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  @@index([tenantId, occurredAt])
+  @@index([tenantId, targetType, targetId])
+  @@map("audit_entry")
+  @@schema("audit")
+}
+
+enum AuditActorType {
+  agent
+  human
+  system
+  runner
+
+  @@map("audit_actor_type")
+  @@schema("audit")
+}
+
+/// Content is not retained — only the fact that a deletion happened (R-12).
+model DeletionTombstone {
+  id          String   @id @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  targetType  String   @map("target_type")
+  targetId    String   @map("target_id") @db.Uuid
+  requestedBy String   @map("requested_by")
+  deletedAt   DateTime @default(now()) @map("deleted_at") @db.Timestamptz(6)
+  reason      String
+
+  @@index([tenantId, deletedAt])
+  @@map("deletion_tombstone")
+  @@schema("audit")
 }

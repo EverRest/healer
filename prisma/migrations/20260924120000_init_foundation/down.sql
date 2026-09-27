@@ -1,8 +1,8 @@
 -- DropForeignKey
-ALTER TABLE "workflow"."workflow_transition" DROP CONSTRAINT "workflow_transition_run_id_fkey";
+ALTER TABLE "workflow"."workflow_transition" DROP CONSTRAINT "workflow_transition_run_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "workflow"."workflow_callback" DROP CONSTRAINT "workflow_callback_run_id_fkey";
+ALTER TABLE "workflow"."workflow_callback" DROP CONSTRAINT "workflow_callback_run_id_tenant_id_fkey";
 
 -- DropForeignKey
 ALTER TABLE "tenant"."tenant_provider_config" DROP CONSTRAINT "tenant_provider_config_tenant_id_fkey";

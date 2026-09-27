@@ -26,6 +26,10 @@ lint              includes boundary patterns (R-01) and the never-wait rule (R-0
 typecheck
 build
 test-unit         coverage floors enforced per path (R-11)
+gate-coverage-completeness   every file under a risk-weighted, 95%-floor path is exercised by
+                  some test at all — `coverage.all: false` reports only imported files, so an
+                  unimported file is invisible to the threshold check above rather than merely
+                  low-scoring (R-11)
 test-e2e          disposable Postgres and Redis (R-12)
 contracts-check   generated OpenAPI and clients match committed artifacts
 gate-data-model   a change set altering the schema also updates the owning spec's data model (FR-015)
@@ -54,8 +58,9 @@ build has already had the chance to bake the secret into an artifact.
 Each is callable alone for iteration and is also called by `ci`:
 
 `secret-scan` · `deps-check` · `db-check` · `format-check` · `lint` · `typecheck` · `build` ·
-`test-unit` · `test-e2e` · `contracts-check` · `gate-data-model` · `gate-isolation` · `gate-undo` ·
-`gate-ceiling` · `gate-evidence` · `gate-agent-scope` · `gate-red-first`
+`test-unit` · `gate-coverage-completeness` · `test-e2e` · `contracts-check` · `gate-data-model` ·
+`gate-isolation` · `gate-undo` · `gate-ceiling` · `gate-evidence` · `gate-agent-scope` ·
+`gate-red-first`
 
 ## Gate semantics
 
@@ -68,6 +73,7 @@ passes when confused produces a false record of compliance, which is worse than 
 | `secret-scan` | the change set or the tree contains secret material, or a committed environment file (FR-008, FR-042) |
 | `gate-data-model` | a change set alters the database schema without updating the owning specification's data model (FR-015) |
 | `gate-isolation` | an HTTP route or MCP tool exists with no test asserting another tenant receives not-found |
+| `gate-coverage-completeness` | a file under `packages/domain/policy`, `packages/domain/evidence`, `packages/shared/src/tenancy` or `packages/agents/src/output` has real logic (more than an `export {}` entry surface) and no test imports it at all (R-11) |
 | `gate-undo` | an entry in the reversible action catalogue (010) has no passing undo test (satisfies 002 SC-005) |
 | `gate-ceiling` | an `autonomy_grant` exceeds `ACTION_CEILING` for its class, or a `reversible_remediation` grant exists for an action whose undo is unattested (002 SC-004, C-18) — **or** the diff raises a ceiling level and cites no resolvable `threshold_derivation` artifact. The first two are checks on data against the ceiling function; the third is a check on an edit **to** the function, which no data check can see, and it resolves a committed artifact rather than the control-plane database, so the gate needs no credentials and cannot fail on a database outage (002 FR-008a, 011 FR-021c) |
 | `gate-evidence` | a persisted conclusion type lacks a non-nullable evidence reference — the rule is **001 FR-009**; this feature owns only its enforcement (FR-016a) |
@@ -90,7 +96,10 @@ The single authority for FR-055. Agent-authored change sets may not modify:
 specs/**/spec.md              specifications
 docs/adr/**  docs/decisions.md
 AGENTS.md  CLAUDE.md  .claude/rules/**
-Makefile  scripts/gate*       gate implementations
+Makefile  scripts/**          gate implementations — secret-scan, db-check, the shared harness
+                               and every gate-* script alike; narrowing this to `scripts/gate*`
+                               would leave secret-scan.mjs, db-check.mjs and the harness an agent
+                               can weaken unprotected
 eslint.config.mjs  tsconfig*.json  vitest.config.ts   lint, boundary, coverage floors
 .github/**  .gitlab/**  .gitlab-ci.yml   CI definitions and templates
 test/*.ts                     shared test helpers — an assertion weakened inside a helper is invisible to R-15

@@ -39,13 +39,76 @@ raised. The benchmark set is now sealed and a raise is gated on the build — se
 
 **012 phases 1–2 landed 2026-09-24** (VERSION 0.5.0): the monorepo, shared foundations, tenancy as a
 compile-time guarantee, the transactional outbox, the persisted workflow machine, the callback registry
-and the seven queue classes. `typecheck`, `lint`, `format-check` and 48 unit tests green; the compose
-stack and the migration are written but unapplied, because the Docker daemon was down — noted in 012's
-tasks.md rather than left implicit.
+and the seven queue classes.
 
-Next: 012 phase 3 (`make ci`, `db-check` and the gate harness — which also runs the migration e2e test
-that is already written), then 001 phases 1–2. Stage 0 S0-1 still blocks realistic sizing of v1 and does
-not block this work.
+**012 phase 3 (US1) landed 2026-09-26** (VERSION 0.10.0), the first time the Docker daemon was up:
+`make bootstrap` and `make ci` — `secret-scan → db-check → format-check → lint → typecheck → build →
+test-unit → test-e2e` — run end to end, 59 unit and 7 e2e tests green, 32.3s cold-cache wall-clock
+against the 10-minute budget, and `.github/workflows/ci.yml` invokes exactly `make ci`. Running the
+migration against a live Postgres for the first time caught two real gaps from phase 1–2 that
+`typecheck`/`lint`/unit tests could not see: `workflow_transition` was missing `tenant_id` and its
+index, and `prisma/migrations/migration_lock.toml` did not exist — both fixed, not worked around.
+
+**012 phase 4 (US2) landed 2026-09-27** (VERSION 0.11.0): `gate-isolation`, `gate-undo`,
+`gate-evidence`, `gate-architecture-agnostic`, `contracts-check`. Also fixed: the API could not
+boot at all until this phase (`HealthController`'s DI wiring was broken since phase 1–2 — no test
+had ever exercised a real `NestFactory.create`).
+
+**012 phase 5 (US3) landed 2026-09-27** (VERSION 0.12.0): boundary lint rules, lint limits,
+`deps-check`. T038 (capability-passing lint pattern) deliberately left undone — nothing in 005,
+008, 009 or 010 exists yet to write a pattern against. `make ci`: 92 unit tests (98.3% coverage,
+now actually enforced) + 19 e2e tests, ~27s cold-cache. Several open questions from phases 4–5
+about conventions 001/010 will need to follow are recorded in `QUESTIONS.md`.
+
+**012 phase 6 (US4) partially landed 2026-09-27** (VERSION 0.13.0): the runner protocol's pure
+logic — `packages/boundary-contract`'s closed evidence/directive schemas, the capability
+handshake (active/degraded/refused), independent egress/ingress validation, the bounded outbound
+buffer, the redaction mechanism. 7 of 13 tasks. The other 6 (registration/heartbeat persistence,
+outbound transport, runner diagnostics, runner build/Docker packaging, directive idempotency) all
+need a repository/controller pattern or an `apps/runner` codebase that doesn't exist yet —
+deferred rather than improvised, reasoning in `QUESTIONS.md`. `make ci`: 119 unit tests (98.9%
+coverage) + 19 e2e tests, ~23s cold-cache.
+
+**012 phase 7 (US5) landed 2026-09-27** (VERSION 0.14.0): never-wait-inside-a-job, complete —
+the lint rule (setTimeout/setInterval/poll-loop, scoped to `**/processors/**`), the runtime
+wall-clock budget (`runWithBudget`), the overdue/stuck-run decision logic. Two of the seven tasks
+needed no new code at all: phase 1–2 already covered them. `make ci`: 131 unit tests (99.0%
+coverage) + 24 e2e tests, ~24s cold-cache.
+
+**012 phases 8–12 landed 2026-09-27** (VERSION 0.16.0): self-observation (agent-run digests, the
+single-store structural test), the prompt registry (content-addressed, no update path), the BYO
+fallback check, onboarding (`make help`, a rewritten README, `make bootstrap` re-verified for
+real), and the analyze-pass gates (`gate-data-model`, the boundary-exception registry via
+`noInlineConfig`, `deps-check`'s ADR-diff extension, `gate-no-send`). 19 of 27 tasks across the
+five phases; the other 8 all wait on the same two things: a real repository/controller pattern
+(001) or a real `packages/llm` provider adapter (010-adjacent) — see `QUESTIONS.md` for the
+per-task reasoning. `make ci`: 164 unit tests (99.0% coverage) + 26 e2e tests, ~26s cold-cache.
+
+**012 phase 13 (agent-driven development) not started.** Its own prerequisite section names why:
+T088–T092 install a GitHub App, set branch-protection rules and name real humans in `CODEOWNERS`
+— changes to the real, shared GitHub repository (`github.com:EverRest/healer`) that need explicit
+sign-off, not something to do while working through a task list unattended. T084–T087 need no
+live GitHub interaction and can start on request.
+
+**001 issue-and-evidence begun 2026-09-27** (VERSION 0.17.0): T001–T004 of 57. The schema (`issue`,
+`evidence`, `audit` — 9 tables) and the append-only guarantee, enforced by Postgres triggers and
+proven through raw SQL against a real database, not asserted by a repository's missing update
+method. Caught and fixed on the first real run: a stray `'closed'` state in `data-model.md` that
+matched nothing in the actual 9-state enum, and two tables missing their required tenant-leading
+index. Also fixed two real, unrelated bugs the new work surfaced: 012's `AgentKind` enum was
+missing `test_author` despite `boundary-contract`'s schema already expecting it, and a real type
+error in `test/containers.ts` that nothing had ever compiled before. `make ci`: 164 unit tests
+(99.0% coverage) + 33 e2e tests, ~27s cold-cache.
+
+Next: **001 phase 2** (the foundational guarantees every user story assumes — producer
+attribution, evidence-requires-a-link, the persisted issue state machine), then phase 3
+(deduplication and ingestion — genuine product logic with real design decisions, not
+infrastructure). This is also what retroactively unblocks most of what 012 deferred (T042, T045,
+T048, T080, and the persistence half of T059/T061/T070) once a real repository/controller pattern
+exists to follow. 012 phase 13 (agent-driven development) still waits on user sign-off for its
+GitHub-account-level actions (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087
+need no live GitHub interaction and can start on request. Stage 0 S0-1 still blocks realistic
+sizing of v1 and does not block this work.
 
 | Spec | Covers | clarify | plan | tasks | analyze |
 |------|--------|---------|------|-------|---------|

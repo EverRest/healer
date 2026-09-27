@@ -1,5 +1,19 @@
-import { Controller, Get, HttpCode } from '@nestjs/common';
+import { Controller, Get, HttpCode, Inject } from '@nestjs/common';
 import { type HealthReport, buildHealthReport } from './health.js';
+
+export interface HealthMeta {
+  readonly service: string;
+  readonly version: string;
+  readonly build: string;
+  readonly runnerProtocolVersion: number;
+}
+
+/**
+ * The DI token for `HealthMeta`. A plain object-typed constructor parameter reflects to
+ * `Object` at runtime (TypeScript erases inline object types for `design:paramtypes`), which
+ * Nest cannot resolve to any provider — an explicit token is required, not optional style.
+ */
+export const HEALTH_META = Symbol('HEALTH_META');
 
 /**
  * Thin by rule (`.claude/rules/backend-nestjs.md`): the controller shapes a response and
@@ -8,14 +22,7 @@ import { type HealthReport, buildHealthReport } from './health.js';
  */
 @Controller()
 export class HealthController {
-  constructor(
-    private readonly meta: {
-      readonly service: string;
-      readonly version: string;
-      readonly build: string;
-      readonly runnerProtocolVersion: number;
-    },
-  ) {}
+  constructor(@Inject(HEALTH_META) private readonly meta: HealthMeta) {}
 
   @Get('health')
   @HttpCode(200)

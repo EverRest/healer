@@ -30,9 +30,12 @@ Index `(tenant_id, state)`, `(deadline_at) where terminal_state is null`.
 
 ### workflow_transition (append-only)
 
-`id`, `run_id`, `from_state`, `to_state`, `cause` (`job` · `callback` · `timeout` · `human` ·
-`policy`), `actor_ref`, `payload_digest`, `occurred_at`. Never updated, never deleted while the run
-exists.
+`id`, `tenant_id`, `run_id`, `from_state`, `to_state`, `cause` (`job` · `callback` · `timeout` ·
+`human` · `policy`), `actor_ref`, `payload_digest`, `occurred_at`. Never updated, never deleted while
+the run exists. `tenant_id` is denormalized from `workflow_run` so the tenant-scoping rule (FR-048)
+does not depend on a join, and a composite foreign key `(run_id, tenant_id) →
+workflow_run(id, tenant_id)` makes a transition naming any tenant but its run's unrepresentable
+rather than merely unindexed. Leading index `(tenant_id, run_id, occurred_at)`.
 
 **The timeline boundary** (C-14): machine steps are rows here, domain facts are rows in 001's
 `issue_event`. 001's `GetTimeline` unions the two. A job retry or a `timeout` transition is not a

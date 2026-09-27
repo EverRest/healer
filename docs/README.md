@@ -13,6 +13,7 @@
 | [runbooks/runner-diagnosis.md](runbooks/runner-diagnosis.md) | Triaging a customer's runner without seeing their data |
 | [runbooks/raising-autonomy.md](runbooks/raising-autonomy.md) | The procedure for raising an autonomy ceiling, and what each refusal means |
 | [security-posture.md](security-posture.md) | The procurement and security-review document; a consolidation of ADR 0001, ADR 0006 and the runner protocol |
+| [boundary-exceptions.md](boundary-exceptions.md) | The only form a boundary-rule exception takes — a recorded row, never an inline suppression (012 T077) |
 
 Principles live in [.specify/memory/constitution.md](../.specify/memory/constitution.md).
 Agent instructions in [AGENTS.md](../AGENTS.md).
@@ -32,3 +33,4 @@ Agent instructions in [AGENTS.md](../AGENTS.md).
 | [0009](adr/0009-derivation-artifacts-and-diff-gates.md) | Derivation artifacts, and gating a diff rather than data |
 | [0010](adr/0010-inference-follows-the-source.md) | Inference follows the source — model calls over customer source run in the runner |
 | [0011](adr/0011-agent-driven-development.md) | Agent-driven development under the same gates |
+| [0012](adr/0012-openapi-contract-generation.md) | OpenAPI generated via `@nestjs/swagger` |
