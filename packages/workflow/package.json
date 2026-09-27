@@ -17,6 +17,7 @@
   "dependencies": {
     "@healer/events": "workspace:*",
     "@healer/shared": "workspace:*",
-    "bullmq": "^6.3.8"
+    "bullmq": "^6.3.8",
+    "ioredis": "^5.4.1"
   }
 }

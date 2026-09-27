@@ -45,6 +45,9 @@ const ALLOWED_DEPENDENCIES = new Set([
   'pino',
   'zod',
   'bullmq',
+  // Not an independent choice: bullmq requires it as its Redis client (bullmq peerDependencies,
+  // ADR 0003 approved bullmq itself, not a technology this repo could swap).
+  'ioredis',
   '@nestjs/common',
   '@nestjs/core',
   '@nestjs/platform-express',

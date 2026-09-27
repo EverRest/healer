@@ -95,6 +95,58 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.31.0 — 2026-09-27
+
+**001 T019**: `POST /ingest/signals` — batch ≤ 1000, always `202`, never blocks the provider.
+
+- Enqueue-only: the endpoint validates (`zod`, mirroring `contracts/openapi.yaml`'s `Signal`
+  schema) and enqueues one BullMQ job per signal onto the pre-existing `ingestion` queue class
+  (012 T015) — it never calls `ingestSignal` itself and never waits on anything downstream.
+  `packages/domain/issues` gains a `SignalQueue` port, an `enqueueSignalBatch` application command
+  (test-first, 4/4), and a `BullmqSignalQueue` infrastructure implementation. `apps/worker` is
+  untouched — the consumer that actually processes queued signals is 001 T024/T025's job.
+- Tenant identity is a visible, TODO-flagged stub (`TenantContext.forTrustedInternalUse` read from
+  an unverified `X-Tenant-Id` header): no `ingestBearer` credential check exists yet. Chosen via
+  explicit user confirmation over building throwaway auth or stopping to design real auth now.
+- Two real, previously-undetected bugs found and fixed: `packages/workflow`'s BullMQ wiring
+  (012 T015) had never been driven against a real Redis and was missing its required `ioredis`
+  client entirely (`bullmq`'s own `peerDependencies`, not an independent choice — added, and named
+  in ADR 0003); and Express's default 100kb JSON body limit would 413 a legitimate near-cap batch
+  before the DTO's own 1000-item cap ever ran (raised to 5mb via `useBodyParser`).
+- `gate-isolation` gained a second recognized helper, `assertTenantScopedEnqueue`
+  (`test/tenant-isolation.ts`): the existing `assertTenantIsolated`'s "read back, expect 404"
+  contract doesn't fit a write-only endpoint with nothing to read back. Proves isolation by
+  embedding a unique marker in each tenant's write and asserting the marker only ever resolves
+  back to the tenant that wrote it — real proof, not a presence filter.
+- `apps/api/ingest.e2e.test.ts`: first real consumer of `test/containers.ts`'s `startRedis()`
+  (9/9) — a real Nest HTTP server against a real Redis, not a fake `SignalQueue`.
+- **Opus code review found four more real bugs before this shipped**, all fixed and re-verified:
+  - `queue.add()` against an unreachable Redis hung forever rather than rejecting — confirmed
+    empirically (>15s unresolved), since `Queue.add`/`addBulk` await the client reaching `'ready'`
+    and ioredis's default retry strategy never gives up. `BullmqSignalQueue` now wraps its own
+    call in a 3s timeout (`SignalQueueUnavailableError` → the controller returns `503`, not a hang
+    or an opaque `500`); `createQueue` also sets `enableOfflineQueue: false` so a command issued
+    during an outage can't fire later, after the caller has already been told it failed.
+  - `SignalQueue.enqueue` took one signal at a time; `enqueueSignalBatch` called it N times via
+    `Promise.all` — a failure partway through left some signals enqueued and the caller seeing the
+    whole request as failed, and a naive retry (no idempotency key until T020/T021) would
+    double-enqueue the part that had already landed. Changed the port to `enqueueBatch`, backed by
+    BullMQ's `addBulk` (one pipelined round trip instead of N).
+  - `z.string().datetime()` rejected a valid RFC 3339 timestamp with a timezone offset, accepting
+    only a literal `Z` — fixed with `{ offset: true }`. `.strict()` on the signal/error-signature
+    schemas turned any provider-added field into a 400 for the whole batch — removed; the field is
+    now dropped, not rejected. Both violate FR-019 ("must not lose events") when triggered.
+  - `assertTenantScopedEnqueue`'s first version took `_app`/`_method`/`_path` but never used them
+    — a caller-supplied `writeAs` could exercise anything, so `gate-isolation` recognizing the
+    call proved nothing about what it actually did. The helper now performs the request itself
+    against the three arguments it's given.
+  - Also: the DTO's `.max(1000)` and `enqueueSignalBatch`'s `MAX_SIGNAL_BATCH_SIZE` were two
+    copies of the same limit (the DTO now imports the constant, so `SignalBatchTooLargeError` is
+    reachable from this endpoint rather than permanently dead code behind the DTO's own check);
+    and every signal in a batch got its own random correlation id instead of sharing one per
+    request — the controller now wraps the handler in `withCorrelation`.
+- `make ci`: 48 unit files / 257 tests, 14 e2e files / 103 tests, all gates pass.
+
 ## 0.30.0 — 2026-09-27
 
 **001 T015**: SC-001 at real scale — replay 12,000 signals from two providers, confirm they
@@ -1061,4 +1113,3 @@ Specification: agent-driven development (012 US10). No code.
 Verified: `typecheck`, `lint`, `format-check` and 48 unit tests green. Not verified: the compose
 stack and the migration were never applied — the Docker daemon was not running — so `test-e2e` has
 not been executed. Recorded in 012's tasks.md rather than left implicit.
-

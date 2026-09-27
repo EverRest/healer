@@ -165,3 +165,132 @@ which fix variant was being measured at the time. Consistent with "something abo
 pressure/timing under load," not with a fix that stopped working — T015's own test (25 concurrent
 transactions, real load) passed cleanly in every one of those same runs. Raises the priority of the
 "testcontainers/Docker resource allocation" hypothesis over the others already ruled out.
+
+**New data point (001 T019 landing)**: a full `make ci` run failed this same test again (this time
+`fulfilled.length === 2`, the original symptom). Before assuming T019's changes were the cause
+(none of them touch `issue-repository.ts`, `state-machine.ts` or anything else this test exercises
+— T019 only adds `/ingest/signals` and its own new files), re-ran the test 3× in isolation on
+T019's tree (all 3 failed, two different assertion points — once the `reason instanceof
+Concurrent­ModificationError || InvalidIssueTransitionError` check, twice `fulfilled.length`), then
+`git stash`ed every T019 change and ran the identical 3× on the unmodified pre-T019 tree: **also
+3/3 failed, same two assertion points.** Confirms this is the same pre-existing, unresolved issue,
+not a T019 regression, and that on this machine it has moved from "intermittent" toward
+"consistently fails in isolation too" — worth escalating priority on whoever picks up the
+Docker/testcontainers-resource-allocation hypothesis next, since "isolation used to mostly pass"
+is no longer true.
+
+## 001 T019 — `POST /ingest/signals`: judgment calls
+
+- **Tenant identity is a visible stub, not real auth.** No `ingestBearer` credential verification
+  exists yet (001/002 haven't landed auth). Asked the user directly (real security consequence,
+  not a routine call): chosen answer was `TenantContext.forTrustedInternalUse` read from a bare
+  `X-Tenant-Id` header, with a loud `TODO(001 T019, security)` comment on the controller method —
+  an unverified header is a more honest stub than pretending to parse a bearer token would be.
+  **Must be replaced before this endpoint is reachable from outside a trusted network.**
+- **T019's scope is enqueue-only, not the consumer.** Re-read T024 ("malformed payloads... nothing
+  dropped silently") and T025 ("downstream failure retains the signal for retry") — both describe
+  *processing-time* outcomes, which only make sense as their own tasks' job. `apps/worker` is
+  untouched by this change; `SignalQueue`/`enqueueSignalBatch`/`BullmqSignalQueue` only validate
+  and enqueue, never call `ingestSignal`.
+- **One BullMQ job per signal, not one job per batch** — so a single malformed signal's own
+  retries (`ingestion` queue class, 5 attempts) never retry its unrelated siblings too.
+- **Plain `application/commands/enqueue-signal-batch.ts` function, not `@nestjs/cqrs`.** No
+  `CommandBus`/`QueryBus` infrastructure exists anywhere in the repo despite
+  `.claude/rules/backend-nestjs.md`'s "dispatch to CommandBus/QueryBus" language. Satisfied the
+  rule's actual intent (thin controller, logic elsewhere) with a plain function under
+  `application/commands/` — matching `plan.md`'s own pre-existing target directory structure for
+  `packages/domain/issues` — rather than adopting a new framework-level pattern for one endpoint
+  (would need its own ADR, and the precedent from C-45 is "stay structural when a plain answer
+  reaches the same guarantee").
+- **`zod` for the request DTO, not `class-validator`/`class-transformer`.** `zod` is already an
+  approved, ADR-free dependency (`packages/boundary-contract`, `packages/shared`); the other two
+  don't exist anywhere in the repo. Picking `zod` needed no new dependency or ADR.
+- **Discovered and fixed: `packages/workflow`'s BullMQ wiring (012 T015) never actually worked
+  against real Redis.** `bullmq` was added as a dependency but its required Redis client,
+  `ioredis`, was not — nothing had ever driven `createQueue`/`createWorker` against a live Redis
+  before this task's e2e test (the first consumer of `test/containers.ts`'s `startRedis()`).
+  Fixed by adding `ioredis` to `packages/workflow`'s dependencies, to `deps-check`'s allowlist, and
+  documenting it in ADR 0003 (bullmq's own `peerDependencies` name it — not an independent
+  technology choice this project makes, so no new ADR, just the existing one updated to say so).
+- **Discovered and fixed: Express's default 100kb JSON body limit would 413 a legitimate
+  near-cap delivery** before the DTO's own `.max(1000)` check ever ran — 1000 signals with
+  real `frames` arrays comfortably exceeds 100kb. Fixed with `app.useBodyParser('json', { limit:
+  '5mb' })`, applied in both `bootstrap()` and every test that boots the app. The cap that matters
+  is still the DTO's; this only stops the transport from silently rejecting valid batches under it.
+- **`gate-isolation` didn't fit a write-only, fire-and-forget endpoint.** The existing
+  `assertTenantIsolated` helper (`test/tenant-isolation.ts`) encodes "create as tenant A, read as
+  tenant B, expect 404" — `/ingest/signals` has nothing to read back, and the helper's body is
+  still an intentional stub pending real auth (the same gap this task's own TODO already names).
+  Asked the user directly (constitution-level guarantee, genuine design fork, not a routine call):
+  chosen answer was a second helper, `assertTenantScopedEnqueue`, proving isolation by embedding a
+  unique marker in each tenant's write and asserting the marker only ever resolves back to the
+  tenant that wrote it (via the BullMQ job's own `tenantId` field) — real proof, not a presence
+  filter that would pass regardless of an actual leak. `gate-isolation`'s detection regex now
+  recognizes either helper by name.
+- **`/api/v1` URL prefix — still open, not decided.** The OpenAPI contract's `servers` entry says
+  `/api/v1`; `apps/api` has never had a global prefix (`/health`, `/ready` are bare, and now so is
+  `/ingest/signals`). Left as-is rather than guessed at, since changing it is a cross-cutting,
+  contract-visible decision that should cover all routes at once, not be decided per-endpoint.
+- **e2e test file placement**: `apps/api/ingest.e2e.test.ts` sits beside `src/`, not inside it.
+  `apps/api/tsconfig.json`'s `rootDir` is `src`, so a file under `src/` cannot import
+  `test/containers.ts` (outside that rootDir) without breaking `tsc --build`. Every other
+  Postgres/Redis-backed e2e test already lives outside any tsc project (at the repo root) for the
+  same reason; this one needed `apps/api`'s own `@nestjs/*`/`supertest` dependencies too, which a
+  true repo-root file can't resolve under pnpm's strict linking — `apps/api/` (sibling to `src/`,
+  still outside the tsc project's `include`) is where both constraints are satisfied at once.
+
+### Opus code review, before this shipped: four real bugs found, all fixed and re-verified
+
+Ran `/code-review` (Opus) against the diff before committing. All four findings reproduced first,
+then fixed — not patched on faith:
+
+- **`queue.add()`/`addBulk()` against an unreachable Redis hangs forever, never rejects.**
+  Reproduced directly: a standalone script calling `BullmqSignalQueue.enqueue` against a closed
+  port sat unresolved past 15s. Root cause traced into `bullmq`'s source: `Queue.add`/`addBulk`
+  both `await waitUntilReady(client)` before issuing anything, and `waitUntilReady` only resolves
+  on the client's `'ready'` or `'end'` event — ioredis's default `retryStrategy` never returns
+  `null`, so the client never reaches `'end'` on its own, and the wait is unbounded. Tried
+  `enableOfflineQueue: false` first (a plausible-looking fix); reproduced that it does **not**
+  help — that setting only affects commands issued after `waitUntilReady` resolves, and this hang
+  happens before that. The actual fix: `BullmqSignalQueue.enqueueBatch` wraps its own `addBulk`
+  call in an explicit 3s `Promise.race` timeout, throwing `SignalQueueUnavailableError`, which the
+  controller catches and turns into `503`. Kept `enableOfflineQueue: false` anyway, for a
+  different, real reason: without it, a command started during an outage can still fire *later*
+  once the connection recovers, after the caller has already been told it failed and moved on. A
+  new e2e test boots a second app instance against a closed port and asserts `503` inside 10s
+  (measured 3.0s, matching the budget) — this is the test that would have caught the original bug.
+- **Batch enqueue wasn't one atomic unit.** `enqueueSignalBatch` called `SignalQueue.enqueue` once
+  per signal via `Promise.all` — N separate round trips. A failure partway through leaves some
+  signals enqueued while the caller sees the whole request as failed; with no `X-Delivery-Id`
+  idempotency until T020/T021, a naive client retry then double-enqueues the part that had already
+  landed. Changed the port from `enqueue(signal)` to `enqueueBatch(signals)`, implemented with
+  BullMQ's `addBulk` — one pipelined round trip. (Verified `addBulk` uses `client.pipeline()`, not
+  a `MULTI`/`EXEC` transaction — a per-job script error still only fails that one job, which is a
+  reasonable, not a false, guarantee: it matches this repo's own "nothing dropped silently, create
+  what parsed" philosophy rather than promising strict all-or-nothing.)
+- **Two zod validation choices would have dropped legitimate events, against FR-019.**
+  `z.string().datetime()` rejects a valid RFC 3339 timestamp carrying a timezone offset
+  (`+02:00`), accepting only a literal `Z` — confirmed with a standalone zod script.
+  `.strict()` on the signal and error-signature schemas meant a provider adding one new field to
+  its payload would 400 every future delivery. Fixed: `.datetime({ offset: true })`, and `.strict()`
+  removed from the two inner schemas (kept on the outer `{ signals: [...] }` wrapper, which is
+  fully under this endpoint's own control). Added e2e tests for both: an offset timestamp and an
+  unrecognized field, both now 202.
+- **`assertTenantScopedEnqueue`'s first version never touched its own `app`/`method`/`path`
+  arguments.** It only called a caller-supplied `writeAs`, which could point at anything —
+  `gate-isolation` recognizing the call proved nothing about what code path actually ran. Rewrote
+  the helper to perform the HTTP request itself against the three arguments it's given
+  (`tenantHeader`, `bodyFor(marker)`, `expectStatus`), so naming the endpoint and exercising it are
+  now the same call.
+- **Two smaller findings, also fixed:** the DTO's `.max(1000)` and `enqueueSignalBatch`'s
+  `MAX_SIGNAL_BATCH_SIZE` were two independent copies of the same number — the DTO now imports the
+  constant, so `SignalBatchTooLargeError` is actually reachable from this endpoint instead of
+  permanently dead code sitting behind the DTO's own (previously separate) cap. And every signal
+  in a batch was getting its own random correlation id instead of sharing one per delivery — the
+  controller now wraps the whole handler in `withCorrelation(newCorrelationId(), ...)`; a new e2e
+  test asserts every job from one batch carries the same id.
+
+Re-ran the full suite after all five fixes: 48 unit files / 257 tests, 14 e2e files / 103 tests
+(9 in `ingest.e2e.test.ts`, up from 5), all `make ci` gates pass. The one remaining e2e failure is
+the pre-existing, already-documented `issue-repository.e2e.test.ts` flake above — unrelated to any
+of this (re-confirmed via `git stash`: fails identically on the pre-T019 tree).

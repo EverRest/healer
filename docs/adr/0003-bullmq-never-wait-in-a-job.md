@@ -18,6 +18,10 @@ state, resumption, compensation and timeout handling get hand-rolled in Postgres
 
 BullMQ with Redis, plus one hard rule: **never wait inside a job.**
 
+BullMQ's Redis client is `ioredis` — its own `peerDependencies`, not a swappable choice this
+project makes independently. Approving BullMQ approves it (001 T019 added it as a direct
+dependency of `packages/workflow` once a queue was first driven against real Redis).
+
 Every long wait is a persisted state plus an inbound callback — a CI webhook, a deploy webhook, a
 scheduled verification tick. Jobs stay short and idempotent. The workflow lives in Postgres as an
 explicit state machine, which is also the audit trail and the artifact a customer's

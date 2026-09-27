@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // `gate-isolation` (012 T029, FR-013, 001 FR-015, 001 SC-004): every HTTP endpoint from the
-// generated contract must have a test asserting another tenant receives not-found.
+// generated contract must have a test asserting tenant isolation.
 //
 // Detection is a real function call, not prose-matching: an isolation test calls
-// `assertTenantIsolated(app, method, path)` (test/tenant-isolation.ts), naming the exact route.
-// A route with no such call anywhere in an e2e test file is reported.
+// `assertTenantIsolated(app, method, path)` (test/tenant-isolation.ts), naming the exact route —
+// or, for a write-only endpoint with nothing to read back, `assertTenantScopedEnqueue(app,
+// method, path, ...)` (001 T019), same leading shape. A route with no such call anywhere in an
+// e2e test file is reported.
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
@@ -19,7 +21,7 @@ const OPENAPI_PATH = fileURLToPath(new URL('../../apps/api/openapi.json', import
 const EXEMPT_PATHS = new Set(['/health', '/ready']);
 
 const CALL_PATTERN =
-  /assertTenantIsolated\s*\(\s*[^,]+,\s*['"]([A-Z]+)['"]\s*,\s*['"]([^'"]+)['"]/g;
+  /assertTenant(?:Isolated|ScopedEnqueue)\s*\(\s*[^,]+,\s*['"]([A-Z]+)['"]\s*,\s*['"]([^'"]+)['"]/g;
 
 function normalizePath(path) {
   return path.replace(/\{([^}]+)\}/g, ':$1');

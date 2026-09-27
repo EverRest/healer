@@ -14,9 +14,19 @@ export interface QueueConnection {
   readonly url: string;
 }
 
+/**
+ * `enableOfflineQueue: false` (001 T019 review): ioredis's default buffers a command in memory
+ * while disconnected and only sends it once reconnected. Without this, a command issued during
+ * an outage can sit buffered and fire *later*, after a caller has already given up on it and
+ * moved on — a silent, delayed side effect rather than a clean failure. This alone does not make
+ * `queue.add()` fail fast on a cold-start outage: `Queue.add()` first awaits the client reaching
+ * `'ready'`, which ioredis's default retry strategy never gives up on, so it still hangs — a
+ * caller that needs a bounded wait (`BullmqSignalQueue`, FR-019 "never blocks the provider")
+ * wraps its own call in an explicit timeout instead of relying on this setting alone.
+ */
 export function createQueue(queue: QueueClass, connection: QueueConnection): Queue {
   return new Queue(queue, {
-    connection: { url: connection.url },
+    connection: { url: connection.url, enableOfflineQueue: false },
     defaultJobOptions: jobOptionsFor(queue) as JobsOptions,
   });
 }

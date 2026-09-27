@@ -17,6 +17,7 @@
   "dependencies": {
     "@healer/events": "workspace:*",
     "@healer/prisma-client": "workspace:*",
-    "@healer/shared": "workspace:*"
+    "@healer/shared": "workspace:*",
+    "@healer/workflow": "workspace:*"
   }
 }

@@ -16,6 +16,21 @@
         "responses": { "200": { "description": "" } },
         "tags": ["Health"]
       }
+    },
+    "/ingest/signals": {
+      "post": {
+        "operationId": "IngestController_ingest",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "202": { "description": "" } },
+        "tags": ["Ingest"]
+      }
     }
   },
   "info": {

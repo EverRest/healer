@@ -2,7 +2,10 @@ import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
+import type { SignalQueue } from '@healer/domain-issues';
 import { createApiModule } from './main.js';
+
+const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -16,12 +19,15 @@ describe('api boots and serves health/ready over HTTP', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
-    const ApiModule = createApiModule({
-      service: 'healer-api',
-      version: '0.5.0',
-      build: 'test',
-      runnerProtocolVersion: 1,
-    });
+    const ApiModule = createApiModule(
+      {
+        service: 'healer-api',
+        version: '0.5.0',
+        build: 'test',
+        runnerProtocolVersion: 1,
+      },
+      noopSignalQueue,
+    );
     app = await NestFactory.create(ApiModule, { logger: false });
     await app.init();
   });
