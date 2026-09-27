@@ -179,6 +179,39 @@ not a T019 regression, and that on this machine it has moved from "intermittent"
 Docker/testcontainers-resource-allocation hypothesis next, since "isolation used to mostly pass"
 is no longer true.
 
+**RESOLVED (2026-09-27, post-T022).** With the failure rate up to roughly 50% in isolation on this
+machine, it was finally tight enough to instrument directly: a temporary probe script (real
+`PrismaIssueRepository`, real Postgres, 20–60 tight trials, deleted after use) ran the exact
+concurrent-transition scenario and printed the *actual* rejection reason on every "unexpected
+error type" failure — 20/20 were `PrismaClientKnownRequestError` with Prisma code **`P2010`**
+("raw query failed"), `error.meta = { code: '40001', message: 'could not serialize access due to
+concurrent update' }`.
+
+**Root cause**: `transition()`'s catch block only checked `error.code === 'P2034'` to translate a
+serialization failure into `ConcurrentModificationError`. `P2034` is the code Prisma assigns when
+one of *its own generated queries* (`.update()`, `.create()`, …) hits a Postgres 40001/40P01
+inside an interactive transaction. The actual conflicting statement in `transition()` is the raw
+`$executeRaw` `UPDATE` (needed for the state-guarded `WHERE` clause SERIALIZABLE's conflict
+detection keys off) — and Prisma does **not** fold a raw query's serialization failure into P2034;
+it surfaces as the generic `P2010` "raw query failed" wrapper, with the real Postgres SQLSTATE
+sitting in `error.meta.code` instead. So the exact conflict SERIALIZABLE's whole design exists to
+catch was being caught by Postgres, reported by Prisma, and then rethrown as an unhandled
+`PrismaClientKnownRequestError` instead of `ConcurrentModificationError` — precisely the "wrong
+error type" assertion failure this test had been intermittently hitting all along. This also
+explains why every earlier clean-room reproduction *without* the raw `$executeRaw` UPDATE (or
+using a plain `.update()` instead) never reproduced it: those paths route through Prisma's own
+query engine and correctly get `P2034`.
+
+**Fix**: the catch now also recognizes `P2010` wrapping Postgres `40001` (serialization_failure)
+or `40P01` (deadlock_detected) in `error.meta.code`, translating both to
+`ConcurrentModificationError` alongside `P2034`. Verified: the instrumented probe went from
+20/20 and 0/60 failures before/after the fix; the real test went from ~50% failures to 15/15 clean
+fresh-process runs; a full `make ci` run (49 unit files / 262 tests, 15 e2e files / 121 tests) is
+now fully green with no retry, no skip and no flake anywhere in the suite. The
+"testcontainers/Docker resource allocation" hypothesis, prioritized in the notes above, was a red
+herring — the failure rate tracking load was a real correlation (more load, more chances for two
+transactions to genuinely overlap and hit the always-broken catch), not the root cause itself.
+
 ## 001 T019 — `POST /ingest/signals`: judgment calls
 
 - **Tenant identity is a visible stub, not real auth.** No `ingestBearer` credential verification

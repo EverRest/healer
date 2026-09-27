@@ -157,12 +157,13 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       // sees `ConcurrentModificationError` when its own guarded update loses the race (both reads
       // genuinely overlapped), or `InvalidIssueTransitionError` when it instead reads the
       // already-changed state and the graph itself rejects the now-stale edge — either is a
-      // correct rejection; what must never happen is both settling fulfilled. NOTE (QUESTIONS.md
-      // "001 review — transition() concurrency test residual flakiness"): this assertion still
-      // fails intermittently in this exact file despite the underlying fix (SERIALIZABLE +
-      // state-guarded raw UPDATE) reproducing as airtight — 0 failures across 400+ trials — in
-      // every isolated, clean-room repro built while investigating it. Root cause not fully
-      // pinned down; flagged for follow-up rather than left silently passing or silently deleted.
+      // correct rejection; what must never happen is both settling fulfilled. This assertion was
+      // intermittently flaky for a real reason (QUESTIONS.md "001 review — transition() concurrency
+      // test residual flakiness", now resolved): `transition()`'s catch only recognized Prisma
+      // error P2034, but the conflicting statement is a raw `$executeRaw` UPDATE, whose own
+      // serialization failure surfaces as P2010 wrapping Postgres SQLSTATE 40001 instead — the
+      // exact conflict this test exists to prove was being rethrown unhandled rather than as
+      // `ConcurrentModificationError`. Fixed in `prisma-issue-repository.ts`'s `transition()`.
       const outcomes = await Promise.allSettled([
         repo.transition(scope(CONTEXT, { id: input.id }), 'merged', 'human', 'a'),
         repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'b'),

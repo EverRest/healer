@@ -202,7 +202,16 @@ export class PrismaIssueRepository implements IssueRepository {
     // through on occasion in testing here; Postgres's own conflict detection under SERIALIZABLE
     // does not depend on getting every lock-ordering detail right by hand and proved airtight
     // (0/150 trials across repeated fresh-process runs, where the READ COMMITTED guard alone
-    // failed intermittently). The conflict surfaces as Prisma error P2034, caught below.
+    // failed intermittently). The conflict surfaces as Postgres SQLSTATE 40001, caught below —
+    // **root cause of this test's long-documented residual flakiness** (QUESTIONS.md "001
+    // review — transition() concurrency test residual flakiness"): confirmed by instrumenting a
+    // 20-trial probe that this raw `$executeRaw` UPDATE's own serialization failure surfaces as
+    // Prisma error **P2010** ("raw query failed"), wrapping the real Postgres code in `error.meta`
+    // — never as P2034, which Prisma only assigns to failures of its own generated queries. The
+    // original catch below checked only for P2034, so this exact conflict — the one the whole
+    // SERIALIZABLE design exists to catch — was silently rethrown as an unhandled
+    // `PrismaClientKnownRequestError` instead of the intended `ConcurrentModificationError`,
+    // which is exactly the "unexpected error type" this test's assertion had been failing with.
     try {
       return await this.prisma.$transaction(
         async (tx) => {
@@ -266,8 +275,18 @@ export class PrismaIssueRepository implements IssueRepository {
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
-        throw new ConcurrentModificationError('Issue');
+      if (error instanceof Prisma.PrismaClientKnownRequestError) {
+        // P2034: a serialization failure Prisma detected in one of its own generated queries.
+        // P2010 wrapping Postgres SQLSTATE 40001/40P01: the same failure, but raised by the raw
+        // `$executeRaw` UPDATE above, which Prisma does not fold into P2034 (see the comment at
+        // this method's top). Both mean the same thing: reread and retry.
+        const meta = error.meta as { code?: string } | undefined;
+        const isSerializationFailure =
+          error.code === 'P2034' ||
+          (error.code === 'P2010' && (meta?.code === '40001' || meta?.code === '40P01'));
+        if (isSerializationFailure) {
+          throw new ConcurrentModificationError('Issue');
+        }
       }
       throw error;
     }

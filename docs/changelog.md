@@ -95,6 +95,36 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.35.0 — 2026-09-27
+
+**Root cause found and fixed for `issue-repository.e2e.test.ts`'s long-standing flaky concurrency
+test** — the fourth tracked open item, and the one prior investigation across several review
+rounds had not been able to pin down.
+
+- The failure rate had crept up to roughly 50% in isolation on this machine, finally tight enough
+  to instrument directly: a temporary probe script (deleted after use) ran the exact
+  concurrent-transition scenario dozens of times and printed the real rejection reason on every
+  "unexpected error type" failure — every one was `PrismaClientKnownRequestError` with Prisma
+  code `P2010` ("raw query failed"), wrapping Postgres SQLSTATE `40001`
+  ("could not serialize access due to concurrent update") in `error.meta`.
+- **Root cause**: `transition()`'s catch block only recognized Prisma error `P2034` — the code
+  Prisma assigns when one of its *own generated queries* hits a serialization failure inside an
+  interactive transaction. The actual conflicting statement is a raw `$executeRaw` `UPDATE`
+  (needed for the state-guarded `WHERE` clause SERIALIZABLE's conflict detection keys off), and
+  Prisma does not fold a raw query's serialization failure into `P2034` — it surfaces as the
+  generic `P2010` wrapper instead. The exact conflict SERIALIZABLE's whole design exists to catch
+  was being caught by Postgres, reported by Prisma, and then rethrown unhandled instead of as
+  `ConcurrentModificationError`. Every earlier clean-room reproduction that used a plain
+  `.update()` instead of raw SQL never reproduced this, because that path correctly gets `P2034`.
+- **Fix**: the catch now also recognizes `P2010` wrapping Postgres `40001` or `40P01` (deadlock)
+  in `error.meta.code`, translating both to `ConcurrentModificationError` alongside `P2034`.
+- Verified: the instrumented probe went from 20/20 to 0/60 failures before/after the fix; the real
+  test went from ~50% failures to 15/15 clean fresh-process runs; a full `make ci` run is fully
+  green with no flake anywhere in the suite (49 unit files / 262 tests, 15 e2e files / 121 tests).
+  The "Docker/testcontainers resource allocation" hypothesis prioritized in earlier notes was a
+  correlation, not the cause — more load meant more chances for two transitions to genuinely
+  overlap and hit the always-broken catch, not a different failure mechanism under load.
+
 ## 0.34.0 — 2026-09-27
 
 **Closed three tracked open items** from a QUESTIONS.md review, decided in `docs/decisions.md`.
