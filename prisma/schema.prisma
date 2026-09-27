@@ -143,9 +143,20 @@ model Outbox {
   publishedAt   DateTime? @map("published_at") @db.Timestamptz(6)
   attempts      Int       @default(0)
   lastError     String?   @map("last_error")
+  /// Set by `claimUnpublished` (`SELECT ... FOR UPDATE SKIP LOCKED`, 001 review finding): makes
+  /// two concurrent drain workers' claims mutually exclusive without either blocking on the
+  /// other. A claim older than the reclaim timeout is treated as an abandoned (crashed) worker.
+  claimedAt     DateTime? @map("claimed_at") @db.Timestamptz(6)
 
-  // Unpublished-first, oldest-first — exactly `claimUnpublished`'s query shape.
+  // Kept even though the claim query itself never filters by tenant (see `PrismaOutboxStore`'s
+  // doc comment) — `outbox` is still tenant-scoped by every other convention
+  // (prisma-migrations.md), and the migration e2e suite's leading-tenant_id-index check enforces
+  // that every tenant-scoped table keeps one regardless of what the busiest query needs.
   @@index([tenantId, publishedAt, occurredAt])
+  // The deliberately un-Prisma-declared partial index (`outbox_claim_idx`, migration
+  // `20260927040000`) matches the claim query's real shape instead — `where published_at is
+  // null`, ordered `attempts, occurred_at` — which a plain composite index Prisma can express
+  // here cannot.
   @@map("outbox")
   @@schema("events")
 }
@@ -395,7 +406,7 @@ model Issue {
 
   // A fingerprint's ruleset_version can only ever name a version that was really published
   // (001 T011, R-01) — a foreign key, not a plain int a caller could invent.
-  ruleset         NormalisationRuleset @relation(fields: [rulesetVersion], references: [version], onDelete: Restrict)
+  ruleset NormalisationRuleset @relation(fields: [rulesetVersion], references: [version], onDelete: Restrict)
 
   events          IssueEvent[]
   relationships   IssueRelationship[] @relation("IssueRelationshipSubject")

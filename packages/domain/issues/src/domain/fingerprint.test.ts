@@ -97,4 +97,73 @@ describe('computeFingerprint (001 T016, R-01, FR-003)', () => {
     );
     expect(a).toBe(b);
   });
+
+  it('does not confuse a frame containing a NUL byte with a frame boundary — real review finding', () => {
+    // Joining fields/frames with a raw NUL separator meant one frame that happens to contain a
+    // NUL byte was indistinguishable from two separate frames split at that byte.
+    const oneFrameWithNul = computeFingerprint(
+      { component: 'c', environment: 'e', frames: ['x\u0000y'] },
+      { stripPatterns: [] },
+    );
+    const twoFrames = computeFingerprint(
+      { component: 'c', environment: 'e', frames: ['x', 'y'] },
+      { stripPatterns: [] },
+    );
+    expect(oneFrameWithNul).not.toBe(twoFrames);
+  });
+
+  it('normalises a Java-style trailing line:column even though the default rules were written case-lowered — case-insensitive pattern match', () => {
+    // The rule's own pattern is lowercase, but a *future* ruleset version's pattern could contain
+    // uppercase, and the input is lowercased before matching — the match must still happen.
+    const rules = { stripPatterns: ['LINE:\\d+'] };
+    const a = computeFingerprint(
+      { component: 'c', environment: 'e', frames: ['at Line:42'] },
+      rules,
+    );
+    const b = computeFingerprint(
+      { component: 'c', environment: 'e', frames: ['at Line:99'] },
+      rules,
+    );
+    expect(a).toBe(b);
+  });
+
+  it('normalises a generated-file line:column shift beyond the default patterns’ narrow suffix match — top frames still collapse', () => {
+    const a = computeFingerprint(
+      { component: 'c', environment: 'e', frames: ['at X(Checkout.java:42)'] },
+      DEFAULT_NORMALISATION_RULES,
+    );
+    const b = computeFingerprint(
+      { component: 'c', environment: 'e', frames: ['at X(Checkout.java:57)'] },
+      DEFAULT_NORMALISATION_RULES,
+    );
+    expect(a).toBe(b);
+  });
+
+  it('only the top frames affect the fingerprint — a difference below the limit does not split it', () => {
+    const deepFrames = (bottom: string) => [
+      'at Checkout.charge(Checkout.java:1:1)',
+      'at Checkout.process(Checkout.java:2:1)',
+      'at Checkout.validate(Checkout.java:3:1)',
+      'at Checkout.route(Checkout.java:4:1)',
+      'at Checkout.dispatch(Checkout.java:5:1)',
+      bottom,
+    ];
+    const a = computeFingerprint(
+      {
+        component: 'c',
+        environment: 'e',
+        frames: deepFrames('at Framework.invoke(Framework.java:100:1)'),
+      },
+      DEFAULT_NORMALISATION_RULES,
+    );
+    const b = computeFingerprint(
+      {
+        component: 'c',
+        environment: 'e',
+        frames: deepFrames('at Framework.dispatch(Framework.java:200:1)'),
+      },
+      DEFAULT_NORMALISATION_RULES,
+    );
+    expect(a).toBe(b);
+  });
 });

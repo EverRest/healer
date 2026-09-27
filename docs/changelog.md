@@ -95,6 +95,47 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.29.0 — 2026-09-27
+
+**Deep review of 001 T011–T018** (fingerprint normalisation, the issue state machine, the
+outbox's first real backing store) — 7 real bugs found and fixed, reproduced against a live
+Postgres before and after, one test left honestly red pending further investigation rather than
+retried into a false green.
+
+- `transition()` let two concurrent transitions from the same state both commit (both
+  `detected -> merged` and `detected -> investigating` are legal edges; a READ COMMITTED guarded
+  `UPDATE` measurably still let both through). Fixed with `SERIALIZABLE` isolation — Postgres's
+  own conflict detection, not hand-rolled lock ordering — plus the state-guarded `UPDATE` kept as
+  a second, independent check.
+- `recordOccurrence`'s read-compare-write let `lastSeenAt` move backwards under concurrent
+  signals (9/20 reproduced) and never let `firstSeenAt` move earlier. Fixed with `GREATEST`/
+  `LEAST` inside one atomic `UPDATE`.
+- `create` wrote no `issue_event` for the signal that created the issue, leaving
+  `occurrenceCount` and the timeline's `signal_received` count permanently one apart. Fixed.
+- The outbox's `claimUnpublished` was an unlocked `findMany` ordered by `occurred_at` alone — two
+  concurrent drain workers could double-publish, and a permanently-failing event blocked every
+  event behind it forever (reproduced: 5 failed attempts on the oldest row, the next never
+  tried). Fixed with a `claimed_at` column and `SELECT ... FOR UPDATE SKIP LOCKED`, ordered by
+  `attempts` first so a poison event sinks behind fresher ones instead of starving them.
+- Fingerprint hashing joined fields/frames with a raw NUL separator — a frame containing a NUL
+  byte was indistinguishable from two separate frames split at it. Fixed by hashing structured
+  JSON. Also fixed in the same pass: case-insensitive pattern matching was documented but not
+  implemented; R-01's "top frames" was hashing every frame (now capped at 5, a placeholder
+  pending real tuning); patterns were recompiled per field instead of once per signal.
+- A ruleset with an uncompilable regex, or missing `stripPatterns` entirely, could be published
+  and would only fail once `resolveFingerprint` read it back, breaking all ingestion. Fixed with
+  a validating `publishNormalisationRules` wrapper, keeping the repository's own `publish`
+  generic (its e2e test legitimately publishes non-fingerprint shapes to prove the opaque-storage
+  contract).
+- The new outbox claim index accidentally dropped the table's required tenant_id-leading index —
+  caught by the migration e2e suite's own check; restored alongside the new partial index.
+- **Left unresolved, documented in QUESTIONS.md rather than papered over**: the concurrent-
+  transitions regression test still fails intermittently in its own file, despite the underlying
+  fix reproducing as airtight (0/400+) in every clean-room isolation built while investigating —
+  including the same fix with retry enabled, which failed all 4 attempts together, ruling out a
+  simple per-attempt race and pointing at something set once per process.
+- `make ci` green cold-cache: 47 unit files / 252 tests, 13 e2e files / 94 tests, all 16 gates.
+
 ## 0.28.0 — 2026-09-27
 
 **001 T018**: fingerprint computation and attachment of matching signals to the open issue

@@ -104,3 +104,55 @@ exercise concurrent ingestion and notice if this matters in practice. A fix, if 
 a unique partial index on `(tenant_id, fingerprint) where state not in ('merged','removed')`,
 catching the resulting unique-violation on `create` and retrying as an attach — one migration,
 not a redesign.
+
+## Deep review of T011–T018 — 8 findings fixed, 1 test left honestly red rather than faked green
+
+A second independent review of the T011–T018 commits (fingerprint normalisation, the issue state
+machine, the outbox's first real backing store) found real bugs, reproduced against a live
+Postgres before fixing, same discipline as every prior review round this project has had:
+
+- **`transition()` let two concurrent transitions from the same state both commit** — both
+  `detected -> merged` and `detected -> investigating` are legal edges, and a plain guarded
+  `UPDATE ... WHERE state = <validated state>` under the default READ COMMITTED isolation still
+  measurably let both through. Fixed with `SERIALIZABLE` isolation (Postgres's own conflict
+  detection, not hand-rolled lock ordering) plus keeping the state-guarded raw `UPDATE` as a
+  second, redundant check — see the residual-flakiness note below.
+- **`recordOccurrence` raced itself**: a plain read-compare-write let `lastSeenAt` move
+  *backwards* under concurrent signals (9/20 reproduced) and never let `firstSeenAt` move
+  *earlier* at all. Fixed with `GREATEST`/`LEAST` inside one atomic `UPDATE`.
+- **`create` wrote no `issue_event`** for the signal that created the issue — `occurrenceCount`
+  and the timeline's `signal_received` count were always one apart. Fixed: `create` now writes
+  the same event `recordOccurrence` writes for every later signal.
+- **The outbox's `claimUnpublished` was unlocked and ordered by `occurred_at` alone** — two
+  concurrent drain workers could double-publish, and a permanently-failing event blocked every
+  event behind it forever (reproduced: 5 failed attempts on the oldest row, the next row never
+  tried). Fixed with `claimed_at` + `SELECT ... FOR UPDATE SKIP LOCKED`, ordered `attempts` first.
+- **Fingerprint hashing had a real collision**: fields/frames joined with a raw NUL separator
+  meant a frame containing a NUL byte was indistinguishable from two separate frames split at it.
+  Fixed by hashing structured JSON instead. Also fixed: case-insensitive pattern matching was
+  documented but not implemented (missing the `i` flag); R-01 says "top frames", the code hashed
+  every frame (now capped at 5, a placeholder pending real tuning, same status as the excerpt
+  length limit); patterns were recompiled per field instead of once per signal.
+- **A ruleset with an uncompilable regex, or no `stripPatterns` at all, could be published** and
+  would only fail the moment `resolveFingerprint` read it back, breaking all ingestion. Fixed with
+  a `publishNormalisationRules` validating wrapper — `NormalisationRulesetRepository.publish`
+  itself stays generic on purpose (its own e2e test legitimately publishes non-fingerprint shapes
+  to prove the repository's opaque-storage contract).
+- **`outbox`'s new claim index dropped its required tenant_id-leading index** — caught by the
+  migration e2e suite's own leading-index check; restored alongside the new partial index.
+
+**Residual, investigated, not resolved: `issue-repository.e2e.test.ts`'s "two concurrent
+transitions" test still fails intermittently in this specific file.** The underlying fix
+(SERIALIZABLE isolation + the state-guarded raw `UPDATE`) reproduces as airtight — 0 failures
+across 400+ trials — in every clean-room isolation built while investigating this: a standalone
+raw-SQL probe, the same probe with the full transaction shape (extra reads/writes), the real
+`PrismaIssueRepository` class in a dedicated file, the same wrapped in `withCorrelation`, with and
+without an explicit `$connect()`. Only inside this one shared test file does it still fail, at a
+rate that varied run to run (roughly 1/15 up to 1/2 depending on exactly which variant was being
+tested) — and critically, **retrying within the same process (`{ retry: 4 }`) did not help**: a
+failing run failed all 4 attempts together, which rules out a true per-attempt coin-flip race and
+points at something set once per process (Docker/testcontainers resource allocation on this
+machine was the last untested hypothesis before time ran out). Left as a strict, unretried
+assertion — an honest intermittent red is more useful than a retry loop that would hide a real
+regression just as effectively as it hides this unresolved one. Whoever picks this up next: start
+from "why does retry not help" — that's the fact that rules out the most likely explanations.

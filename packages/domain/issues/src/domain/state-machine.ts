@@ -14,6 +14,21 @@ import type { Issue, IssueState } from './issue.js';
  */
 export class InvalidIssueTransitionError extends Error {}
 
+/**
+ * Two callers validated a transition against the same read of `issue.state` and only one of
+ * them can legitimately win the write — the repository's guarded update (`WHERE state = <the
+ * state this transition was validated against>`) detects the other one losing the race and
+ * throws this instead of silently overwriting a state a concurrent actor already moved past.
+ * The caller's own retry (re-read, re-validate, re-attempt) is the correct response, not
+ * something this error tries to do on the transition's behalf.
+ */
+export class ConcurrentModificationError extends Error {
+  constructor(readonly resource: string) {
+    super(`${resource} was modified concurrently — reread and retry`);
+    this.name = 'ConcurrentModificationError';
+  }
+}
+
 export type IssueEventCause = 'ingestion' | 'agent' | 'human' | 'policy' | 'system';
 
 export interface NewIssueStateChangedEvent {

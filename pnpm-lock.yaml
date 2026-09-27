@@ -21,6 +21,12 @@ importers:
       '@healer/domain-evidence':
         specifier: workspace:*
         version: link:packages/domain/evidence
+      '@healer/domain-issues':
+        specifier: workspace:*
+        version: link:packages/domain/issues
+      '@healer/events':
+        specifier: workspace:*
+        version: link:packages/events
       '@healer/prisma-client':
         specifier: workspace:*
         version: link:packages/prisma-client

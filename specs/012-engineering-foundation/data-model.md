@@ -161,15 +161,21 @@ process dies between the two.
 
 `id`, `tenant_id`, `name`, `subject_id` (the aggregate the event is about — an issue, a run, a
 tenant), `correlation_id`, `payload` jsonb, `occurred_at`, `published_at?`, `attempts`,
-`last_error?`.
+`last_error?`, `claimed_at?` (set by `claimUnpublished`, `SELECT ... FOR UPDATE SKIP LOCKED`,
+001 review finding — makes two concurrent drain workers' claims mutually exclusive without either
+blocking on the other; a claim older than the reclaim timeout is treated as an abandoned worker).
 
 This feature (012 T012) built only the pure enqueue/drain logic (`packages/events/src/outbox.ts`);
 this table is its first real backing store, added when 001 T013 became its first real caller —
 recorded here rather than left implicit, since a table with no entry in this document does not
 exist as far as FR-015's own gate is concerned.
 
-Index `(tenant_id, published_at, occurred_at)` — unpublished-first, oldest-first, exactly
-`claimUnpublished`'s query shape.
+Two indexes: `(tenant_id, published_at, occurred_at)` — kept for tenant-scoped reads even though
+the claim query itself is deliberately tenant-agnostic (every table with `tenant_id` still needs a
+leading-tenant_id index by the repo-wide convention) — and a partial
+`(attempts, occurred_at) where published_at is null` matching the claim query's real shape: a
+permanently-failing event must sink behind fresher ones, not block them forever (001 review
+finding, migration `20260927040000`).
 
 ## Not tables
 

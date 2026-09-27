@@ -1,6 +1,6 @@
 {
   "name": "healer",
-  "version": "0.22.0",
+  "version": "0.29.0",
   "private": true,
   "packageManager": "pnpm@10.6.2",
   "engines": {
@@ -30,6 +30,8 @@
   },
   "devDependencies": {
     "@healer/domain-evidence": "workspace:*",
+    "@healer/domain-issues": "workspace:*",
+    "@healer/events": "workspace:*",
     "@healer/prisma-client": "workspace:*",
     "@healer/shared": "workspace:*",
     "@types/node": "^22.10.2",

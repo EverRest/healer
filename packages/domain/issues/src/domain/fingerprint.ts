@@ -19,7 +19,7 @@ export interface NormalisationRules {
 
 /**
  * Seed rules — identifiers (UUIDs and long numeric ids), memory addresses, ISO timestamps and a
- * generated-file `:line:column` suffix (FR-003's named categories). Published as
+ * generated-file `:line[:column]` suffix (FR-003's named categories). Published as
  * `normalisation_ruleset` version 1 wherever a tenant's first ruleset is seeded; this constant is
  * not itself read at fingerprint time — `computeFingerprint` takes whatever rules the caller
  * resolved from the repository, so a future version can change every pattern here without a code
@@ -30,18 +30,34 @@ export const DEFAULT_NORMALISATION_RULES: NormalisationRules = {
     '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', // uuid
     '0x[0-9a-f]+', // memory address
     '\\d{4}-\\d{2}-\\d{2}t\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?z?', // iso timestamp
-    ':\\d+:\\d+\\)?$', // generated-file line:column, e.g. "(Checkout.java:42:7)"
+    ':\\d+(:\\d+)?\\)?$', // generated-file line[:column], e.g. "(Checkout.java:42:7)" or "(Checkout.java:42)"
     '\\b\\d{4,}\\b', // long numeric ids — a 3-digit code like "E500" or "404" survives
   ],
 };
 
-/** Applies every pattern in order; unmatched text is untouched. */
-export function normalise(value: string, rules: NormalisationRules): string {
+/** `stripPatterns` compiled once per `computeFingerprint` call rather than once per field — the
+ * same five-or-so patterns were being re-parsed from source for every one of a signal's fields. */
+function compilePatterns(rules: NormalisationRules): readonly RegExp[] {
+  // `i`: the doc comment on `stripPatterns` always promised case-insensitive matching, but the
+  // flag was missing — silently correct only because every seed pattern happens to be lowercase.
+  // A ruleset version whose own pattern contains an uppercase literal would otherwise never match
+  // the already-lowercased input below.
+  return rules.stripPatterns.map((pattern) => new RegExp(pattern, 'gi'));
+}
+
+/** Applies every compiled pattern in order; unmatched text is untouched. */
+function applyPatterns(value: string, patterns: readonly RegExp[]): string {
   let result = value.toLowerCase();
-  for (const pattern of rules.stripPatterns) {
-    result = result.replace(new RegExp(pattern, 'g'), '*');
+  for (const pattern of patterns) {
+    result = result.replace(pattern, '*');
   }
   return result;
+}
+
+/** Applies every pattern in order; unmatched text is untouched. Compiles `rules` fresh — prefer
+ * `computeFingerprint`, which compiles once for every field of a signal, when hashing. */
+export function normalise(value: string, rules: NormalisationRules): string {
+  return applyPatterns(value, compilePatterns(rules));
 }
 
 /**
@@ -58,17 +74,30 @@ export interface FingerprintInput {
   readonly errorCode?: string;
 }
 
-const FIELD_SEPARATOR = '\u0000';
+// R-01 says "normalised top frames", not "every frame" — a deep stack whose leaf frames wander
+// (recursion, differing call depth into the same failure) would otherwise split one failure into
+// many issues. Placeholder pending the stage-0 incident audit tuning this for real (same status
+// as the excerpt-length limit elsewhere) — 5 matches common APM defaults and is at least a
+// deliberate, documented number rather than "every frame, how many happen to arrive".
+const MAX_FINGERPRINT_FRAMES = 5;
 
-/** Deterministic — same input and rules always hash to the same fingerprint (SC-001's replay). */
+/**
+ * Deterministic — same input and rules always hash to the same fingerprint (SC-001's replay).
+ * Hashes structured JSON, not fields joined by a raw separator character: a joined string can't
+ * tell "one frame that happens to contain the separator" apart from "two separate frames split at
+ * it", which a NUL byte inside captured stack-trace text is a real way to hit.
+ */
 export function computeFingerprint(input: FingerprintInput, rules: NormalisationRules): string {
-  const parts = [
-    input.component,
-    input.environment,
-    input.exceptionType ? normalise(input.exceptionType, rules) : '',
-    (input.frames ?? []).map((frame) => normalise(frame, rules)).join(FIELD_SEPARATOR),
-    input.endpointTemplate ? normalise(input.endpointTemplate, rules) : '',
-    input.errorCode ?? '',
-  ];
-  return createHash('sha256').update(parts.join(FIELD_SEPARATOR)).digest('hex');
+  const patterns = compilePatterns(rules);
+  const parts = {
+    component: input.component,
+    environment: input.environment,
+    exceptionType: input.exceptionType ? applyPatterns(input.exceptionType, patterns) : '',
+    frames: (input.frames ?? [])
+      .slice(0, MAX_FINGERPRINT_FRAMES)
+      .map((frame) => applyPatterns(frame, patterns)),
+    endpointTemplate: input.endpointTemplate ? applyPatterns(input.endpointTemplate, patterns) : '',
+    errorCode: input.errorCode ?? '',
+  };
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }

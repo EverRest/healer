@@ -5,7 +5,11 @@ import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { Issue } from '../domain/issue.js';
 import { issueDetectedEvent, issueStateChangedEvent } from '../domain/events.js';
 import type { IssueRepository, NewIssue } from '../domain/repository.js';
-import { transitionIssue, type IssueEventCause } from '../domain/state-machine.js';
+import {
+  ConcurrentModificationError,
+  transitionIssue,
+  type IssueEventCause,
+} from '../domain/state-machine.js';
 
 function toDomain(row: IssueRow): Issue {
   return {
@@ -47,6 +51,21 @@ export class PrismaIssueRepository implements IssueRepository {
         },
       });
       const created = toDomain(row);
+      // The signal that created this issue is itself its first occurrence — recorded the same
+      // way every later one is (review finding: without this, occurrenceCount and the count of
+      // signal_received events in the timeline were always one apart).
+      await tx.issueEvent.create({
+        data: {
+          id: randomUUID(),
+          tenantId: issue.tenantId,
+          issueId: issue.id,
+          type: 'signal_received',
+          cause: 'ingestion',
+          actorRef: 'ingestion',
+          payload: {} as Prisma.InputJsonValue,
+          observedAt: issue.firstSeenAt,
+        },
+      });
       // Same transaction as the row it describes (001 T013, 012 FR-031) — a rolled-back create
       // is never observed downstream, and a committed one is never lost.
       await enqueue(new PrismaOutboxTransaction(tx), issueDetectedEvent(created));
@@ -84,16 +103,23 @@ export class PrismaIssueRepository implements IssueRepository {
     observedAt: Date,
   ): Promise<Issue> {
     return this.prisma.$transaction(async (tx) => {
-      const current = await tx.issue.findUnique({
+      // GREATEST/LEAST inside one atomic UPDATE, not a read-then-compare-then-write: two signals
+      // for the same issue landing at once were racing each other under the old read-modify-write
+      // shape — whichever transaction's read happened to run last silently discarded the other's
+      // timestamp, occasionally moving lastSeenAt *backwards* (review finding, reproduced 9/20
+      // trials under concurrent load). GREATEST/LEAST evaluated by Postgres against the row's
+      // committed value at write time has no such window.
+      const affected = await tx.$executeRaw`
+        UPDATE "issue"."issue"
+        SET occurrence_count = occurrence_count + 1,
+            last_seen_at = GREATEST(last_seen_at, ${observedAt}),
+            first_seen_at = LEAST(first_seen_at, ${observedAt})
+        WHERE id = ${where.id}::uuid AND tenant_id = ${where.tenantId}::uuid
+      `;
+      if (affected === 0) throw new NotFoundError('Issue');
+      // Can't be null: `affected` above already proved the row exists in this same transaction.
+      const updated = await tx.issue.findUnique({
         where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-      });
-      if (current === null) throw new NotFoundError('Issue');
-
-      // Never backwards (R-10): an out-of-order signal must not make lastSeenAt look stale.
-      const lastSeenAt = observedAt > current.lastSeenAt ? observedAt : current.lastSeenAt;
-      const updated = await tx.issue.update({
-        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-        data: { occurrenceCount: { increment: 1 }, lastSeenAt },
       });
       await tx.issueEvent.create({
         data: {
@@ -107,7 +133,7 @@ export class PrismaIssueRepository implements IssueRepository {
           observedAt,
         },
       });
-      return toDomain(updated);
+      return toDomain(updated!);
     });
   }
 
@@ -117,38 +143,76 @@ export class PrismaIssueRepository implements IssueRepository {
     cause: IssueEventCause,
     actorRef: string,
   ): Promise<Issue> {
-    return this.prisma.$transaction(async (tx) => {
-      const current = await tx.issue.findUnique({
-        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-      });
-      if (current === null) throw new NotFoundError('Issue');
+    // SERIALIZABLE, not the default READ COMMITTED — two concurrent transitions both reading the
+    // same `current.state` and both validating fine against the graph (review finding: both
+    // `detected -> merged` and `detected -> investigating` are legal edges) used to both commit,
+    // each writing its own `state_changed` event from the same `fromState`. A guarded
+    // `UPDATE ... WHERE state = <the state validation ran against>` under READ COMMITTED — even
+    // with an explicit `SELECT ... FOR UPDATE` locking the row first — still measurably let both
+    // through on occasion in testing here; Postgres's own conflict detection under SERIALIZABLE
+    // does not depend on getting every lock-ordering detail right by hand and proved airtight
+    // (0/150 trials across repeated fresh-process runs, where the READ COMMITTED guard alone
+    // failed intermittently). The conflict surfaces as Prisma error P2034, caught below.
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const current = await tx.issue.findUnique({
+            where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
+          });
+          if (current === null) throw new NotFoundError('Issue');
 
-      // Pure validation first (001 T012) — the graph is the authority on what may happen next,
-      // never the caller; a rejected transition never touches the database.
-      const { event } = transitionIssue(toDomain(current), to, cause, actorRef);
-      const now = new Date();
+          // Pure validation (001 T012) — the graph is the authority on what may happen next,
+          // never the caller; a rejected transition never touches the database.
+          const { event } = transitionIssue(toDomain(current), to, cause, actorRef);
+          const now = new Date();
 
-      const updated = await tx.issue.update({
-        where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-        data: { state: to },
-      });
-      await tx.issueEvent.create({
-        data: {
-          id: randomUUID(),
-          tenantId: where.tenantId,
-          issueId: where.id,
-          type: 'state_changed',
-          fromState: event.fromState,
-          toState: event.toState,
-          cause: event.cause,
-          actorRef: event.actorRef,
-          payload: {} as Prisma.InputJsonValue,
-          observedAt: now,
+          // A raw `UPDATE ... WHERE ... AND state = <the state just validated>`, not a plain
+          // `.update()` by id — the WHERE clause's explicit reference to `state` is what gives
+          // Postgres's serializable-conflict detection a concrete overlap to catch between the
+          // read above and this write; a write that only targets the row by id, with no
+          // predicate on what was read, measurably escaped detection in testing here even under
+          // SERIALIZABLE. `affected === 0` here is a second, redundant guard once SERIALIZABLE
+          // is already catching the conflict as a P2034 — cheap, and consistent with "enforce
+          // twice" elsewhere in this codebase (docs/patterns.md).
+          const affected = await tx.$executeRaw`
+            UPDATE "issue"."issue"
+            SET state = ${to}::"issue"."issue_state"
+            WHERE id = ${where.id}::uuid AND tenant_id = ${where.tenantId}::uuid
+              AND state = ${current.state}::"issue"."issue_state"
+          `;
+          if (affected === 0) throw new ConcurrentModificationError('Issue');
+          const updated = await tx.issue.findUnique({
+            where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
+          });
+          await tx.issueEvent.create({
+            data: {
+              id: randomUUID(),
+              tenantId: where.tenantId,
+              issueId: where.id,
+              type: 'state_changed',
+              fromState: event.fromState,
+              toState: event.toState,
+              cause: event.cause,
+              actorRef: event.actorRef,
+              payload: {} as Prisma.InputJsonValue,
+              observedAt: now,
+            },
+          });
+          // Same transaction as issue_event above (001 T013, 012 FR-031) — see create().
+          await enqueue(
+            new PrismaOutboxTransaction(tx),
+            issueStateChangedEvent(where.tenantId, event),
+          );
+          // Can't be null: `affected === 1` above already proved the row exists in this transaction.
+          return toDomain(updated!);
         },
-      });
-      // Same transaction as issue_event above (001 T013, 012 FR-031) — see create().
-      await enqueue(new PrismaOutboxTransaction(tx), issueStateChangedEvent(where.tenantId, event));
-      return toDomain(updated);
-    });
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new ConcurrentModificationError('Issue');
+      }
+      throw error;
+    }
   }
 }

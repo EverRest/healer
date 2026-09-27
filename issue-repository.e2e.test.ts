@@ -3,7 +3,12 @@ import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
-import { PrismaIssueRepository, type NewIssue } from '@healer/domain-issues';
+import {
+  ConcurrentModificationError,
+  InvalidIssueTransitionError,
+  PrismaIssueRepository,
+  type NewIssue,
+} from '@healer/domain-issues';
 import {
   NotFoundError,
   TenantContext,
@@ -61,6 +66,7 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       `insert into "issue"."normalisation_ruleset" (version, rules) values (1, '{}')`,
     );
     prisma = new PrismaClient({ datasourceUrl: pg.url });
+    await prisma.$connect();
     repo = new PrismaIssueRepository(prisma);
   }, 180_000);
 
@@ -140,6 +146,45 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       ).rejects.toBeInstanceOf(NotFoundError);
     }));
 
+  it('two concurrent transitions from the same state: exactly one wins, never both (review finding)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+
+      // Both edges are legal from 'detected' — the graph alone can't reject either. Without a
+      // guard on the state a transition was validated against, both committed (20/20 trials),
+      // each writing its own state_changed event as if the other had never happened. The loser
+      // sees `ConcurrentModificationError` when its own guarded update loses the race (both reads
+      // genuinely overlapped), or `InvalidIssueTransitionError` when it instead reads the
+      // already-changed state and the graph itself rejects the now-stale edge — either is a
+      // correct rejection; what must never happen is both settling fulfilled. NOTE (QUESTIONS.md
+      // "001 review — transition() concurrency test residual flakiness"): this assertion still
+      // fails intermittently in this exact file despite the underlying fix (SERIALIZABLE +
+      // state-guarded raw UPDATE) reproducing as airtight — 0 failures across 400+ trials — in
+      // every isolated, clean-room repro built while investigating it. Root cause not fully
+      // pinned down; flagged for follow-up rather than left silently passing or silently deleted.
+      const outcomes = await Promise.allSettled([
+        repo.transition(scope(CONTEXT, { id: input.id }), 'merged', 'human', 'a'),
+        repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'b'),
+      ]);
+      const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
+      const rejected = outcomes.filter((o) => o.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      const reason = (rejected[0] as PromiseRejectedResult).reason;
+      expect(
+        reason instanceof ConcurrentModificationError ||
+          reason instanceof InvalidIssueTransitionError,
+      ).toBe(true);
+
+      const events = await query(
+        pg,
+        `select count(*) from "issue"."issue_event"
+         where issue_id = '${input.id}' and type = 'state_changed'`,
+      );
+      expect(events).toBe('1');
+    }));
+
   it('rejects creating an issue against a ruleset_version that was never published — the FK (001 T011)', () =>
     withCorrelation(newCorrelationId(), async () => {
       const input = newIssue({ rulesetVersion: 999 });
@@ -195,6 +240,19 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       expect(found).toBeNull();
     }));
 
+  it('create records the first occurrence as its own signal_received event (review finding)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue();
+      await repo.create(scope(CONTEXT, input));
+
+      const events = await query(
+        pg,
+        `select count(*) from "issue"."issue_event"
+         where issue_id = '${input.id}' and type = 'signal_received'`,
+      );
+      expect(events).toBe('1');
+    }));
+
   it('recordOccurrence increments occurrenceCount and advances lastSeenAt, and records a signal_received event', () =>
     withCorrelation(newCorrelationId(), async () => {
       const input = newIssue({ lastSeenAt: new Date('2026-01-01T00:00:00Z') });
@@ -205,11 +263,48 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       expect(attached.occurrenceCount).toBe(2n);
       expect(attached.lastSeenAt).toEqual(later);
 
+      // Two rows now: create()'s own first-occurrence event, plus this one.
       const events = await query(
         pg,
-        `select type, cause from "issue"."issue_event" where issue_id = '${input.id}'`,
+        `select count(*) from "issue"."issue_event"
+         where issue_id = '${input.id}' and type = 'signal_received'`,
       );
-      expect(events).toBe('signal_received|ingestion');
+      expect(events).toBe('2');
+    }));
+
+  it('recordOccurrence never loses a concurrent signal — occurrenceCount and lastSeenAt both reflect both, no read-modify-write window', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue({ lastSeenAt: new Date('2026-01-01T00:00:00Z') });
+      await repo.create(scope(CONTEXT, input));
+
+      const early = new Date('2026-01-01T00:05:00Z');
+      const late = new Date('2026-01-01T00:10:00Z');
+      await Promise.all([
+        repo.recordOccurrence(scope(CONTEXT, { id: input.id }), late),
+        repo.recordOccurrence(scope(CONTEXT, { id: input.id }), early),
+      ]);
+
+      const after = await repo.findById(scope(CONTEXT, { id: input.id }));
+      // Review finding: a read-modify-write (`current.lastSeenAt` read, compared, written back)
+      // let the transaction that read *first* but committed *last* overwrite the later timestamp
+      // with its own stale comparison — reproduced 9/20 trials. GREATEST() at the SQL level can't
+      // lose this race: both increments are always visible, and the max always wins regardless of
+      // commit order.
+      expect(after!.occurrenceCount).toBe(3n);
+      expect(after!.lastSeenAt).toEqual(late);
+    }));
+
+  it('recordOccurrence moves firstSeenAt earlier for an out-of-order (earlier-observed) signal (review finding)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newIssue({
+        firstSeenAt: new Date('2026-01-01T00:10:00Z'),
+        lastSeenAt: new Date('2026-01-01T00:10:00Z'),
+      });
+      await repo.create(scope(CONTEXT, input));
+
+      const earlier = new Date('2026-01-01T00:01:00Z');
+      const attached = await repo.recordOccurrence(scope(CONTEXT, { id: input.id }), earlier);
+      expect(attached.firstSeenAt).toEqual(earlier);
     }));
 
   it('recordOccurrence never moves lastSeenAt backwards for an out-of-order (earlier) signal', () =>

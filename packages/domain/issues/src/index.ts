@@ -3,6 +3,7 @@ export * from './domain/events.js';
 export * from './domain/fingerprint.js';
 export * from './domain/ingest-signal.js';
 export * from './domain/normalisation-ruleset.js';
+export * from './domain/publish-normalisation-rules.js';
 export * from './domain/repository.js';
 export * from './domain/resolve-fingerprint.js';
 export * from './domain/signal.js';
