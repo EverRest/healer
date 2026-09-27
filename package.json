@@ -26,7 +26,10 @@
     "gate-data-model": "node scripts/gates/data-model.mjs",
     "gate-no-send": "node scripts/gates/no-send.mjs",
     "gate-coverage-completeness": "node scripts/gates/coverage-completeness.mjs",
-    "deps-check": "node scripts/gates/deps-check.mjs"
+    "deps-check": "node scripts/gates/deps-check.mjs",
+    "check:evidence-coverage": "node --env-file=.env scripts/checks/evidence-coverage.mjs",
+    "check:append-only": "node --env-file=.env scripts/checks/append-only.mjs",
+    "check:expired-evidence": "node --env-file=.env scripts/checks/expired-evidence.mjs"
   },
   "devDependencies": {
     "@healer/domain-evidence": "workspace:*",

@@ -7,6 +7,7 @@ import {
   assertHasEvidence,
   PrismaEvidenceLinkRepository,
   PrismaEvidenceRepository,
+  recordEvidence,
   type NewEvidence,
 } from '@healer/domain-evidence';
 import {
@@ -234,4 +235,47 @@ describe('PrismaEvidenceRepository (001 T006, FR-010, R-03)', () => {
       );
       expect(foundByOtherTenant.some((e) => e.id === input.id)).toBe(false);
     }));
+
+  it(
+    'a 40 MB excerpt is bounded at capture and marked truncated; the reference is kept regardless (001 T032, R-05, quickstart 13)',
+    () =>
+      withCorrelation(newCorrelationId(), async () => {
+        const huge = 'x'.repeat(40 * 1024 * 1024); // 40 MB, quickstart 13's own number
+        const id = randomUUID();
+        const recorded = await recordEvidence(
+          repo,
+          CONTEXT,
+          {
+            id,
+            issueId: ISSUE_ID,
+            sourceSystem: 'loki',
+            sourceRef: 'query-ref-for-the-full-dump',
+            sourceLabel: 'stack dump',
+            producedByStep: 'collector',
+            observedAt: new Date('2026-01-01T00:00:00Z'),
+            expiresAt: new Date('2026-02-01T00:00:00Z'),
+            excerpt: huge,
+          },
+          {
+            kind: 'collection_gap',
+            what: 'stack dump',
+            why: 'oversized',
+            withheldByRedaction: false,
+          },
+        );
+
+        expect(recorded.excerptTruncated).toBe(true);
+        expect(recorded.excerpt?.length).toBeLessThan(huge.length);
+        // The reference is kept regardless of truncation (R-05: "a bounded extract plus a
+        // reference is stored") — it never shrinks or gets replaced by the excerpt itself.
+        expect(recorded.sourceRef).toBe('query-ref-for-the-full-dump');
+
+        // Reads back exactly the bounded extract that was stored — not the original 40 MB, and
+        // not truncated a second time on the way out.
+        const found = await repo.findById(scope(CONTEXT, { id }));
+        expect(found?.excerpt).toBe(recorded.excerpt);
+        expect(found?.excerptTruncated).toBe(true);
+      }),
+    30_000,
+  );
 });

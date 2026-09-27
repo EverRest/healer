@@ -29,13 +29,30 @@ function conclusionTypeValues(schemaSource) {
     .filter((line) => line.length > 0 && !line.startsWith('@@') && !line.startsWith('///'));
 }
 
+const CONCLUSION_TAG_PATTERN =
+  /\/\/\/[ \t]*@conclusion([^\n]*)\n(?:[ \t]*\/\/\/[^\n]*\n)*[ \t]*model\s+(\w+)/g;
+
+/**
+ * The one authority for which models are tagged `@conclusion <type>` — `check:evidence-coverage`
+ * (001 T033, SC-002) reads this same parse to know which tables to check for unlinked rows at
+ * runtime, rather than a second, necessarily-divergent list.
+ * @param {string} schemaSource
+ */
+export function parseConclusionTags(schemaSource) {
+  const tags = [];
+  for (const match of schemaSource.matchAll(CONCLUSION_TAG_PATTERN)) {
+    const [, rest, model] = match;
+    const type = rest.trim();
+    if (type !== '') tags.push({ model, type });
+  }
+  return tags;
+}
+
 /** @param {string} schemaSource */
 export function findConclusionTagsWithUnknownType(schemaSource) {
   const validTypes = conclusionTypeValues(schemaSource);
   const issues = [];
-  const tagPattern =
-    /\/\/\/[ \t]*@conclusion([^\n]*)\n(?:[ \t]*\/\/\/[^\n]*\n)*[ \t]*model\s+(\w+)/g;
-  for (const match of schemaSource.matchAll(tagPattern)) {
+  for (const match of schemaSource.matchAll(CONCLUSION_TAG_PATTERN)) {
     const [, rest, name] = match;
     const taggedType = rest.trim();
     if (taggedType === '') {

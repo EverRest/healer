@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findConclusionTagsWithUnknownType } from './evidence.mjs';
+import { findConclusionTagsWithUnknownType, parseConclusionTags } from './evidence.mjs';
 
 const CONCLUSION_TYPE_ENUM = `
 enum ConclusionType {
@@ -59,5 +59,39 @@ describe('gate-evidence (012 T031, 001 FR-009/T010, quickstart 9)', () => {
       }
     `;
     expect(findConclusionTagsWithUnknownType(schema)).toEqual([]);
+  });
+});
+
+describe('parseConclusionTags (001 T033, SC-002 — the shared authority check:evidence-coverage reads)', () => {
+  it('returns the model name and type for every tagged model', () => {
+    const schema = `${CONCLUSION_TYPE_ENUM}
+      /// @conclusion diagnosis
+      model Diagnosis {
+        id String @id @db.Uuid
+      }
+
+      /// @conclusion hypothesis
+      model Hypothesis {
+        id String @id @db.Uuid
+      }
+    `;
+    expect(parseConclusionTags(schema)).toEqual([
+      { model: 'Diagnosis', type: 'diagnosis' },
+      { model: 'Hypothesis', type: 'hypothesis' },
+    ]);
+  });
+
+  it('skips a tag with no type — nothing this check could query for', () => {
+    const schema = `${CONCLUSION_TYPE_ENUM}
+      /// @conclusion
+      model Diagnosis {
+        id String @id @db.Uuid
+      }
+    `;
+    expect(parseConclusionTags(schema)).toEqual([]);
+  });
+
+  it("returns nothing when no spec has landed a conclusion table yet — today's real state", () => {
+    expect(parseConclusionTags(CONCLUSION_TYPE_ENUM)).toEqual([]);
   });
 });

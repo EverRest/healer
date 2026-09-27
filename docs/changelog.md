@@ -95,6 +95,34 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.39.0 — 2026-09-28
+
+**001 T032–T036**: the 40 MB oversized-excerpt proof, all three continuous invariant checks, and
+the no-retrospective-link contract assertion — **Phase 4 (US2, evidence lifecycle) is now
+complete.**
+
+- T032: `evidence-repository.e2e.test.ts` proves excerpt bounding at the actual quickstart-13
+  scale (a real 40 MB excerpt) through the full `recordEvidence` → Postgres → read-back path, not
+  just the existing 200 KB unit case.
+- **Three new `npm run check:*` scripts** (`scripts/checks/`), the first code in this repo to
+  connect to a live database directly rather than a disposable e2e container — matching the
+  pre-existing `db-seed.mjs` precedent, no new dependency or ADR:
+  - `check:evidence-coverage` (SC-002): every conclusion has ≥1 resolvable evidence link. Reads
+    the same `/// @conclusion <type>` schema tag `gate-evidence` already parses; checks zero
+    tables today, correctly, since no 003+ spec has landed a conclusion table yet.
+  - `check:append-only` (SC-003): every append-only trigger the migrations declare is still
+    present and enabled in the live database — closes a real gap: `workflow.workflow_transition`
+    was once declared append-only with no trigger ever added, caught only by hand-review at the
+    time (T011–T018 deep review). This check would have caught it immediately, continuously.
+  - `check:expired-evidence`: nothing past `expires_at` is still `linked` — surfaces evidence the
+    (not-yet-built) retention path should have detached, rather than fixing it silently.
+  - All three proven against a real, disposable Postgres, including a deliberately-broken case
+    each (a disabled trigger; a fabricated unlinked conclusion row; an expired-and-linked row).
+- T036: a new test asserts the committed, `contracts-check`-enforced OpenAPI document has no route
+  that could create an `evidence_link` — the design assertion quickstart 11 calls for, checked
+  against what is actually built rather than the aspirational full-feature contract.
+- `make ci` green: 286 unit tests, 149 e2e tests, all 16 gates.
+
 ## 0.38.0 — 2026-09-28
 
 **001 T027–T031**: `RecordEvidence`, `AttachLink`, the detach test/behaviour, and

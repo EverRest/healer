@@ -489,6 +489,12 @@ See [decisions.md](docs/decisions.md) C-53 (`assertTenantIsolated` implemented f
 (`gate-isolation`'s literal-placeholder path convention), C-55 (`findById` treats a malformed id
 as absent, not a 500).
 
+## 001 T033–T035 — resolved
+
+See [decisions.md](docs/decisions.md) C-56 (`check:*` scripts talk to a live database directly,
+no ADR — matches `db-seed.mjs`'s existing precedent), C-57 (`check:evidence-coverage` correctly
+checks zero tables today), C-58 (every check's live query proven against a real Postgres).
+
 ## Deployment, release automation and smoke/regression testing of our own environment — not recorded anywhere until now
 
 Not decided, genuinely open — asked directly ("чи зафіксовано десь"), checked, and it was not.
