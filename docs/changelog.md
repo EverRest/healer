@@ -95,6 +95,26 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.27.0 — 2026-09-27
+
+**001 T016/T017**: fingerprint normalisation, and computing it against the real
+`normalisation_ruleset` (R-01, FR-003). First tasks of Phase 3 (US1) — genuine product logic,
+not infrastructure.
+
+- `fingerprint.ts`'s `computeFingerprint`: a pure hash over `component`, `environment`,
+  normalised `exceptionType`, normalised `frames`, normalised `endpointTemplate` and `errorCode`.
+  Normalisation is a data-driven, ordered list of regex patterns (`NormalisationRules.stripPatterns`,
+  matches replaced with `*`) — the rule set 001 T011 versioned as data now has a concrete shape,
+  deferred from that task on purpose. `fingerprint.test.ts`, 6/6: identical across differing
+  UUIDs, addresses, generated-file line offsets, timestamps and numeric URL segments; distinct
+  across exception type, component and environment; deterministic for repeated calls.
+- `resolve-fingerprint.ts`'s `resolveFingerprint` computes it against whichever ruleset is
+  **actually published** (`getLatest()`), never a hardcoded default — a fallback here would let
+  `issue.ruleset_version` name a version that isn't real, exactly what T011's FK exists to
+  prevent. Refuses with a clear error rather than fabricating: no ruleset published yet, or a
+  published row whose `rules` column isn't the expected shape. `resolve-fingerprint.test.ts`, 4/4.
+- `make ci` green cold-cache: 76 e2e tests, all 16 gates.
+
 ## 0.26.0 — 2026-09-27
 
 **001 T014**: tenant scoping on every repository method — a query without `TenantContext` fails
