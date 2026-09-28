@@ -150,3 +150,34 @@ export function issueStaleEvent(
     payload: { lastProgressAt: lastProgressAt.toISOString() },
   };
 }
+
+/** `IssueMerged` (001 T049, contracts/events.md): on the merged issue's own stream, naming the survivor. */
+export function issueMergedEvent(
+  tenantId: string,
+  issueId: string,
+  intoIssueId: string,
+  reason: string,
+): DomainEvent {
+  return {
+    name: 'IssueMerged',
+    tenantId,
+    subjectId: issueId,
+    correlationId: requireCorrelationId(),
+    payload: { intoIssueId, reason },
+  };
+}
+
+/** `IssueUnmerged` (001 T050, contracts/events.md): the reversal, naming the issue it was merged into. */
+export function issueUnmergedEvent(
+  tenantId: string,
+  issueId: string,
+  intoIssueId: string,
+): DomainEvent {
+  return {
+    name: 'IssueUnmerged',
+    tenantId,
+    subjectId: issueId,
+    correlationId: requireCorrelationId(),
+    payload: { intoIssueId },
+  };
+}

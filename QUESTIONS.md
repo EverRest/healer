@@ -798,3 +798,157 @@ renamed to what it proves; atomicity has its own rollback test.
   stays `human`, which is the only thing that tells them apart). Part of the stub, gone with real auth.
 - `prisma-issue-repository.ts` sits near the 400-line lint limit (the audit/resolution logic went
   into `prisma-transition-effects.ts` to stay under it). Any further growth needs extraction first.
+
+## 001 T049/T050 — merge and unmerge: judgment calls, and what is not done
+
+**Shape.** `merge(X into Y)`: X becomes `merged`; one `merged_into` row (subject X, `rule = human`);
+one `merged` `issue_event` on X; outbox `IssueMerged` and `IssueStateChanged`. All in one
+transaction, in `prisma-issue-merge.ts`. Unmerge sets `removed_at` (the row stays as history), puts X
+back in the state it left, writes an `unmerged` event, publishes `IssueUnmerged` and
+`IssueStateChanged`. A later merge writes a new row. Exposed as a **separate port**,
+`IssueMergeRepository` (`PrismaIssueRepository` implements both), not as more methods on
+`IssueRepository` — that interface has full hand-written stubs in `apps/api` and four test files, so
+extending it forced edits outside this batch; a narrower port is also the `StalenessRepository`
+precedent. Commands `mergeIssues` / `unmergeIssue` are thin scoping wrappers. No HTTP routes.
+
+**State and row cannot disagree — made unrepresentable twice.** (1) `transitionIssue` now refuses
+`to = merged` ("merge is its own operation"); `mergeTransition` / `unmergeTransition` are the only
+doors, and merge writes the row, the state and the event in one transaction. (2) Migration
+`20260928120000_merged_state_invariant` (with `down.sql`): deferred constraint triggers enforce
+*state = merged ⇒ a live `merged_into` row* and *a live row ⇒ state merged or removed*, checked at
+commit; plus the `CHECK (issue_id <> other_issue_id)` data-model.md always promised and nothing
+enforced. Each clause was mutation-checked (assertions match the SQLSTATE `23514` and which invariant
+fired, A or B, for UPDATE, INSERT and DELETE paths). **Existing rows:** constraint triggers do not judge
+rows already there, and before this branch `transition(x, 'merged')` was legal and wrote no row. So the
+migration opens with a `DO` block that **raises, naming the count and an example id, and installs
+nothing** if any issue is `merged` with no live row (or has a live row while neither merged nor
+removed). It cannot backfill — the target of such a merge is unrecorded — so a person decides per
+issue. Proven in `issue-merge.e2e.test.ts` ("migration 20260928120000 refuses to run…") against a
+database seeded with exactly such rows, on top of the prior migrations, and with consistent data. The
+`CHECK` is added `NOT VALID` then `VALIDATE`d (asserted `convalidated`); this file runs as one
+transaction under `migrate deploy`, so the `ACCESS EXCLUSIVE` lock of the `ADD` is still held to
+commit — the split only pays off if it is ever applied statement by statement.
+
+**Merged then removed (review fix).** `merged → removed` is a legal edge and the trigger allows
+`removed` with a live row, so a removed issue keeps its row. That used to pin the survivor: the
+"issues merged into it" check still counted the removed one, so `merge(Y, Z)` was refused for good.
+Decided: the check ignores removed subjects (a join in the count; smallest change, and the row stays
+as history, which withdrawing it on removal would not). Unmerging the removed issue is
+`InvalidIssueTransitionError` (typed), and a repeat `merge(x, y)` after `x` was removed is refused
+with the same error instead of reporting success. Tested both ways.
+
+**Decisions on what a merge may touch.**
+
+- Target itself merged or removed: **refused**. Source that other issues are merged into: **refused**.
+  Together: merges are a forest of depth one, so "the survivor" is one issue, never a chain, and an
+  unmerge never strands another. Racing `X→Y` with `Y→Z` cannot form a chain (row locks, tested).
+- Source `removed`: refused by the graph. Source `merged` into the _same_ target: a no-op that says
+  so — `merge` returns `outcome: 'already_merged'` (else `'merged'`), nothing is written, and the
+  target and the reason are still validated. A repeat with a different reason or actor is accepted and
+  **its reason and actor are dropped** (the first merge's are the record; the command's doc says so).
+  Merged into a _different_ target: refused ("unmerge it first").
+- `unmerge` returns `outcome: 'unmerged' | 'not_merged'`, a result rather than an error for an issue
+  with no live row: a retry after success is indistinguishable from an unmerge of something never
+  merged, and idempotent retries must not turn into failures.
+- Target `resolved`: **allowed**. Cleaning up two resolved duplicates is the common case, but an open
+  issue merged into a resolved survivor buries a live problem under a closed one. Not restricted;
+  open for review.
+- Source/target on another tenant, missing, or a malformed id: the same `NotFoundError('Issue')`.
+  Component, environment, kind and fingerprint are deliberately **not** compared — the judgement is
+  a person's (R-08), and the merge is reversible for that reason.
+- `reason` is required, 1–500 chars (`MERGE_REASON_MAX_LENGTH`, a placeholder like every other limit,
+  S0-7): it is the one free-text field in a payload the data model says is bounded.
+- **Human only.** The row's `rule` is `human` and there is no `cause` parameter; a system or policy
+  merge has no deterministic rule to name and no consumer. Not built.
+
+**Counts and evidence.** Nothing moves at merge time — no evidence row, no `occurrence_count`, no
+timestamp — so "unmerge restores counts to both sides, not split" holds because there is nothing to
+restore. Tests: evidence rows byte-identical before merge / after merge / after unmerge; both counts
+equal before and after; each side's timeline unchanged except for the `merged` / `unmerged` events.
+Consequence, not a bug: while merged, the survivor's evidence view, count and timeline do not include
+the merged issue's.
+
+**Where the previous state lives.** On the `merged` event itself: `from_state`, plus
+`payload.relationshipId` tying it to the row it created (so a merge → unmerge → merge cycle cannot be
+confused with an earlier one; tested with two merges leaving different states). `issue_event` is
+append-only in the database (R-03), so it cannot be edited away. Unmerge **fails closed** — nothing
+changed — rather than guessing `detected`, with one typed error, `MergeIntegrityError`, whose
+`reason` tells the cases apart, each reachable in a test: `merge_record_missing` (a row made by hand;
+or an _older_ cycle's event exists but the live row's own does not), `relationship_vanished` (the row
+was withdrawn by a writer that skipped the repository and the trigger while the unmerge held the
+issue) and `merged_without_relationship`. An unmerge that would restore into an open state whose
+fingerprint has been taken is `UnmergeFingerprintTakenError`, carrying the real fingerprint — not
+`FingerprintAlreadyOpenError`, which `ingestSignal` reads as "attach to theirs". `resolved_at` /
+`stale_at` are never touched, so the restored issue is field-for-field what it was.
+
+**Concurrency.** Both rows are locked `FOR UPDATE` before either is read, so validation and write
+see the same committed state. They are locked **one at a time in sorted-id order in code**: the
+first version used one `ANY(...) ORDER BY id FOR UPDATE`, and removing that `ORDER BY` changed
+nothing (the planner returns index order anyway), so it proved nothing; now reversing the sort fails
+a test. Every race is forced with a held-open transaction and observed via `pg_stat_activity`
+(`waitForBlocked`) rather than left to timing: overlapping merges; `X→Y` racing `Y→Z`; two unmerges;
+a merge waiting for a state change that is mid-commit; a **committed merge racing a `transition`
+that had already validated** (the transition fails with `ConcurrentModificationError`, overwrites
+nothing — done deterministically by queueing the merge before the transition behind a held lock);
+the lock-order probe (holder takes the higher id, the merge must already hold the lower:
+`NOWAIT` on it fails `55P03`); and two forced **deadlocks** (an outside transaction with a long
+`deadlock_timeout` so the merge/unmerge is always the victim). Removing `FOR UPDATE` fails all of them.
+`40P01` / `40001` / `P2034` / `P2028` are translated to `ConcurrentModificationError` in a new
+`prisma-concurrency.ts` — forcing the unmerge deadlock showed a typed-query deadlock arrives as an
+_unclassified_ `PrismaClientUnknownRequestError` with the SQLSTATE only in its message, which the
+mapper now handles (and `transition()`'s inline copy would not). **Dedupe with `transition()` once the
+close branch that is editing it has merged.** Correlation is checked before the transaction opens
+(a test shows a call outside a scope does not queue for a held lock); the events are also built
+before the first write. This relies, like T051, on every writer of the `issue` row taking its lock
+before writing. Ids are lower-cased in `merge` (an upper-case spelling of the same id used to give
+`NotFoundError` because one id counted as two); `unmerge` takes a single id and needs no folding.
+
+**OPEN — a signal whose fingerprint belongs to a merged issue.** Merging X frees X's slot in the
+unique open-fingerprint index (`merged` is excluded), and `findOpenByFingerprint` no longer finds X.
+So the next signal with X's fingerprint **opens a fresh issue X′ instead of attaching to the survivor
+Y** — which is exactly the duplication a merge is meant to end. Worse, unmerging X back into an _open_
+state then collides with X′; that case throws `UnmergeFingerprintTakenError`, leaves the merge in
+place, and is tested (a `resolved` X unmerges fine beside an open X′ — a recurrence is legal). The
+real fix is a product call I did not make: route signals of a merged fingerprint to the survivor
+(which changes `ingestSignal`, the counts on Y, and what an unmerge would owe X) or leave it and
+accept X′. Until then a merge only hides X; it does not absorb X's future.
+
+**Audit trail — no `audit_entry` written.** Same reasoning as T042: `action` must be a registered
+`policy_action.action_key` and 002 does not exist. The `issue_event` (`cause = human`, `actor_ref`,
+`reason`, append-only) already answers who, when and why. **Inconsistent with the T052 branch**, which
+writes an audit entry with the placeholder `evidence.retention_purge`; if that stands, adding
+`issue.merge` / `issue.unmerge` is one `tx.auditEntry.create` in each function in
+`prisma-issue-merge.ts`. I did not want a second unregistered key in an append-only table.
+
+**OPEN — the survivor's own record of the merge.** The `merged` event is written on X only (the
+`correlate` precedent). Y's timeline, evidence graph and audit show nothing, and
+`projectIssueRelationships(Y, …)` reads `merged_into` only as a subject, so `GET /issues/{Y}` cannot
+list what was merged into it. Timeline left unchanged as instructed; whether Y should show "X was
+merged in" (an event on Y, or a union arm over `merged_into` rows) is not decided.
+
+**Contract details.** `IssueUnmerged` carries `intoIssueId` only (the unmerge API has no body, so no
+`reason`); `IssueMerged` carries `intoIssueId` and `reason`, both on the merged issue's own stream.
+`IssueStateChanged` is published as well, because the contract says "any transition" and 002 reads it.
+
+**Staleness and retention with merged issues.** The sweep skips `merged` (state-based, tested via
+`findStaleCandidates`); an unmerged issue re-enters it with the unmerge event as fresh progress, so it
+gets a full window. Retention (T052, in the other branch) selects by `tenant_id` and `expires_at` and
+never looks at issue state, so a merged issue's evidence expires on its own schedule and stays with
+its own issue. Nothing surprising; not run together here since the branches are separate.
+
+**Known and left (review, recorded only).**
+
+- LOW — the merged-state trigger checks the _new_ subject only, so an `UPDATE` that changes `issue_id`
+  on a `merged_into` row does not re-check the old subject. Nothing in the repository does that.
+- LOW — deferred-trigger violations are SQLSTATE `23514` raised at `COMMIT` with an internal message
+  and are not translated; reachable only from writers that bypass the repository.
+- LOW — the depth-one forest (no chains) is enforced by the application under row locks; the database
+  has no wall for it.
+- The `transition()` doc comment still cites `detected -> merged` as a legal race edge. It is now
+  refused. Left alone because another branch is editing that method; fix the sentence when it merges
+  (the e2e test itself now races `stale` against `investigating`).
+- `prisma-issue-merge.ts` builds the `IssueStateChanged` event before the writes, `transition()` does
+  after; harmonise when the two are deduped.
+
+**Not done.** HTTP routes (`/merge`, `/unmerge` and their isolation tests, and `Idempotency-Key`
+handling); OpenAPI; the ingestion routing above; anything in `apps/api`.

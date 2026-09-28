@@ -61,7 +61,14 @@ and merged into at most one issue, while still being able to be both. Index
 never merges the two issues or affects either one's state.
 
 `merged_into` carries the state: an issue with a live `merged_into` row is in state `merged`, and
-removing the row is the unmerge (R-08).
+removing the row is the unmerge (R-08). The two are written in one transaction by one method
+(`IssueMergeRepository.merge`; `transition` refuses `merged`) and the database refuses to commit a
+disagreement — a deferred constraint trigger enforces *state = `merged` ⇒ a live row* and *a live row
+⇒ state `merged` or `removed`* (001 T049, migration `20260928120000`). `other_issue_id <> issue_id`
+is a `CHECK`. A merge is `rule = human`, and merges form a forest of depth one: a merged issue is
+never a target and a target is never merged. Unmerge sets `removed_at` and keeps the row as history;
+a later merge writes a new row. **A merge moves nothing** — no evidence row, no `occurrence_count`,
+no timestamp — which is why an unmerge has nothing to restore on either side (R-08).
 
 ## issue.issue_event (append-only)
 
@@ -69,6 +76,11 @@ removing the row is the unmerge (R-08).
 `related` · `action_taken` · `note`), `from_state?`, `to_state?`, `cause` (`ingestion` · `agent` ·
 `human` · `policy` · `system`), `actor_ref`, `payload` jsonb (bounded, no free-form customer text),
 `observed_at`, `received_at`.
+
+A `merged` event carries `from_state` (the state the issue left — what the unmerge restores; the
+event is append-only, so it cannot be lost) and `payload {intoIssueId, relationshipId, reason}`,
+where `relationshipId` ties it to the `merged_into` row it created; `unmerged` carries
+`payload {intoIssueId, relationshipId}`. Each is written on the merged issue only (001 T049/T050).
 
 **This table holds domain facts; 012's `workflow_transition` holds machine steps** (C-14). A signal
 arriving is not a workflow transition, and a job retry is not a domain fact — the grains differ, so
@@ -176,6 +188,7 @@ issue:  detected ──context collected──▶ investigating
         resolved ──matching signal inside reopen window──▶ investigating
         resolved ──matching signal outside window──▶ new issue, recurrence_of
         any ──merge──▶ merged (a live merged_into relationship; reversible)
+        merged ──unmerge──▶ the state the merge left (recorded on the merge event)
         any ──tenant deletion──▶ removed + tombstone
 
 evidence: linked ──expires_at, or source unavailable──▶ detached   (a conclusion cites it: the row,

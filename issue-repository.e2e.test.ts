@@ -197,7 +197,9 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       // exact conflict this test exists to prove was being rethrown unhandled rather than as
       // `ConcurrentModificationError`. Fixed in `prisma-issue-repository.ts`'s `transition()`.
       const outcomes = await Promise.allSettled([
-        repo.transition(scope(CONTEXT, { id: input.id }), 'merged', 'human', 'a'),
+        // `stale`, not `merged`: a plain transition can no longer land on `merged` (001 T049), and
+        // an edge the domain refuses up front would make this stop testing the race at all.
+        repo.transition(scope(CONTEXT, { id: input.id }), 'stale', 'system', 'a'),
         repo.transition(scope(CONTEXT, { id: input.id }), 'investigating', 'agent', 'b'),
       ]);
       const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');

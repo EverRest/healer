@@ -2,9 +2,11 @@ import { withCorrelation } from '@healer/shared';
 import { describe, expect, it } from 'vitest';
 import {
   issueDetectedEvent,
+  issueMergedEvent,
   issueRelatedEvent,
   issueStaleEvent,
   issueStateChangedEvent,
+  issueUnmergedEvent,
 } from './events.js';
 import type { Issue, IssueRelationship } from './issue.js';
 
@@ -113,5 +115,38 @@ describe('issueStaleEvent (001 T051, contracts/events.md)', () => {
       correlationId: 'corr-1',
       payload: { lastProgressAt: '2026-01-01T00:00:00.000Z' },
     });
+  });
+});
+
+describe('issueMergedEvent / issueUnmergedEvent (001 T049/T050, contracts/events.md)', () => {
+  it('IssueMerged names the survivor and the reason, on the merged issue’s own stream', () => {
+    const event = withCorrelation('corr-1', () =>
+      issueMergedEvent('tenant-1', 'issue-1', 'issue-2', 'same NPE'),
+    );
+    expect(event).toMatchObject({
+      name: 'IssueMerged',
+      tenantId: 'tenant-1',
+      subjectId: 'issue-1',
+      correlationId: 'corr-1',
+      payload: { intoIssueId: 'issue-2', reason: 'same NPE' },
+    });
+  });
+
+  it('IssueUnmerged names the issue it was merged into', () => {
+    const event = withCorrelation('corr-1', () =>
+      issueUnmergedEvent('tenant-1', 'issue-1', 'issue-2'),
+    );
+    expect(event).toMatchObject({
+      name: 'IssueUnmerged',
+      subjectId: 'issue-1',
+      payload: { intoIssueId: 'issue-2' },
+    });
+  });
+
+  it('both refuse to publish outside a correlated scope', () => {
+    expect(() => issueMergedEvent('tenant-1', 'issue-1', 'issue-2', 'r')).toThrow(
+      /correlated scope/,
+    );
+    expect(() => issueUnmergedEvent('tenant-1', 'issue-1', 'issue-2')).toThrow(/correlated scope/);
   });
 });
