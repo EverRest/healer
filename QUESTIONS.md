@@ -984,9 +984,20 @@ wrong. Ordered by how much a wrong default costs.
 8. **`Idempotency-Key` is validated but not stored**, so "same key, different body -> 409" from the
    contract is not implemented; close is idempotent by state instead. A key table is a new pattern.
    (`001 T057`.)
-9. **The 12 000-signal replay test times out in a full `make ci` when the machine is loaded**
-   (load average 11-19 from other applications; it passes alone, also at load 19). Not
-   investigated beyond that. If the pilot's CI shares a machine, this will be red there too.
+9. **The 12 000-signal replay test timed out in a full `make ci`; the cause was mostly the suite's
+   own parallelism, and the four heaviest e2e files now run alone** (`HEAVY_E2E` in
+   `vitest.config.ts`). Measured: alone it takes ~55 s (34 s on a quiet machine, 2.8 ms a signal);
+   vitest ran 7 workers over 29 files with 8-10 Postgres containers at once; all 12 000 signals
+   update one issue row, so its row lock serialises them and 25 "concurrent" writers behave as one.
+   Failed 4 of 4 full runs before, passed 4 of 4 after (43-91 s). Its `CONCURRENCY` went 25 -> 5 —
+   less stress on the lock, but a mutation making the counter non-atomic still fails it (2406 vs
+   12000). **Still open:** (a) the wall time of the whole suite grew (263-292 s -> 283-381 s);
+   (b) 'two concurrent transitions from the same state' and the merge race cases fail when run in
+   parallel with other files — they assume two calls overlap, not investigated; (c) the 120 s budget
+   is a guess, not a requirement (SC-001 has no time bound; plan.md allows 5 000 signals/min); (d)
+   `recordOccurrence` does ~7 round trips per signal with the row locked for 4 of them — folding the
+   SELECT and event INSERT into one statement would cut the lock hold 3-4x, a source change for the
+   owner of ingestion, not made here.
 10. **Publishing this work.** Everything for T045-T057 except T053/T056 sits on the local branch
     `worktree-001-phase8-staleness` (plus the two agent branches it merged), unpushed by instruction.
     Squash or keep the history, and when to run a full green `make ci` first, are yours to call.
