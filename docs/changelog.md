@@ -95,6 +95,50 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.44.0 — 2026-09-28
+
+**001 phase 7 and phase 8 (T045–T055, T057)**: views, the data lifecycle and the human close. Built
+as five batches — two of them in parallel by subagents in separate git worktrees — each reviewed by
+two independent reviewers, fixed, and only then integrated. Integration found seams no single branch
+could see; they are fixed here too.
+
+- **Views (T045–T048).** The timeline is one `UNION ALL` over `issue_event`, 012's
+  `workflow_transition` and `evidence`, every arm tenant-filtered, total order `(at, source, id)`;
+  the evidence graph is a pure function over the rows. `GET /issues/{id}/timeline` and
+  `/evidence-graph` check the issue exists first, so another tenant's id is a 404, never an empty
+  view. A test compares all three views against the tables — a view that drops or invents a record,
+  or points an edge at the wrong evidence, fails.
+- **Staleness (T051).** Surfaced, never resolved: the sweep is typed so that `transition()` is not
+  reachable from it. Progress is `issue_event.received_at`, not the source clock. Review found a real
+  race — the progress check ran without a row lock and could mark a live issue stale over a signal
+  that was mid-commit; `markStale` now locks first.
+- **Retention (T052).** Expired evidence nothing cites is deleted; expired evidence a conclusion
+  cites is only detached (FR-009, R-04). `withPrivilegedWrite` is now the one way to switch off the
+  append-only rules, transaction-local by construction. `detach` became idempotent after review found
+  overlapping runs published `EvidenceDetached` twice.
+- **Merge and unmerge (T049–T050).** A merged issue always has its live `merged_into` row: a plain
+  transition to `merged` is refused, and deferred constraint triggers refuse the other inconsistent
+  shape. Nothing moves at merge time, so unmerge restores both sides exactly. Locks are taken in id
+  order, proved by a deterministic lock-order test.
+- **Deletion (T053).** Removes an issue and everything derived from it in one privileged
+  transaction and leaves an immutable, content-free tombstone (its triggers ignore the bypass). A
+  test scans every table in the database for the deleted content. Refused while the issue is merged
+  into another (its evidence may support the survivor's conclusions) or has children merged into
+  it; refused while one of its outbox rows is claimed by a drain.
+- **Human close (T057, T054).** `POST /issues/{id}/close` resolves with `self_resolved` and no
+  verification evidence, writes the human's `audit_entry` in the same transaction, and marks a
+  repeat with `Idempotent-Replay: true`. Only a human can reach `resolved` in v1; `IssueResolved` has
+  exactly one producer, pinned by a source scan that fails on disguised second producers.
+- **OpenAPI (T055)** regenerated; `contracts-check` green.
+- **The e2e suite's own parallelism was timing out its heaviest tests**, not the machine: the four
+  heaviest files now run alone (`HEAVY_E2E` in `vitest.config.ts`). The 12 000-signal replay failed
+  4 of 4 full runs before and passes after.
+- **Not done**, all recorded in `QUESTIONS.md` with eleven decisions waiting on a person: nothing
+  schedules the sweep or retention; a merged issue's future signals open a new issue instead of
+  attaching to the survivor; audit action keys are placeholders until 002's list exists; no routes
+  for merge or deletion; T056 (the full quickstart run) is separate.
+- `make ci` green: 408 unit tests, 332 e2e tests, all gates.
+
 ## 0.43.0 — 2026-09-28
 
 **Review of 001 T027–T044**: six real findings, all fixed and re-verified (`pr-review-toolkit`

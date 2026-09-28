@@ -111,10 +111,18 @@ table, until now), and a per-method compile-time proof that tenant scoping canno
 `packages/events` gained its first real infrastructure code. `make ci` green: 76 e2e tests, all 16
 gates.
 
-Next: **001 phase 3** (US1, deduplication and ingestion — genuine product logic with real design
-decisions: fingerprint normalisation, `POST /ingest/signals`, idempotent delivery). This is also
-what retroactively unblocks most of what 012 deferred (T042, T045, T048, T080, and the persistence
-half of T059/T061/T070) once a real repository/controller pattern exists to follow. 012 phase 13
+**001 phases 3–8 landed 2026-09-28** (VERSION 0.44.0): deduplication and ingestion, evidence and
+its links, correlation, the audit trail, the timeline and evidence graph, staleness, evidence
+retention, merge and unmerge, issue deletion with a content-free tombstone, and the human close.
+56 of 57 tasks; T056 (running all 27 quickstart scenarios) is the one left. What 001 decided but
+did not build — nothing schedules the sweep or retention, a merged issue's later signals open a new
+issue, audit action keys wait on 002 — is indexed at the end of `QUESTIONS.md`. `make ci`: 408 unit
++ 332 e2e tests, all gates.
+
+Next: **002 policy-and-autonomy** (phases 1–3 first: the closed input record, the `DENY`-seeded
+lattice, the pure evaluator, then US1) and, in parallel, **012 phase 6's deferred runner tasks**
+(T042, T045, T048–T051), which 001's repository/controller pattern has now unblocked, as have T080
+and the persistence half of T059/T061/T070. 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
 (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub
 interaction and can start on request. Stage 0 S0-1 still blocks realistic sizing of v1 and does not
