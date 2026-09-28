@@ -8,8 +8,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createQueue } from '@healer/workflow';
 import {
   BullmqSignalQueue,
+  PrismaAuditRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
+  type AuditRepository,
   type IngestionDeliveryRepository,
   type IssueRepository,
 } from '@healer/domain-issues';
@@ -79,6 +81,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       deliveries,
       new PrismaIssueRepository(prisma),
       new PrismaEvidenceRepository(prisma),
+      new PrismaAuditRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -336,6 +339,11 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     detach: () => Promise.reject(new Error('not implemented in this test')),
     listByIssue: () => Promise.resolve([]),
   };
+  const noopAudit: AuditRepository = {
+    record: () => Promise.reject(new Error('not implemented in this test')),
+    listByTarget: () => Promise.resolve([]),
+    resolveAgentRunFacts: () => Promise.resolve(null),
+  };
 
   beforeAll(async () => {
     const queue = new BullmqSignalQueue({ url: 'redis://127.0.0.1:6399' });
@@ -345,6 +353,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopDeliveries,
       noopIssues,
       noopEvidence,
+      noopAudit,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

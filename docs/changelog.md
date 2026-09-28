@@ -95,6 +95,25 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.42.0 — 2026-09-28
+
+**001 T042–T044**: the audit trail — `AuditRepository`, the SC-007 agent-run resolution, and
+`GET /issues/{id}/audit`. **Phase 6 (US4, the audit trail) is now complete.**
+
+- New `AuditRepository` (`record`/`listByTarget`/`resolveAgentRunFacts`). `AuditEntry` carries no
+  model/prompt-version/token/cost/tool-call fields of its own — those live exactly once in
+  `agent_run` (C-13), reached through `agentRunId`; a field here duplicating them would violate the
+  structural guarantee `prisma/agent-run-single-store.test.ts` already enforces.
+- **No real caller wires `record` into a live action yet** — `action` must be a registered
+  `policy_action.action_key` (002), which does not exist in this repo, and no agent-execution path
+  calls `agent_run` either. `GET /issues/{id}/audit` correctly returns an empty list today, not a
+  bug — the same class of honest gap as T039's un-wired correlation.
+- `GET /issues/{id}/audit` resolves each agent-action entry's prompt version and model identifier
+  inline, satisfying SC-007 as an observable HTTP behavior rather than only a repository capability
+  nothing outside the codebase could exercise.
+- `make ci` green: 315 unit tests, 186 e2e tests, all 16 gates — run alongside a second, disjoint
+  session's concurrent Phase 7 work (timeline, evidence graph) on the same branch, coordinated live.
+
 ## 0.41.0 — 2026-09-28
 
 **001 T041**: the isolation matrix — closed with no new code. `gate-isolation` (`make ci`) already

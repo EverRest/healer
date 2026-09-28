@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createQueue } from '@healer/workflow';
 import {
   BullmqSignalQueue,
+  PrismaAuditRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
 } from '@healer/domain-issues';
@@ -118,6 +119,7 @@ describe('ingestion load and downstream-failure recovery (001 T026, SC-006)', ()
       deliveries,
       new PrismaIssueRepository(prisma),
       new PrismaEvidenceRepository(prisma),
+      new PrismaAuditRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

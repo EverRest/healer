@@ -7,6 +7,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   BullmqSignalQueue,
+  PrismaAuditRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
   type NewIssue,
@@ -43,6 +44,7 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
   let prisma: PrismaClient;
   let app: NestExpressApplication;
   let issues: PrismaIssueRepository;
+  let audit: PrismaAuditRepository;
 
   const get = (issueId: string, tenantId: string, type?: string) =>
     request(app.getHttpServer())
@@ -68,6 +70,7 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
     );
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     issues = new PrismaIssueRepository(prisma);
+    audit = new PrismaAuditRepository(prisma);
 
     const evidence = new PrismaEvidenceRepository(prisma);
     const newEvidence = (overrides: Partial<NewEvidence> = {}): NewEvidence => ({
@@ -96,6 +99,7 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
       new PrismaIngestionDeliveryRepository(prisma),
       issues,
       evidence,
+      audit,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -283,5 +287,78 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
         responseContainsMarker: (body, marker) =>
           (body as { items: { id: string }[] }).items.some((item) => item.id === marker),
       }));
+  });
+
+  describe('GET /issues/{issueId}/audit (001 T044, FR-012, SC-007, SC-004)', () => {
+    it('returns every audit entry for the issue', async () => {
+      const entry = await audit.record(
+        scope(CONTEXT, {
+          id: randomUUID(),
+          actorType: 'human',
+          actorRef: 'pavlo',
+          action: 'issue.close',
+          targetType: 'issue',
+          targetId: ISSUE_ID,
+          reason: 'closing as resolved',
+          evidenceIds: [],
+          outcome: 'ok',
+        }),
+      );
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/issues/${ISSUE_ID}/audit`)
+        .set('X-Tenant-Id', TENANT_ID)
+        .expect(200);
+      expect(response.body.items.map((i: { id: string }) => i.id)).toContain(entry.id);
+    });
+
+    it('resolves an agent-action entry to its prompt version and model identifier (SC-007)', async () => {
+      const promptVersionId = randomUUID();
+      await query(
+        pg,
+        `insert into "prompt"."prompt_version" (id, key, digest, body, published_by)
+         values ('${promptVersionId}', 'diagnose-issues-e2e', 'digest-issues-e2e', 'body', 'pavlo')`,
+      );
+      const agentRunId = randomUUID();
+      await query(
+        pg,
+        `insert into "agent"."agent_run"
+           (id, tenant_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
+            input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
+         values ('${agentRunId}', '${TENANT_ID}', '${randomUUID()}', 'investigator',
+                 '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', now())`,
+      );
+      const entry = await audit.record(
+        scope(CONTEXT, {
+          id: randomUUID(),
+          actorType: 'agent',
+          actorRef: 'investigator',
+          action: 'issue.diagnose',
+          targetType: 'issue',
+          targetId: ISSUE_ID,
+          reason: 'diagnosed root cause',
+          evidenceIds: [],
+          agentRunId,
+          outcome: 'ok',
+        }),
+      );
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/issues/${ISSUE_ID}/audit`)
+        .set('X-Tenant-Id', TENANT_ID)
+        .expect(200);
+      const item = response.body.items.find((i: { id: string }) => i.id === entry.id);
+      expect(item.agentRunFacts).toEqual({ promptVersionId, modelId: 'claude-sonnet-5' });
+    });
+
+    it('404s for an issue id that does not exist at all', async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/issues/${randomUUID()}/audit`)
+        .set('X-Tenant-Id', TENANT_ID)
+        .expect(404);
+    });
+
+    it("404s another tenant's issue — never 403", () =>
+      assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId/audit'));
   });
 });

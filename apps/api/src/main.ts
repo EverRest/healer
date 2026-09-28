@@ -5,8 +5,10 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { createLogger, loadConfig } from '@healer/shared';
 import {
   BullmqSignalQueue,
+  PrismaAuditRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
+  type AuditRepository,
   type IngestionDeliveryRepository,
   type IssueRepository,
   type SignalQueue,
@@ -20,6 +22,7 @@ import {
   SIGNAL_QUEUE,
 } from './ingest/ingest.controller.js';
 import {
+  AUDIT_REPOSITORY,
   EVIDENCE_REPOSITORY,
   ISSUE_REPOSITORY,
   IssuesController,
@@ -64,6 +67,7 @@ export function createApiModule(
   deliveries: IngestionDeliveryRepository,
   issues: IssueRepository,
   evidence: EvidenceRepository,
+  audit: AuditRepository,
 ): Type<unknown> {
   @Module({
     controllers: [HealthController, IngestController, IssuesController],
@@ -73,6 +77,7 @@ export function createApiModule(
       { provide: INGESTION_DELIVERY_REPOSITORY, useValue: deliveries },
       { provide: ISSUE_REPOSITORY, useValue: issues },
       { provide: EVIDENCE_REPOSITORY, useValue: evidence },
+      { provide: AUDIT_REPOSITORY, useValue: audit },
     ],
   })
   class ApiModule {}
@@ -96,6 +101,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaIngestionDeliveryRepository(prisma),
     new PrismaIssueRepository(prisma),
     new PrismaEvidenceRepository(prisma),
+    new PrismaAuditRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

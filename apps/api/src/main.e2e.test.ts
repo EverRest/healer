@@ -3,6 +3,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NestFactory } from '@nestjs/core';
 import type {
+  AuditRepository,
   IngestionDeliveryRepository,
   IssueRepository,
   SignalQueue,
@@ -33,6 +34,11 @@ const noopEvidence: EvidenceRepository = {
   detach: () => Promise.reject(new Error('not implemented in this test')),
   listByIssue: () => Promise.resolve([]),
 };
+const noopAudit: AuditRepository = {
+  record: () => Promise.reject(new Error('not implemented in this test')),
+  listByTarget: () => Promise.resolve([]),
+  resolveAgentRunFacts: () => Promise.resolve(null),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -57,6 +63,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopDeliveries,
       noopIssues,
       noopEvidence,
+      noopAudit,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

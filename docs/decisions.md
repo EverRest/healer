@@ -193,6 +193,14 @@ that raised them.
 | C-62 | A third tenant-isolation helper, `assertTenantIsolatedList` (`test/tenant-isolation.ts`), for `GET /issues` | Neither `assertTenantIsolated` (expects 404) nor `assertTenantScopedEnqueue` (traces a queued write by marker) fits a list endpoint that always returns 200 with nothing to look up by id — same precedent as why `assertTenantScopedEnqueue` itself was built in T019. `gate-isolation`'s detection regex extended to recognize it by name, same as the other two |
 | C-63 | T041 ("e2e isolation matrix... issue, evidence, timeline and audit") closed with **no new test file** — `gate-isolation` already is that matrix, continuously, for every endpoint that exists (`POST /ingest/signals`, `GET /issues`, `GET /issues/{id}`, `GET /issues/{id}/evidence`); timeline (T045-T048) and audit (T042-T044) don't exist yet (0% built) | A hand-written matrix test duplicating what `make ci`'s own gate already enforces would drift from the gate over time (two authorities for the same fact); the gate is stronger anyway — it fails the build for any *future* endpoint too, not just the ones a hand-maintained matrix remembered to include. Phase 5 (US3) complete — T037 through T041 |
 
+## 001 T042–T044 (audit trail), closed (2026-09-28)
+
+| ID | Decision | Why |
+|----|----------|-----|
+| C-64 | `AuditRepository.record` is built, tested and exposed via `GET /issues/{id}/audit`, but **no real call site invokes it yet** | `action` must be a registered `policy_action.action_key` (002), which does not exist in this repo, and no agent-execution path calls `agent_run` either (012 never built one). Inventing action-key values now would be guessing at a closed list this feature does not own — flagged in QUESTIONS.md, same precedent as T039's un-wired correlation. The endpoint correctly returns an empty list today; that is accurate, not a bug |
+| C-65 | `AuditEntry` carries no `modelId`/`promptVersionId`/`tokens`/`cost`/`toolCalls` fields of its own — only `agentRunId`, resolved through a new `resolveAgentRunFacts` | C-13 and `prisma/agent-run-single-store.test.ts`'s own structural guarantee: those facts live exactly once, in `agent_run`. A field on `AuditEntry` duplicating them would be exactly the violation that test exists to catch |
+| C-66 | `GET /issues/{id}/audit` resolves `agentRunFacts` inline, per entry, rather than leaving the client to make a second call per agent-action entry | SC-007 ("every audit entry for an agent action resolves to a retrievable prompt version and model identifier") is stated as an observable guarantee of the audit trail itself, not of a repository method nobody outside this codebase can call — the HTTP response is what actually needs to satisfy it |
+
 ## Deliberately unset
 
 `false-fix rate`, `30-day revert rate`, `per-incident cost ceiling`, escalation attempt cap —

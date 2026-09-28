@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
 import type {
+  AuditRepository,
   IngestionDeliveryRepository,
   IssueRepository,
   SignalQueue,
@@ -34,6 +35,11 @@ const noopEvidence: EvidenceRepository = {
   detach: () => Promise.reject(new Error('not implemented for contract generation')),
   listByIssue: () => Promise.resolve([]),
 };
+const noopAudit: AuditRepository = {
+  record: () => Promise.reject(new Error('not implemented for contract generation')),
+  listByTarget: () => Promise.resolve([]),
+  resolveAgentRunFacts: () => Promise.resolve(null),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -54,6 +60,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopDeliveries,
     noopIssues,
     noopEvidence,
+    noopAudit,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

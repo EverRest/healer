@@ -1,4 +1,6 @@
 export * from './domain/issue.js';
+export * from './domain/audit.js';
+export * from './domain/audit-repository.js';
 export * from './domain/correlation.js';
 export * from './domain/events.js';
 export * from './domain/fingerprint.js';
@@ -18,6 +20,7 @@ export * from './application/commands/ingest-signal-batch.js';
 export * from './application/commands/process-signal-job.js';
 export * from './infrastructure/prisma-issue-repository.js';
 export * from './infrastructure/prisma-timeline-repository.js';
+export * from './infrastructure/prisma-audit-repository.js';
 export * from './infrastructure/prisma-normalisation-ruleset-repository.js';
 export * from './infrastructure/prisma-ingestion-delivery-repository.js';
 export * from './infrastructure/bullmq-signal-queue.js';

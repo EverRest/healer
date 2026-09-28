@@ -11,6 +11,7 @@ import {
 import type { EvidenceRepository, EvidenceType } from '@healer/domain-evidence';
 import {
   projectIssueRelationships,
+  type AuditRepository,
   type Issue,
   type IssueRelationship,
   type IssueRepository,
@@ -19,6 +20,7 @@ import { TenantContext, TenantIsolationError, scope } from '@healer/shared';
 
 export const ISSUE_REPOSITORY = Symbol('ISSUE_REPOSITORY');
 export const EVIDENCE_REPOSITORY = Symbol('EVIDENCE_REPOSITORY');
+export const AUDIT_REPOSITORY = Symbol('AUDIT_REPOSITORY');
 
 /** The one authority for which `type` query values this endpoint accepts — mirrors
  *  `EvidenceType` exactly, kept as a runtime list since the type itself erases at build time. */
@@ -84,6 +86,7 @@ export class IssuesController {
   constructor(
     @Inject(ISSUE_REPOSITORY) private readonly issues: IssueRepository,
     @Inject(EVIDENCE_REPOSITORY) private readonly evidence: EvidenceRepository,
+    @Inject(AUDIT_REPOSITORY) private readonly audit: AuditRepository,
   ) {}
 
   // Same deliberate, TODO-flagged stub-auth pattern as IngestController (001 T019) — no
@@ -176,6 +179,38 @@ export class IssuesController {
 
     const items = await this.evidence.listByIssue(
       scope(context, { issueId, ...(type !== undefined ? { type: type as EvidenceType } : {}) }),
+    );
+    return { items };
+  }
+
+  @Get(':issueId/audit')
+  async listAudit(
+    @Param('issueId') issueId: string,
+    @Headers('x-tenant-id') tenantIdHeader?: string,
+  ): Promise<{ items: readonly unknown[] }> {
+    const context = this.resolveTenant(tenantIdHeader);
+
+    const issue = await this.issues.findById(scope(context, { id: issueId }));
+    if (issue === null) {
+      throw new NotFoundException(`issue ${issueId} not found`);
+    }
+
+    const entries = await this.audit.listByTarget(
+      scope(context, { targetType: 'issue', targetId: issueId }),
+    );
+    // SC-007: every agent-action entry resolves to a retrievable prompt version and model
+    // identifier — resolved inline here, not stored a second time on the entry (C-13).
+    const items = await Promise.all(
+      entries.map(async (entry) => ({
+        ...entry,
+        ...(entry.agentRunId !== undefined
+          ? {
+              agentRunFacts: await this.audit.resolveAgentRunFacts(
+                scope(context, { agentRunId: entry.agentRunId }),
+              ),
+            }
+          : {}),
+      })),
     );
     return { items };
   }
