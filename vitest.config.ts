@@ -37,7 +37,48 @@ function workspacePackageAliases(): { find: string; replacement: string }[] {
   return aliases;
 }
 
-// Two projects, because they cost different things: unit tests run on every save,
+// The e2e files whose result depends on the host being quiet — one authority for the list.
+// Measured (001 review, 2026-09-28): with the whole e2e project running at once (a Postgres
+// container per file, `cpus - 1` forks) the 12 000-signal replay ran at ~74 ms/signal for its
+// first thousand and hit its 120 s budget in 4 of 4 full runs, `sustains 100/s` took 40-70 s and
+// `issue-merge` 200-290 s (its forced-race cases failed under it); the same files run alone took
+// ~50 s, ~6 s and ~35 s. The replay is a chain of ~5 serial round trips per signal on ONE row
+// lock, so it scales with scheduling latency, not throughput (2 to 25 in flight measured the same).
+// Each file below therefore gets its own `sequence.groupOrder`, which vitest runs one group at a
+// time, after the shared group. (Pool size is root-level in vitest, so a project cannot be
+// throttled directly — only ordered.)
+const HEAVY_E2E = [
+  'ingest-signal.e2e.test.ts',
+  'apps/api/load.e2e.test.ts',
+  'issue-repository.e2e.test.ts',
+  'issue-merge.e2e.test.ts',
+];
+
+function e2eProject(name: string, include: string[], exclude: string[], groupOrder: number) {
+  return {
+    resolve: {
+      alias: workspacePackageAliases(),
+    },
+    test: {
+      name,
+      include,
+      exclude,
+      environment: 'node' as const,
+      testTimeout: 120_000,
+      hookTimeout: 180_000,
+      sequence: { groupOrder },
+    },
+  };
+}
+
+// Confirmed reachable, not just theoretical (001 review, 2026-09-28): two concurrent
+// sessions each running the full e2e suite from their own worktree also ran each
+// other's copy of it, quadrupling load on the suite's two heaviest tests (a 12 000-
+// signal replay, a sustained-load test) and producing spurious timeouts neither
+// session's own diff caused.
+const E2E_EXCLUDE = ['**/node_modules/**', '**/dist/**', '**/.claude/worktrees/**'];
+
+// Two kinds of project, because they cost different things: unit tests run on every save,
 // e2e tests start disposable Postgres and Redis (R-12) and are not worth waiting for
 // until the unit suite is green.
 export default defineConfig({
@@ -73,24 +114,13 @@ export default defineConfig({
           environment: 'node',
         },
       },
-      {
-        resolve: {
-          alias: workspacePackageAliases(),
-        },
-        test: {
-          name: 'e2e',
-          include: ['**/*.e2e.test.ts'],
-          // Confirmed reachable, not just theoretical (001 review, 2026-09-28): two concurrent
-          // sessions each running the full e2e suite from their own worktree also ran each
-          // other's copy of it, quadrupling load on the suite's two heaviest tests (a 12 000-
-          // signal replay, a sustained-load test) and producing spurious timeouts neither
-          // session's own diff caused.
-          exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/worktrees/**'],
-          environment: 'node',
-          testTimeout: 120_000,
-          hookTimeout: 180_000,
-        },
-      },
+      e2eProject(
+        'e2e',
+        ['**/*.e2e.test.ts'],
+        [...E2E_EXCLUDE, ...HEAVY_E2E.map((f) => `**/${f}`)],
+        0,
+      ),
+      ...HEAVY_E2E.map((f, i) => e2eProject(`e2e-heavy-${i + 1}`, [f], E2E_EXCLUDE, i + 1)),
     ],
     coverage: {
       provider: 'v8',
