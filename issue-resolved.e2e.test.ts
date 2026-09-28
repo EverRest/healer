@@ -115,6 +115,10 @@ describe('IssueResolved (001 T054/T057, FR-021, C-09, quickstart 24)', () => {
 
   it('no other transition publishes it — not a merge, not a reopen, not staleness, not removal', () =>
     withCorrelation(newCorrelationId(), async () => {
+      // `merged` is reached through the merge operation, the only door (001 T049) — a plain
+      // transition to it is refused because it would leave no `merged_into` row.
+      const target = newIssue();
+      await repo.create(scope(CONTEXT, target));
       const merged = newIssue();
       await repo.create(scope(CONTEXT, merged));
       await repo.transition(id(merged.id), 'investigating', 'agent', 'x');
@@ -122,7 +126,11 @@ describe('IssueResolved (001 T054/T057, FR-021, C-09, quickstart 24)', () => {
       await repo.transition(id(merged.id), 'acting', 'agent', 'x');
       await repo.transition(id(merged.id), 'needs_human', 'policy', 'gate');
       await repo.transition(id(merged.id), 'stale', 'system', 'sweep');
-      await repo.transition(id(merged.id), 'merged', 'human', 'pavlo');
+      await repo.merge(
+        scope(CONTEXT, { id: merged.id, intoId: target.id }),
+        'pavlo',
+        'duplicate of the target',
+      );
       await repo.transition(id(merged.id), 'removed', 'policy', 'deletion');
       expect(await resolvedEvents(merged.id)).toEqual([]);
 
@@ -133,7 +141,11 @@ describe('IssueResolved (001 T054/T057, FR-021, C-09, quickstart 24)', () => {
       await repo.transition(id(resolved.id), 'resolved', 'human', 'pavlo');
       await repo.transition(id(resolved.id), 'investigating', 'ingestion', 'signal');
       await repo.transition(id(resolved.id), 'resolved', 'human', 'pavlo');
-      await repo.transition(id(resolved.id), 'merged', 'human', 'pavlo');
+      await repo.merge(
+        scope(CONTEXT, { id: resolved.id, intoId: target.id }),
+        'pavlo',
+        'duplicate of the target',
+      );
       await repo.transition(id(resolved.id), 'removed', 'policy', 'deletion');
       expect(await resolvedEvents(resolved.id)).toHaveLength(2); // one per human resolution
     }));

@@ -203,9 +203,19 @@ describe('close, timeline and evidence graph (001 T057/T048)', () => {
       'a %s issue cannot be closed — 409, and nothing is published or audited',
       async (state) => {
         const issueId = await createIssue();
-        await withCorrelation(newCorrelationId(), () =>
-          issues.transition(scope(CONTEXT, { id: issueId }), state, 'human', 'pavlo'),
-        );
+        await withCorrelation(newCorrelationId(), async () => {
+          if (state === 'merged') {
+            // Through the merge operation: a plain transition to `merged` is refused (001 T049).
+            const target = await createIssue();
+            await issues.merge(
+              scope(CONTEXT, { id: issueId, intoId: target }),
+              'pavlo',
+              'duplicate of the target',
+            );
+          } else {
+            await issues.transition(scope(CONTEXT, { id: issueId }), state, 'human', 'pavlo');
+          }
+        });
         await close(issueId).expect(409);
         expect(await outbox(issueId, 'IssueResolved')).toHaveLength(0);
         expect(await auditFor(issueId)).toHaveLength(0);
