@@ -8,12 +8,19 @@ import {
   PrismaAuditRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
+  PrismaTimelineRepository,
   type AuditRepository,
   type IngestionDeliveryRepository,
   type IssueRepository,
   type SignalQueue,
+  type TimelineRepository,
 } from '@healer/domain-issues';
-import { PrismaEvidenceRepository, type EvidenceRepository } from '@healer/domain-evidence';
+import {
+  PrismaEvidenceGraphRepository,
+  PrismaEvidenceRepository,
+  type EvidenceGraphRepository,
+  type EvidenceRepository,
+} from '@healer/domain-evidence';
 import { createPrismaClient } from './infrastructure/prisma.js';
 import { HEALTH_META, HealthController, type HealthMeta } from './health/health.controller.js';
 import {
@@ -23,9 +30,11 @@ import {
 } from './ingest/ingest.controller.js';
 import {
   AUDIT_REPOSITORY,
+  EVIDENCE_GRAPH_REPOSITORY,
   EVIDENCE_REPOSITORY,
   ISSUE_REPOSITORY,
   IssuesController,
+  TIMELINE_REPOSITORY,
 } from './issues/issues.controller.js';
 
 const VERSION = '0.5.0';
@@ -68,6 +77,8 @@ export function createApiModule(
   issues: IssueRepository,
   evidence: EvidenceRepository,
   audit: AuditRepository,
+  timeline: TimelineRepository,
+  evidenceGraph: EvidenceGraphRepository,
 ): Type<unknown> {
   @Module({
     controllers: [HealthController, IngestController, IssuesController],
@@ -78,6 +89,8 @@ export function createApiModule(
       { provide: ISSUE_REPOSITORY, useValue: issues },
       { provide: EVIDENCE_REPOSITORY, useValue: evidence },
       { provide: AUDIT_REPOSITORY, useValue: audit },
+      { provide: TIMELINE_REPOSITORY, useValue: timeline },
+      { provide: EVIDENCE_GRAPH_REPOSITORY, useValue: evidenceGraph },
     ],
   })
   class ApiModule {}
@@ -102,6 +115,8 @@ export async function bootstrap(): Promise<void> {
     new PrismaIssueRepository(prisma),
     new PrismaEvidenceRepository(prisma),
     new PrismaAuditRepository(prisma),
+    new PrismaTimelineRepository(prisma),
+    new PrismaEvidenceGraphRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

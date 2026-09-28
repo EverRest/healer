@@ -155,7 +155,9 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       await repo.transition(scope(CONTEXT, { id: input.id }), 'needs_human', 'policy', 'gate');
       await expect(
         repo.transition(scope(CONTEXT, { id: input.id }), 'resolved', 'agent', 'x'),
-      ).rejects.toThrow(/knowledge_drift/);
+        // The message is the general cause rule's, not the drift guard's (001 T057): one
+        // authority for "only a human may resolve", which covers this kind like every other.
+      ).rejects.toThrow(/only a human can resolve/);
 
       const resolved = await repo.transition(
         scope(CONTEXT, { id: input.id }),

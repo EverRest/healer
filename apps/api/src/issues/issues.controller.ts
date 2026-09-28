@@ -1,26 +1,52 @@
 import {
   BadRequestException,
+  Body,
+  ConflictException,
   Controller,
   Get,
   Headers,
+  HttpCode,
   Inject,
   NotFoundException,
   Param,
+  Post,
   Query,
+  Res,
 } from '@nestjs/common';
-import type { EvidenceRepository, EvidenceType } from '@healer/domain-evidence';
+import { ApiOkResponse } from '@nestjs/swagger';
+import type {
+  EvidenceGraph,
+  EvidenceGraphRepository,
+  EvidenceRepository,
+  EvidenceType,
+} from '@healer/domain-evidence';
 import {
+  ConcurrentModificationError,
+  InvalidIssueTransitionError,
+  closeIssue,
   projectIssueRelationships,
   type AuditRepository,
   type Issue,
   type IssueRelationship,
   type IssueRepository,
+  type TimelineEntry,
+  type TimelineRepository,
 } from '@healer/domain-issues';
-import { TenantContext, TenantIsolationError, scope } from '@healer/shared';
+import {
+  NotFoundError,
+  TenantContext,
+  TenantIsolationError,
+  newCorrelationId,
+  scope,
+  withCorrelation,
+} from '@healer/shared';
+import { closeIssueRequestSchema } from './close-issue.dto.js';
 
 export const ISSUE_REPOSITORY = Symbol('ISSUE_REPOSITORY');
 export const EVIDENCE_REPOSITORY = Symbol('EVIDENCE_REPOSITORY');
 export const AUDIT_REPOSITORY = Symbol('AUDIT_REPOSITORY');
+export const TIMELINE_REPOSITORY = Symbol('TIMELINE_REPOSITORY');
+export const EVIDENCE_GRAPH_REPOSITORY = Symbol('EVIDENCE_GRAPH_REPOSITORY');
 
 /** The one authority for which `type` query values this endpoint accepts — mirrors
  *  `EvidenceType` exactly, kept as a runtime list since the type itself erases at build time. */
@@ -74,9 +100,12 @@ function serializeIssue(issue: Issue, relationships: readonly IssueRelationship[
   };
 }
 
+const MAX_ACTOR_LENGTH = 128;
+
 /**
  * `GET /issues`, `GET /issues/{issueId}` and `GET /issues/{issueId}/evidence` (001 T031/T040,
- * FR-001, FR-007, FR-020, SC-004). Every single-issue lookup checks tenant ownership *first* — a
+ * FR-001, FR-007, FR-020, SC-004), plus `/timeline`, `/evidence-graph`, `/audit` and
+ * `POST /close` (001 T044/T048/T057, FR-012, FR-013, FR-021). Every single-issue lookup checks tenant ownership *first* — a
  * cross-tenant `issueId` must 404 the same way a nonexistent one does, never fall through to a
  * query that would just return nothing (SC-004: 404 on every one of another tenant's resources,
  * never 403, which would itself confirm the `issueId` exists).
@@ -87,6 +116,8 @@ export class IssuesController {
     @Inject(ISSUE_REPOSITORY) private readonly issues: IssueRepository,
     @Inject(EVIDENCE_REPOSITORY) private readonly evidence: EvidenceRepository,
     @Inject(AUDIT_REPOSITORY) private readonly audit: AuditRepository,
+    @Inject(TIMELINE_REPOSITORY) private readonly timeline: TimelineRepository,
+    @Inject(EVIDENCE_GRAPH_REPOSITORY) private readonly evidenceGraph: EvidenceGraphRepository,
   ) {}
 
   // Same deliberate, TODO-flagged stub-auth pattern as IngestController (001 T019) — no
@@ -213,5 +244,115 @@ export class IssuesController {
       })),
     );
     return { items };
+  }
+
+  /** 404 unless the issue exists *under the caller's tenant* — the timeline and graph
+   *  repositories return an empty view for an unknown id, which would itself confirm nothing
+   *  and read as a real issue with no history (SC-004). */
+  private async requireIssue(context: TenantContext, issueId: string): Promise<Issue> {
+    const issue = await this.issues.findById(scope(context, { id: issueId }));
+    if (issue === null) {
+      throw new NotFoundException(`issue ${issueId} not found`);
+    }
+    return issue;
+  }
+
+  @Get(':issueId/timeline')
+  async getTimeline(
+    @Param('issueId') issueId: string,
+    @Headers('x-tenant-id') tenantIdHeader?: string,
+  ): Promise<{ items: readonly TimelineEntry[] }> {
+    const context = this.resolveTenant(tenantIdHeader);
+    await this.requireIssue(context, issueId);
+    return { items: await this.timeline.forIssue(scope(context, { issueId })) };
+  }
+
+  @Get(':issueId/evidence-graph')
+  async getEvidenceGraph(
+    @Param('issueId') issueId: string,
+    @Headers('x-tenant-id') tenantIdHeader?: string,
+  ): Promise<EvidenceGraph> {
+    const context = this.resolveTenant(tenantIdHeader);
+    await this.requireIssue(context, issueId);
+    return this.evidenceGraph.forIssue(scope(context, { issueId }));
+  }
+
+  /**
+   * A human closes the issue (001 T057, FR-021, C-09, quickstart 27): `resolved` with
+   * `IssueResolved(self_resolved)` and no verification evidence. Nothing here can label it
+   * otherwise — the repository derives the kind from the human cause.
+   *
+   * Identity: no credential is verified yet (see `resolveTenant`), so there is no authenticated
+   * user to record. `X-Actor-Id` is a caller-asserted stub of the same standing as `X-Tenant-Id`:
+   * required, so an anonymous close cannot be recorded as if someone did it, and replaced by the
+   * authenticated subject when real auth lands (QUESTIONS.md "001 T057").
+   *
+   * `Idempotency-Key` is required and validated per the contract but not stored: closing is
+   * idempotent by state (`closeIssue`), so any repeat — same key, new key, concurrent — is a
+   * 200 that changes nothing. The contract's "same key with a different body is 409" is not
+   * implemented (QUESTIONS.md).
+   */
+  @Post(':issueId/close')
+  @HttpCode(200)
+  @ApiOkResponse({
+    description:
+      'The resolved issue. A close that changed nothing (already resolved, or another close won ' +
+      'the race) is also a 200 and is marked with `Idempotent-Replay: true`; its actor and reason ' +
+      'were not recorded. 400: missing/invalid Idempotency-Key (uuid), X-Actor-Id (1-128) or ' +
+      'reason (1-1000). 404: unknown issue or another tenant. 409: merged or removed.',
+    headers: {
+      'Idempotent-Replay': {
+        description: 'Present (`true`) only when this request closed nothing',
+        schema: { type: 'string', enum: ['true'] },
+      },
+    },
+  })
+  async close(
+    @Param('issueId') issueId: string,
+    @Body() body: unknown,
+    @Res({ passthrough: true }) response: { setHeader(name: string, value: string): unknown },
+    @Headers('x-tenant-id') tenantIdHeader?: string,
+    @Headers('x-actor-id') actorIdHeader?: string,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ): Promise<unknown> {
+    const context = this.resolveTenant(tenantIdHeader);
+
+    if (idempotencyKey === undefined || !UUID_PATTERN.test(idempotencyKey)) {
+      throw new BadRequestException('Idempotency-Key header is required and must be a UUID');
+    }
+    const actor = actorIdHeader?.trim() ?? '';
+    if (actor === '' || actor.length > MAX_ACTOR_LENGTH) {
+      throw new BadRequestException(
+        `X-Actor-Id header is required (1-${MAX_ACTOR_LENGTH} characters)`,
+      );
+    }
+    const parsed = closeIssueRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new BadRequestException(`invalid close request: ${parsed.error.issues[0]?.message}`);
+    }
+
+    try {
+      const { issue, closed } = await withCorrelation(newCorrelationId(), () =>
+        closeIssue(this.issues, context, issueId, actor, parsed.data.reason),
+      );
+      // The request did not close anything: say so, so a second closer is not left believing its
+      // actor and reason were recorded (they were not — the original close stands).
+      if (!closed) response.setHeader('Idempotent-Replay', 'true');
+      return serializeIssue(
+        issue,
+        await this.issues.findRelationships(scope(context, { id: issueId })),
+      );
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new NotFoundException(`issue ${issueId} not found`);
+      }
+      if (
+        error instanceof InvalidIssueTransitionError ||
+        error instanceof ConcurrentModificationError
+      ) {
+        throw new ConflictException(error.message);
+      }
+      throw error;
+    }
   }
 }

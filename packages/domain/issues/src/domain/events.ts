@@ -1,15 +1,16 @@
 import { currentCorrelationId } from '@healer/shared';
 import type { DomainEvent } from '@healer/events';
 import type { Issue, IssueRelationship } from './issue.js';
-import type { NewIssueStateChangedEvent } from './state-machine.js';
+import type { IssueEventCause, NewIssueStateChangedEvent } from './state-machine.js';
 
 /**
  * Outbox events this package publishes (001 T013, contracts/events.md). `create`, `transition`
- * (001 T012) and `correlate` (001 T039) each have a real producing operation; the remaining
- * events in the contract (`IssueReopened`, `IssueRecurred`, `IssueMerged`/`Unmerged`,
- * `IssueStale`, `IssueResolved`, `IssueDeleted`) have no operation to hang off yet and are wired
- * when the task that builds it lands (T049, T051, T053 and friends) — flagged in QUESTIONS.md
- * rather than guessed at ahead of them.
+ * (001 T012), `correlate` (001 T039), the staleness sweep (T051) and a human close (T057,
+ * `IssueResolved(self_resolved)` from `transition`) each have a real producing operation; the
+ * remaining events in the contract (`IssueReopened`, `IssueRecurred`, `IssueMerged`/`Unmerged`,
+ * `IssueDeleted`, and `IssueResolved`'s verified kinds) have no operation to hang off yet and are
+ * wired when the task that builds it lands (T049, T053, 010 and friends) — flagged in
+ * QUESTIONS.md rather than guessed at ahead of them.
  */
 
 /**
@@ -70,6 +71,68 @@ export function issueStateChangedEvent(
       cause: event.cause,
       actorRef: event.actorRef,
     },
+  };
+}
+
+/**
+ * How an issue was resolved (contracts/events.md "IssueResolved and its three kinds", C-09). A
+ * discriminated union so the two invalid shapes cannot be written: `self_resolved` carrying
+ * verification evidence (nobody verified anything), and `remediated`/`fixed` carrying none (an
+ * automated resolution means verified in production).
+ */
+export type IssueResolution =
+  | {
+      readonly kind: 'self_resolved';
+      readonly verifiedAt?: never;
+      readonly verificationEvidenceIds?: never;
+    }
+  | {
+      readonly kind: 'remediated' | 'fixed';
+      readonly verifiedAt: Date;
+      readonly verificationEvidenceIds: readonly [string, ...string[]];
+    };
+
+/**
+ * The resolution a transition landing on `resolved` with this cause publishes. Only a human close
+ * has one in v1 (`self_resolved`): `fixed` is reserved and `remediated` needs 010, and neither has
+ * an emitter that could supply the evidence ids. The state machine's `checkResolutionCause`
+ * refuses the other causes first; this repeats the rule at the publish site so that widening one
+ * without the other fails loudly (and `issue-resolved.test.ts` fails) instead of publishing a
+ * `self_resolved` for a resolution a person did not make.
+ */
+export function resolutionForCause(cause: IssueEventCause): IssueResolution {
+  if (cause !== 'human') {
+    throw new Error(
+      `no verified-resolution emitter exists yet (C-09): cause "${cause}" has no IssueResolved to publish`,
+    );
+  }
+  return { kind: 'self_resolved' };
+}
+
+/**
+ * `IssueResolved` (001 T054/T057, contracts/events.md) — **the only place it is constructed**
+ * (`issue-resolved.test.ts` scans the sources to keep it so). 009 releases a held ticket only on a
+ * verified kind with non-empty evidence, so an emitter that built this by hand with the wrong
+ * shape would release tickets on a resolution nobody verified (C-09).
+ */
+export function issueResolvedEvent(
+  tenantId: string,
+  issueId: string,
+  resolution: IssueResolution,
+): DomainEvent {
+  return {
+    name: 'IssueResolved',
+    tenantId,
+    subjectId: issueId,
+    correlationId: requireCorrelationId(),
+    payload:
+      resolution.kind === 'self_resolved'
+        ? { resolutionKind: resolution.kind, verificationEvidenceIds: [] }
+        : {
+            resolutionKind: resolution.kind,
+            verifiedAt: resolution.verifiedAt.toISOString(),
+            verificationEvidenceIds: [...resolution.verificationEvidenceIds],
+          },
   };
 }
 

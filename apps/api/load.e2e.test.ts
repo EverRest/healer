@@ -9,10 +9,11 @@ import { createQueue } from '@healer/workflow';
 import {
   BullmqSignalQueue,
   PrismaAuditRepository,
+  PrismaTimelineRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
 } from '@healer/domain-issues';
-import { PrismaEvidenceRepository } from '@healer/domain-evidence';
+import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer/domain-evidence';
 import { PrismaClient } from '@healer/prisma-client';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
 import { start as startWorker } from '../worker/src/main.js';
@@ -120,6 +121,8 @@ describe('ingestion load and downstream-failure recovery (001 T026, SC-006)', ()
       new PrismaIssueRepository(prisma),
       new PrismaEvidenceRepository(prisma),
       new PrismaAuditRepository(prisma),
+      new PrismaTimelineRepository(prisma),
+      new PrismaEvidenceGraphRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

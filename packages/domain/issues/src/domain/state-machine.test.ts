@@ -41,11 +41,11 @@ describe('transitionIssue (001 T012, FR-006)', () => {
     });
   });
 
-  it('investigating -> diagnosed -> acting -> resolved, the happy path', () => {
+  it('investigating -> diagnosed -> acting -> resolved, the happy path (closed by a person in v1)', () => {
     let current = issue('investigating');
     current = transitionIssue(current, 'diagnosed', 'agent', 'diagnosis-engine').issue;
     current = transitionIssue(current, 'acting', 'agent', 'change-agent').issue;
-    current = transitionIssue(current, 'resolved', 'agent', 'verifier').issue;
+    current = transitionIssue(current, 'resolved', 'human', 'pavlo').issue;
     expect(current.state).toBe('resolved');
   });
 
@@ -163,7 +163,7 @@ describe('knowledge_drift terminates at human adjudication (001 T038, FR-001a, q
     for (const cause of ['ingestion', 'agent', 'policy', 'system'] as const) {
       expect(() =>
         transitionIssue(issue('needs_human', 'knowledge_drift'), 'resolved', cause, 'x'),
-      ).toThrow(/knowledge_drift/);
+      ).toThrow(/only a human can resolve/);
     }
   });
 
@@ -181,14 +181,48 @@ describe('knowledge_drift terminates at human adjudication (001 T038, FR-001a, q
     ).toBe('needs_human');
   });
 
-  it('every other kind is unaffected — acting and automated resolution stay open to them', () => {
+  it('every other kind is unaffected — acting stays open to them, and a human can resolve them', () => {
     expect(
       transitionIssue(issue('diagnosed', 'production_incident'), 'acting', 'agent', 'x').issue
         .state,
     ).toBe('acting');
     expect(
-      transitionIssue(issue('needs_human', 'production_incident'), 'resolved', 'agent', 'x').issue
+      transitionIssue(issue('needs_human', 'production_incident'), 'resolved', 'human', 'x').issue
         .state,
     ).toBe('resolved');
+  });
+});
+
+describe('only a human reaches resolved in v1 (001 T057, C-09, contracts/events.md)', () => {
+  // `IssueResolved` has no verified emitter yet: `fixed` is reserved (C-09, 008 R-25) and
+  // `remediated` needs 010. Until one exists, an automated cause reaching `resolved` would be a
+  // resolution nobody verified and nothing could honestly label — so it is refused, not labelled.
+  it.each(['ingestion', 'agent', 'policy', 'system'] as const)(
+    'refuses %s -> resolved from every state that has the edge',
+    (cause) => {
+      for (const state of [
+        'detected',
+        'investigating',
+        'diagnosed',
+        'acting',
+        'needs_human',
+        'stale',
+      ] as const) {
+        expect(() => transitionIssue(issue(state), 'resolved', cause, 'x')).toThrow(
+          InvalidIssueTransitionError,
+        );
+        expect(() => transitionIssue(issue(state), 'resolved', cause, 'x')).toThrow(/only a human/);
+      }
+    },
+  );
+
+  it('does not restrict the other targets — an automated cause can still investigate, go stale or merge', () => {
+    expect(
+      transitionIssue(issue('resolved'), 'investigating', 'ingestion', 'signal').issue.state,
+    ).toBe('investigating');
+    expect(transitionIssue(issue('detected'), 'stale', 'system', 'sweep').issue.state).toBe(
+      'stale',
+    );
+    expect(transitionIssue(issue('resolved'), 'merged', 'agent', 'x').issue.state).toBe('merged');
   });
 });

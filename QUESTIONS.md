@@ -667,3 +667,134 @@ documents. One line to change in `prisma-evidence-retention-repository.ts` when 
 **Open — nothing schedules it**, for the same reason as the staleness sweep: no tenant enumerator and
 no repeatable schedule. The batch cap means a large backlog needs several runs to clear.
 
+
+## 001 T057/T054/T055/T048 — human close, IssueResolved, and the timeline/graph routes
+
+**Decided — who is the actor on a close.** The auth layer provides no user identity:
+`TenantContext` carries a tenant id only, and every route resolves it from an unverified
+`X-Tenant-Id` header (the T019 stub, no `tenantBearer` is verified anywhere). Options were a fixed
+`actor_ref` such as `human` (honest but useless for "who closed this"), a fabricated user (no), or a
+caller-asserted header. Chose **`X-Actor-Id`, required, 1-128 chars**, stored as `actor_ref` on the
+`human`-cause `issue_event`: same trust level as `X-Tenant-Id`, so it adds no new hole, and a close
+cannot be recorded with nobody behind it. It is a claim, not an authenticated fact; when real auth
+lands it is replaced by the token subject and the header goes away. Not in the spec's
+`contracts/openapi.yaml` (which assumes the bearer carries it) — left as is.
+
+**Decided — `Idempotency-Key` is validated, not stored.** No idempotency-key table exists, and
+adding one is a new pattern (ADR first). Closing is naturally idempotent by state instead: closing an
+`resolved` issue, a repeat with the same or a new key, and a lost race against another close are all
+`200` with nothing written and one `IssueResolved`. Consequences, none silent in the code but all
+gaps against the contract's wording: (a) the contract's "same key, different body is 409" is **not
+implemented** — a second close with another `reason` is a 200 and its reason is discarded; the
+original actor and reason stay on the original event; (b) the key is only checked to be a UUID.
+`merged`/`removed` issues answer `409`.
+
+**Decided — `resolved` is reachable only with cause `human`.** `checkResolutionCause` in the state
+machine refuses `ingestion`/`agent`/`policy`/`system` into `resolved` for every kind. `fixed` is
+reserved (C-09, 008 R-25) and `remediated` needs 010's `RemediationVerified`; neither exists, so an
+automated resolution today would be one nobody verified. Refused rather than labelled. Two
+`state-machine.test.ts` cases that resolved with cause `agent` were changed deliberately. **When 010
+lands** it needs its own entry point that carries the verification evidence ids and builds
+`{ kind: 'remediated', verifiedAt, verificationEvidenceIds }` — do not widen the cause list.
+`IssueResolution`'s `remediated`/`fixed` variant exists in `events.ts` and is exercised only by its
+unit test (nothing constructs one in production): kept because the task asked for the shapes to be
+unrepresentable, not because a caller needs it yet.
+
+**Decided — `IssueResolved` comes from `transition()`, once per resolution.** A close after a reopen
+publishes a second `IssueResolved` (a distinct event, distinct id); consumers are idempotent by
+`(eventId, consumer)`. `knowledge_drift` issues can be closed by a human (C-59). The unit scan test
+(`issue-resolved.test.ts`) pins the producer to one builder and one call site; a future emitter has
+to update it on purpose.
+
+**Decided — the close `reason` is stored on the `state_changed` event's payload** (`{ reason }`),
+via a new optional `reason` argument on `transition`, bounded at 1000 characters (a placeholder, like
+the other windows) and NUL-free (Postgres `jsonb` cannot store NUL). Free operator text in an
+append-only table is data, never instructions, like everything else retrieved.
+
+**Decided — what "the same facts" means (T048/quickstart 16)** is written out in the test's comment
+and asserted against the tables, not between views. Not covered: the timeline does not include audit
+entries or evidence links (they are other views of the same records, not timeline rows), so the
+audit leg checks that every cited evidence id is one of the issue's evidence and visible in both
+other views.
+
+**Open — the audit leg is fixture-only.** No production caller writes `audit_entry` yet (T042), and
+`audit_entry.evidence_ids` is an array with no foreign key, so nothing refuses an entry that cites
+another issue's (or another tenant's) evidence id. The consistency test would catch it on its
+fixture; it cannot catch it in production. A real caller (002 or the first agent action) should
+validate the ids at write time.
+
+**Open / not done.** `VERSION`/`docs/changelog.md` not bumped (parallel branches would conflict on
+it). The `QUESTIONS.md` "001 T052" section named in the task brief does not exist in this branch's
+history. `createApiModule` now takes eight positional dependencies; a module-level options object
+would stop that growing, but changing it touches every e2e file and the parallel merge/unmerge
+branch. T056 (whole quickstart) not run. The generated `openapi.json` declares `X-Tenant-Id`,
+`X-Actor-Id` and `Idempotency-Key` as required header parameters (Nest infers them from `@Headers`)
+and the `Idempotent-Replay` response header (one `@ApiOkResponse` — the first swagger decorator in
+`apps/api`, from an already-installed dependency). What it omits: the close request body (`reason`,
+required, 1-1000 characters), the 400/404/409 responses as entries of their own, the UUID format of
+the key, and the fact that the key is only validated, never stored.
+
+### Review of 72c4fc6 — what changed, and what was recorded rather than built
+
+**Fixed — a no-op close is observable.** `closeIssue` returns `closed`; the route sets
+`Idempotent-Replay: true` when it is false, so a second closer is not left believing its actor and
+reason were recorded (they were not; the original stands). A header rather than a body field so the
+`Issue` schema is unchanged.
+
+**Fixed — a real close writes an audit entry (FR-012).** `transition` takes an optional `audit`
+(`{ action }`), and writes the `audit_entry` in the same transaction as the state change, the
+`issue_event` and both outbox rows (`prisma-transition-effects.ts`; same `tx.auditEntry.create`
+shape `PrismaAuditRepository.record` uses — no new pattern). Human-caused transitions only, and a
+reason is required with it; both refused before any write. Proven by a rollback test that makes the
+last write of the transaction (the `IssueResolved` outbox insert) fail with a database trigger and
+finds the state, event, audit entry and outbox rows all rolled back. The action is `issue.close`,
+**not a registered `policy_action.action_key`** — 002's list does not exist, the same known gap as
+every other audit action in this feature (T042). Still missing audit writers: nothing else that
+mutates through the API exists yet, so close is the only one.
+
+**Fixed — publish site checks the cause.** `resolutionForCause` (events.ts) is the publish site's
+own statement of the rule; `planTransitionEffects` calls it before the first write. A unit test asserts
+that, for every cause, the publish site has a resolution exactly when the state machine lets that
+cause reach `resolved`: widening one without the other fails it.
+
+**Fixed — a busy signal stream no longer turns a close into a 409.** `closeIssue` retries a
+`ConcurrentModificationError` up to 3 attempts, only when a re-read shows the state it started
+from; a different state, a graph refusal (`merged`/`removed`), or attempts exhausted surface as 409.
+Known limit: a resolve followed by a signal-driven reopen entirely inside one race window leaves the
+state equal to where it started, so the retry closes the reopened issue. That needs a version
+column to detect; not built. The asked-for "signal reopens mid-close, expect 409" test is therefore
+not written as such: a reopen only exists from `resolved`, where a close is already a no-op.
+
+**Fixed — one authority for "only a human may resolve".** `checkKnowledgeDriftGuard` lost its
+`resolved` clause; `checkResolutionCause` covers every kind. C-59's resolved clause (`knowledge_drift`
+may be auto-resolved never, human may) is now generalised by the cause rule — the kind-specific
+guard only keeps `acting`. The `knowledge_drift` assertions in `state-machine.test.ts` and
+`issue-repository.e2e.test.ts` were changed to the new message deliberately.
+
+**Test changes.** T048 now compares graph edges to the `(evidence, conclusion, relation)` tuples of
+the `evidence_link` rows, asserts the audit entry's evidence ids equal exactly the two it cited, and
+seeds two other issues in the same tenant (evidence, links, machine steps, audit) so a lost
+`issue_id` filter fails (each of the three timeline arms, the graph and the audit read was broken
+on purpose and fails). Byte-identical output is asserted across separate requests for timeline
+and graph: it proves the same stored records render the same bytes; it does not prove the order is
+the right one (`timeline.e2e.test.ts` does) or stability under concurrent writes. The concurrent
+triple-close HTTP test now only claims "exactly one real close"; the lost-race branch is entered
+deterministically by held-open-transaction tests that poll `pg_stat_activity` for a lock wait
+instead of sleeping. The producer scan now strips comments, matches the bare word (any quoting or
+template), rejects aliasing/re-export of the builder and any outbox write outside the outbox store,
+and covers `.ts/.mts/.js/.mjs/.sql` under `apps packages scripts test prisma`; nine disguised
+second producers were added one at a time and each failed it. The "fails validation" test was
+renamed to what it proves; atomicity has its own rollback test.
+
+**Recorded, not built.**
+- Unexpected 500s from any route are invisible: both `NestFactory.create` calls use
+  `logger: false` and there is no exception filter. Pre-existing; close is only the first mutation.
+- The close `reason` is stored in `issue_event.payload` but no read path returns it (the timeline
+  summary is deliberately structured-only). Write-only for now.
+- An issue already `resolved` before this change has no `IssueResolved`. No such rows exist in
+  practice (nothing but tests reached `resolved`), so there is no backfill.
+- `X-Actor-Id` is a free-form claim: a caller can send `system` or `ingestion`, which is
+  indistinguishable in `actor_ref` from the system's own actors (the audit entry's `actor_type`
+  stays `human`, which is the only thing that tells them apart). Part of the stub, gone with real auth.
+- `prisma-issue-repository.ts` sits near the 400-line lint limit (the audit/resolution logic went
+  into `prisma-transition-effects.ts` to stay under it). Any further growth needs extraction first.

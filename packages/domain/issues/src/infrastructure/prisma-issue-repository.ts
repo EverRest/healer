@@ -5,12 +5,19 @@ import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { Issue, IssueRelationship } from '../domain/issue.js';
 import { toDomain } from './issue-row.js';
 import { findStaleCandidates, markStale } from './prisma-issue-staleness.js';
-import { issueDetectedEvent, issueRelatedEvent, issueStateChangedEvent } from '../domain/events.js';
+import { planTransitionEffects, recordTransitionAudit } from './prisma-transition-effects.js';
+import {
+  issueDetectedEvent,
+  issueRelatedEvent,
+  issueResolvedEvent,
+  issueStateChangedEvent,
+} from '../domain/events.js';
 import {
   FingerprintAlreadyOpenError,
   type IssueRepository,
   type NewIssue,
   type StaleCandidate,
+  type TransitionAudit,
 } from '../domain/repository.js';
 import {
   ConcurrentModificationError,
@@ -235,6 +242,8 @@ export class PrismaIssueRepository implements IssueRepository {
     to: Issue['state'],
     cause: IssueEventCause,
     actorRef: string,
+    reason?: string,
+    audit?: TransitionAudit,
   ): Promise<Issue> {
     // SERIALIZABLE, not the default READ COMMITTED — two concurrent transitions both reading the
     // same `current.state` and both validating fine against the graph (review finding: both
@@ -266,6 +275,7 @@ export class PrismaIssueRepository implements IssueRepository {
           // Pure validation (001 T012) — the graph is the authority on what may happen next,
           // never the caller; a rejected transition never touches the database.
           const { event } = transitionIssue(toDomain(current), to, cause, actorRef);
+          const effects = planTransitionEffects(to, cause, reason, audit);
           const now = new Date();
 
           // `resolved_at` (001 T022, FR-005): set the moment this transition lands on `resolved`,
@@ -303,15 +313,30 @@ export class PrismaIssueRepository implements IssueRepository {
               toState: event.toState,
               cause: event.cause,
               actorRef: event.actorRef,
-              payload: {} as Prisma.InputJsonValue,
+              payload: (reason === undefined ? {} : { reason }) as Prisma.InputJsonValue,
               observedAt: now,
             },
           });
+          if (effects.audit !== undefined) {
+            await recordTransitionAudit(
+              tx,
+              { tenantId: where.tenantId, issueId: where.id, actorRef },
+              effects.audit,
+            );
+          }
           // Same transaction as issue_event above (001 T013, 012 FR-031) — see create().
           await enqueue(
             new PrismaOutboxTransaction(tx),
             issueStateChangedEvent(where.tenantId, event),
           );
+          if (effects.resolution !== undefined) {
+            // The resolution came from the cause (`planTransitionEffects`), never from `to`
+            // alone: today only a human close has one (`self_resolved`, no evidence, C-09).
+            await enqueue(
+              new PrismaOutboxTransaction(tx),
+              issueResolvedEvent(where.tenantId, where.id, effects.resolution),
+            );
+          }
           // Can't be null: `affected === 1` above already proved the row exists in this transaction.
           return toDomain(updated!);
         },

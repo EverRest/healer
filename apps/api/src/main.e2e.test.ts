@@ -66,6 +66,8 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopIssues,
       noopEvidence,
       noopAudit,
+      { forIssue: () => Promise.resolve([]) },
+      { forIssue: () => Promise.resolve({ nodes: [], edges: [] }) },
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

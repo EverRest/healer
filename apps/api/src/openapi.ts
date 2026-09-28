@@ -6,8 +6,9 @@ import type {
   IngestionDeliveryRepository,
   IssueRepository,
   SignalQueue,
+  TimelineRepository,
 } from '@healer/domain-issues';
-import type { EvidenceRepository } from '@healer/domain-evidence';
+import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
 import { configureApiPrefix, createApiModule } from './main.js';
 
 // Route shape only — none of these are ever called, contract generation never sends a request.
@@ -43,6 +44,11 @@ const noopAudit: AuditRepository = {
   resolveAgentRunFacts: () => Promise.resolve(null),
 };
 
+const noopTimeline: TimelineRepository = { forIssue: () => Promise.resolve([]) };
+const noopEvidenceGraph: EvidenceGraphRepository = {
+  forIssue: () => Promise.resolve({ nodes: [], edges: [] }),
+};
+
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
  * module declaration — two module definitions is two places the route set can drift apart. It
@@ -63,6 +69,8 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopIssues,
     noopEvidence,
     noopAudit,
+    noopTimeline,
+    noopEvidenceGraph,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

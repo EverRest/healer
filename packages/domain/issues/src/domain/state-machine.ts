@@ -68,20 +68,32 @@ const GRAPH: Readonly<Record<IssueState, readonly IssueState[]>> = {
  * auto-resolved in either direction (FR-001a, 001 T038) — only a person knows whether the
  * disagreeing document is stale or the code is wrong. The graph itself carries no `kind`, so this
  * is the one place that narrows it: `acting` (data-model.md: "action taken", the only state
- * representing an executed change) is refused unconditionally, and `resolved` is refused unless
- * a human caused it — "auto-resolve in either direction" is exactly an automated cause reaching
- * `resolved`, not a person choosing to close it (FR-021 already allows that for any kind).
+ * representing an executed change) is refused unconditionally. "Auto-resolve in either direction"
+ * is an automated cause reaching `resolved`; that is refused for *every* kind by
+ * `checkResolutionCause` below, the one authority for it (C-59's clause, generalised by 001 T057) —
+ * a person choosing to close a drift issue stays allowed (FR-021).
  */
-function checkKnowledgeDriftGuard(issue: Issue, to: IssueState, cause: IssueEventCause): void {
+function checkKnowledgeDriftGuard(issue: Issue, to: IssueState): void {
   if (issue.kind !== 'knowledge_drift') return;
   if (to === 'acting') {
     throw new InvalidIssueTransitionError(
       `knowledge_drift issues cannot enter acting — they terminate at human adjudication (FR-001a)`,
     );
   }
+}
+
+/**
+ * `resolved` is reachable only by a human close in v1 (001 T057, FR-021, C-09): the other two
+ * resolution kinds need a verified emitter — `fixed` is reserved with no emitter (008 R-25) and
+ * `remediated` waits on 010's `RemediationVerified` — and neither exists. Refusing the edge for
+ * every other cause, rather than labelling it, keeps "resolved" from ever meaning something
+ * nobody verified; the day a verified emitter lands it gets its own entry point carrying the
+ * evidence ids, not a widened cause list here.
+ */
+function checkResolutionCause(to: IssueState, cause: IssueEventCause): void {
   if (to === 'resolved' && cause !== 'human') {
     throw new InvalidIssueTransitionError(
-      `knowledge_drift issues cannot be auto-resolved (cause: ${cause}) — only a human resolution is allowed (FR-001a)`,
+      `only a human can resolve an issue in v1 (cause: ${cause}) — no verified-resolution emitter exists yet (C-09)`,
     );
   }
 }
@@ -97,7 +109,8 @@ export function transitionIssue(
   if (!allowed.includes(to)) {
     throw new InvalidIssueTransitionError(`${issue.state} -> ${to} is not a declared transition`);
   }
-  checkKnowledgeDriftGuard(issue, to, cause);
+  checkKnowledgeDriftGuard(issue, to);
+  checkResolutionCause(to, cause);
   return {
     issue: { ...issue, state: to },
     event: { issueId: issue.id, fromState: issue.state, toState: to, cause, actorRef },
