@@ -174,7 +174,34 @@ agent-run facts rather than a second table. An entry whose `actor_type` is not `
 ## audit.deletion_tombstone
 
 `id`, `tenant_id`, `target_type`, `target_id`, `requested_by`, `deleted_at`, `reason`. Content is
-not retained — only the fact that a deletion happened (R-12).
+not retained — only the fact that a deletion happened (R-12). Identifiers, a time and the requester's
+own stated `reason` (1–500 characters) and `requested_by` (1–128, a caller-asserted actor string): no
+column exists that deleted content could be put in.
+
+Unique `(tenant_id, target_type, target_id)` — one tombstone per deleted target. **Immutable**: a
+trigger rejects `UPDATE`, `DELETE` and `TRUNCATE` and, unlike the four append-only tables, does *not*
+honour the `healer.privileged_write` bypass, because the deletion path that writes a tombstone turns
+that bypass on (migration `20260929000000`).
+
+Deleting an issue (T053) removes, in one transaction: the `issue` row; its `issue_event`, `evidence`
+and `evidence_link` rows; `issue_relationship` rows in both directions; its `workflow_run`,
+`workflow_transition` and `workflow_callback` rows; `audit_entry` rows whose `target_id` is the issue
+or one of its evidence records; and the outbox rows about it. `agent_run` rows stay (the tenant's spend)
+with `issue_id` set to null. It is refused (nothing changed) while other issues are still merged into
+it, while it is itself `merged` into another issue, and while an outbox drain worker holds a claim on
+one of its events. What it does and does not touch of other issues:
+
+- Never touched: their own rows — events (including ones whose payload names the deleted id, which
+  the tombstone resolves), evidence, relationships to third issues, audit entries (including an entry
+  about them that cites the deleted issue's evidence ids).
+- Touched, because nothing can tell them apart: **every `evidence_link` naming one of the deleted
+  issue's evidence records, whoever's conclusion made it**. A link carries a `conclusion_id` and no issue,
+  and the conclusion tables (006 and later) do not exist yet. The one situation in which another issue
+  can legitimately cite this issue's evidence in v1 is a merge, which is why a `merged` issue is
+  refused ("unmerge it first"); a citation from a conclusion the deletion cannot attribute is lost
+  (QUESTIONS.md "001 T053").
+
+`IssueDeleted` (tombstone id only) is written to the outbox in the same transaction.
 
 ## State transitions
 
@@ -189,7 +216,9 @@ issue:  detected ──context collected──▶ investigating
         resolved ──matching signal outside window──▶ new issue, recurrence_of
         any ──merge──▶ merged (a live merged_into relationship; reversible)
         merged ──unmerge──▶ the state the merge left (recorded on the merge event)
-        any ──tenant deletion──▶ removed + tombstone
+        any ──tenant deletion──▶ row deleted + tombstone (not `removed`: that row would keep the
+                                 fingerprint and component — `removed` stays a state nothing enters
+                                 by deletion; see QUESTIONS.md "001 T053")
 
 evidence: linked ──expires_at, or source unavailable──▶ detached   (a conclusion cites it: the row,
                                                                     its excerpt and label stay)

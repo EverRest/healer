@@ -953,6 +953,228 @@ its own issue. Nothing surprising; not run together here since the branches are 
 **Not done.** HTTP routes (`/merge`, `/unmerge` and their isolation tests, and `Idempotency-Key`
 handling); OpenAPI; the ingestion routing above; anything in `apps/api`.
 
+## 001 T053 — tenant deletion of an issue: judgment calls, and what is not done
+
+**Shape.** `PrismaIssueDeletionRepository.deleteIssue` (`prisma-issue-deletion.ts`, its own port
+`IssueDeletionRepository` in `domain/deletion.ts`, thin command `deleteIssue`). One `withPrivilegedWrite`
+transaction: lock the issue row `FOR UPDATE`, refuse if issues are still merged into it, lock its
+evidence rows `FOR UPDATE`, delete everything derived, insert the tombstone, enqueue `IssueDeleted`
+(payload `{ tombstoneId }`, `subjectId` the deleted id). Domain/repository/command level only; no HTTP
+route, `apps/api` and `openapi.json` untouched (`contracts/openapi.yaml` already has `DELETE
+/issues/{issueId}`). The bypass covers every statement of that transaction, so the callback holds only
+the locks, the one refusal check, the deletes and the tombstone/outbox writes.
+
+**Decided — the issue row is deleted, it does not move to `removed`.** `data-model.md` drew `any ──tenant
+deletion──▶ removed + tombstone`, and the merged-state migration's comment assumed a removed row stays.
+A `removed` row would keep the fingerprint, component and environment — derived from the customer's
+errors — which is the content FR-018 says not to retain. So the row goes and the diagram now says so.
+`removed` stays a state reachable by `transition()` (a legal edge; the merge fixes for it stand) that
+deletion never enters. Consistency with `20260928120000_merged_state_invariant` is tested in both
+directions: a merged issue with a live row deletes cleanly (the deferred trigger sees no subject and
+accepts), and so does a merged-then-removed one.
+
+**Decided, each dangling reference.**
+
+- `issue_relationship` rows in **either direction** are deleted (`related`, `recurrence_of`,
+  `merged_into`): they are derived from this issue and would point at nothing. The *other* issue keeps
+  every row of its own — including an `issue_event` whose payload names the deleted id (`related`,
+  and `merged`/`unmerged` events on children, if any). That is an identifier, the tombstone resolves it, and
+  those tables are append-only; rewriting another issue's history is worse than a dangling id.
+- **Issues merged into the deleted one: refuse** (`IssueHasMergedChildrenError`, names the children,
+  nothing changed). Deleting the `merged_into` rows would leave them `merged` with no live row, which the
+  database refuses to commit. Restoring them is `unmerge`, whose result depends on fingerprints that may
+  have been taken since — a person's call. Cost: a deletion request against a survivor needs its
+  duplicates unmerged first. A child that has since been `removed` does not count (same rule as the
+  merge side). If the product wants "delete the survivor" to just work, the cheap version is to unmerge
+  the children inside the deletion — not done.
+- `workflow_run`, `workflow_transition`, `workflow_callback` for the issue: deleted (machine steps of a
+  deleted issue). `workflow_run` has no FK to `issue`, so nothing would have failed without this. A run
+  inserted for the id *after* the deletion is not refused by anything (no FK) — that is 012's writer.
+- **`outbox` rows with `subject_id` = the issue: all deleted, published or not** (`IssueDetected`
+  carries the fingerprint). An unpublished `IssueStateChanged` for a deleted issue would otherwise be
+  delivered afterwards; a *delivered* one cannot be recalled — `IssueDeleted` is the signal, and a
+  consumer that keeps a copy has to act on it (contract: consumed by "audit"). **A row a drain worker
+  has claimed is not deleted underneath it** (review fix, see below): the deletion refuses instead.
+- `agent_run`: **kept, `issue_id` set to null.** It is the tenant's spend (model, tokens, cost — 012's
+  record, and budget accounting reads it); it holds no prompt or arguments. What stays is its tool-call
+  name/digest/outcome list and `outcome`. If those count as "derived audit content", the alternative is
+  deleting the run and undercounting spend — a decision for 012's owner.
+- `audit_entry`: deleted where `target_id` is the issue or **one of its evidence ids** (read before the
+  evidence goes). An entry about *another* issue that merely cites this issue's evidence in
+  `evidence_ids` **stays** (tested): it is that issue's audit and a `related` decision could legitimately
+  cite it; the ids are identifiers. A retention-purge entry (`evidence.retention_purge`, target the
+  evidence id, "id and fact only") for evidence purged *before* the deletion also stays — nothing links
+  it to the issue any more. Entries whose `target_id` is a future conclusion of the issue (a diagnosis
+  id) are **not** found; whoever adds those tables must add them to the deletion (see the next item).
+- **A closed list with a reader.** `ISSUE_ID_COLUMNS` names every column in the database called
+  `issue_id`/`other_issue_id` that the deletion handles; a test compares it with `information_schema`,
+  so 006's diagnosis table (or anyone's) fails it until `prisma-issue-deletion.ts` deals with it. It
+  cannot see a table that refers to the issue without such a column (`evidence_link`, `audit_entry`,
+  `outbox`, a conclusion cited via `evidence_link.conclusion_id`): those are in the code by name.
+
+**Decided — the tombstone is the audit record; no `audit_entry` is written for the deletion.** R-03
+says the privileged path is itself audited, and `evidence.retention_purge` writes an entry. Here the
+tombstone is that record: it lives in the `audit` schema, says who/when/why, and is now immutable. A
+fresh `audit_entry` targeting the deleted id would make an audit read for that id return something,
+contradicting "audit content gone"; targeting the tombstone id instead would just duplicate it. Either
+way the action key (`issue.delete`) would be a third unregistered placeholder next to `issue.close` and
+`evidence.retention_purge` — 002's `policy_action` list still does not exist. Same open gap as the
+index item 5; decide once for all three.
+
+**Decided — the tombstone table now has teeth (migration `20260929000000`, with `down.sql`).** It was
+neither immutable nor unique. Added: unique `(tenant_id, target_type, target_id)` (tenant-leading; the
+old `(tenant_id, deleted_at)` index stays), `CHECK`s on `requested_by` (1-128) and `reason` (1-500, not
+blank), and triggers rejecting `UPDATE`/`DELETE`/`TRUNCATE` that **do not honour
+`healer.privileged_write`** — that flag covers the whole deletion transaction, and a tombstone the
+deleting path could rewrite proves nothing. Nothing may delete a tombstone; tenant offboarding would
+need its own migration and decision. `down.sql` is exercised (applied, checked, re-applied). Table was
+empty (no prior writer), so the constraints install without a data check. `reason` and `requested_by`
+are the requester's own words and the only way text could be smuggled into a tombstone; bounded, not
+sanitised — a requester who pastes a log line into `reason` has put it there. `requested_by` is a
+caller-asserted actor string, the `X-Actor-Id` trust level.
+
+**Decided — idempotency and races.** A deleted issue is found by `(tenant, 'issue', id)` in the
+tombstone after the row lock finds no row: a repeat, or the loser of two concurrent requests, gets
+`already_deleted` with the winner's tombstone and writes nothing (its reason/requester are dropped — the
+first request is the record). Another tenant's issue, a missing id and a malformed one are the same
+`NotFoundError('Issue')`; another tenant asking after the owner deleted it also gets not-found (the
+tombstone lookup is tenant-scoped). Row locks, held-open transactions and `pg_stat_activity` polling
+(no sleeps) for: two concurrent deletions; a signal mid-commit; evidence mid-commit (a share of the issue
+row); an **uncommitted evidence link** (this is why the evidence rows are locked `FOR UPDATE` — without
+it the `DELETE` waits for the link's foreign-key lock, the link commits and the delete fails on the
+FK); a transition mid-commit; a merge queued before / after the deletion; a retention purge queued
+before / after. Deterministic outcomes are asserted, e.g. deletion-first makes the merge
+`NotFoundError` and leaves the would-be child untouched. A deadlock with an outside transaction
+(forced: it holds the evidence rows and reaches for the issue row) surfaces as
+`ConcurrentModificationError` (review fix: this scenario is now tested). Since the review, every
+`waitForBlocked` names the holder it waits behind (its backend pid) and counts only waiters that began
+after that holder's transaction — a waiter leaked by an earlier test no longer satisfies it.
+
+**Mutation-checked, first round** (production code broken, specific test seen failing, restored byte-for-byte):
+no `FOR UPDATE` on the issue row (4 race tests); none on the evidence rows (the uncommitted-link test);
+merged-children check; lock without `tenant_id`; no UUID check; each of outbox, agent-run, reverse
+relationship, tombstone-lookup and the audit-before-evidence order; three deletes made wider than the
+issue (events, outbox, audit); the correlation check; `set_config(..., false)` in
+`withPrivilegedWrite` (my leak test, on a `connection_limit=1` client, fails — the target is uncited
+evidence, so a leak would really delete it); each trigger, the bypass-honouring variant, the unique
+index and the `CHECK`s in the migration; `>` to `>=` and the NUL clause in `checkDeletionRequest`.
+**Not separately testable:** the `tenant_id` predicate on the individual `DELETE` statements — ids are
+globally unique primary keys, so removing it changes no outcome; it is defence in depth (the same
+finding as T052's `NOT EXISTS` — **superseded by the review round below**, where the FK-less tables'
+predicates are proved). The first version of the implementation was written before the e2e file
+(test-after, then mutation-checked), not red-green.
+
+**Open / not done.**
+- No HTTP route (`DELETE /issues/{issueId}`, its `Idempotency-Key`, its tenant-isolation e2e test,
+  `openapi.json`); nothing calls `deleteIssue` in production. `findTombstone` (review fix, below) is the
+  domain-level reader of R-12's record, but no route or view calls it either: "a silent gap is never
+  mistaken for data loss" still needs the route (answering from the tombstone) to be true for a caller.
+- Tenant-level deletion ("tenant deletion" as in offboarding a whole tenant) is not this; it removes one
+  issue per call, so a whole-tenant erasure is a loop over issues plus tables that have no issue
+  (`ingestion_delivery`, provider config) — unbuilt.
+- Signals for the deleted fingerprint open a *new* issue afterwards (the fingerprint slot is free);
+  nothing remembers "this tenant asked to forget it".
+- Machine copies outside Postgres are out of scope: BullMQ jobs still holding a signal, the broker's
+  delivered events, backups (the backup runbook does not say how deleted tenants age out).
+- `VERSION` and `docs/changelog.md` not bumped (parallel branches conflict on them).
+- The `actor` on a deleted issue's `state_changed` events etc. is gone with them; the tombstone's
+  `requested_by` is the only person named.
+
+## Review round on T053 (commit amended) — what changed, and what is recorded rather than built
+
+**1. Links of a merge survivor (FR-009) — decided: refuse.** Deleting issue A used to delete every
+`evidence_link` whose evidence belongs to A, whoever's conclusion made it. Nothing ties a link's
+`conclusion_id` to an issue and the conclusion tables do not exist, so the deletion cannot tell. The one
+v1 situation in which another issue legitimately cites A's evidence is a merge (the survivor's diagnosis
+cites the merged child), so `deleteIssue` now refuses a `merged` issue (`IssueMergedIntoAnotherError`,
+names the survivor, nothing changed): unmerge first. Tested: the survivor's link survives the refusal;
+after `unmerge` the deletion goes through; a non-merged issue still deletes its own links.
+**Exception, on purpose:** an issue merged and then `removed` keeps its live `merged_into` row but
+`unmerge` refuses it (typed error), so refusing its deletion too would leave it undeletable for good.
+It is deleted, and a survivor conclusion that cited its evidence loses that link — the same residual as
+below. **Open (unknowable now):** a link from a conclusion we cannot attribute (any future conclusion
+table, 006+) to this issue's evidence is deleted with it, and with it that conclusion's FR-009 support.
+When the conclusion tables exist the deletion should refuse (or re-home) links whose conclusion belongs
+to another issue; `data-model.md` now says exactly this.
+
+**2. Timeouts — decided: a typed error, and the lock wait is what is bounded.** `withPrivilegedWrite`
+takes an optional `{ maxWait, timeout }` (passed to `$transaction`; T052's call sites are unchanged and
+their tests pass). Finding while writing the test: **Prisma's `timeout` does not cut a statement that is
+blocked on a lock short** — the rollback queues behind the blocked statement, the promise hangs until the
+holder lets go, and only then P2028. So the deletion sets `lock_timeout` (default 30 s) as the first
+statement of its transaction (a bounded wait -> SQLSTATE 55P03) and passes `timeout` 120 s / `maxWait`
+30 s; `55P03` and `P2028` both become `DeletionTimedOutError` (nothing changed, the caller must raise the
+bound — a retry of a too-big issue fails identically), everything else goes through
+`translateConcurrencyError` as before (deadlock and serialisation failures stay
+`ConcurrentModificationError`). `transition()`/merge still map P2028 to "concurrent"; I did not show that
+wrong for them (their transactions are short and retried by design), so it is unchanged. All three
+bounds are constructor options; the values are placeholders.
+
+**3. A claimed outbox row — decided: refuse, and let the drain survive a vanished row.** (a) The
+deletion locks the issue's unpublished outbox rows `FOR UPDATE` (the drain claims with `SKIP LOCKED`, so
+it can no longer claim what we hold, and a claim still being committed is waited for) and refuses with
+`IssueEventsInFlightError` (retry shortly, nothing changed) if any is claimed inside the drain's own
+claim window. That window is read from the drain's constant, now exported (`CLAIM_TIMEOUT_SQL`,
+`packages/events`), not copied. A claim older than the window and a row already published do not
+block (`markPublished` leaves `claimed_at` set, so the published check matters). (b) `drain()` treats
+`OutboxRowGoneError` (thrown by `PrismaOutboxStore.markPublished`/`recordFailure` on P2025) as "row gone,
+not batch failed": counted in a new `DrainResult.vanished`, batch continues, any other store error still
+aborts. `DrainResult` gained a field, so the two existing `toEqual` assertions in `outbox.test.ts` were
+updated deliberately. Both halves were watched failing before they were fixed.
+
+**4. Integrity.** The final `DELETE FROM issue` must remove exactly one row (`DeletionIntegrityError
+'issue_not_deleted'`, transaction rolled back — tested with a `BEFORE DELETE` trigger that swallows it);
+a tombstone that already exists for a live issue (23505) is `DeletionIntegrityError
+'tombstone_for_live_issue'` instead of a raw P2002. The repository validates `requestedBy`/`reason`
+itself (`checkDeletionRequest`, before anything is locked — tested on a raw call with the row locked so
+that a call reaching the lock would hang); the command still checks too.
+
+**5. Reader.** `findTombstone(where)` on the deletion port and repository (a `findFirst` scoped by
+tenant, `null` for another tenant's, an unknown or a malformed id). About 10 lines. **No HTTP route in
+this batch**, as before.
+
+**6. Comments.** `tenantDigest` no longer claims "every table" by hand: tables come from
+`information_schema` (as does the new whole-database scan). **The comment in migration
+`20260928120000_merged_state_invariant` — "tenant deletion may remove a merged issue, and its row stays
+as it was" — is stale**: deletion deletes the issue row and its `merged_into` row (and now refuses a
+`merged` issue). The migration is committed and cannot be edited (`prisma-migrations.md`); the
+invariant (B) it describes (`removed` with a live row) is unaffected.
+
+**7-9, 11. Tests that proved less than claimed.** "Nothing survives" is now read from the catalogue:
+after a deletion, every base table is scanned for any row whose text mentions the issue's id, its
+evidence ids, its run id, or any of six content strings (fingerprint, excerpt, source ref, label,
+payload marker, component id) and the only hits are the tombstone and the `IssueDeleted` row. The
+fixture also has another issue's conclusion citing the deleted issue's evidence and a `workflow_run`
+with an `awaiting` payload. `survivors()`/`tenantDigest()` are derived from `information_schema`
+(`EXCLUDED_TABLES` is the one place to skip a table, currently empty). The `tenant_id` predicate of
+every FK-less table is now proved by planting another tenant's rows that carry the same ids
+(`audit_entry` both target kinds, `outbox`, `workflow_run` + step + callback, `agent_run`) and
+breaking each predicate: `audit`, `outbox`, `workflow_run`, `agent_run`, and the callback and
+transition subqueries each fail the test. Also mutation-checked, each watched failing then restored
+byte-for-byte: the merged-into refusal, `lock_timeout`, both timeout mappings, the `timeout` pass-through,
+the in-flight check, its `FOR UPDATE`, its window and its `published_at` filter, the one-row check, the
+23505 mapping, the repository validation, `findTombstone`'s tenant scope and id check, and skipping a
+table (the whole-database scan fails). New scenarios: timeout, deadlock, claimed outbox (three
+variants), 23505, raw-call validation, `findTombstone`. Red first this time: the new e2e tests were
+run against the pre-fix code (the ones for behaviour that already worked — a stale claim, the deadlock
+mapping — passed and are regression cover, not red).
+
+**Recorded, not built.**
+- (a) `workflow_run.issue_id` and `agent_run.issue_id` have no foreign key and no lock on the issue, so a
+  row inserted concurrently with or after the deletion keeps the deleted id and is never removed.
+  Latent — no production code creates runs yet — and the `information_schema` test compares column
+  names, it cannot see orphaned rows. `agent_run` is named here as well as `workflow_run`.
+- (b) Retention-purge `audit_entry` rows for evidence purged before the deletion survive (target =
+  evidence id, constant reason); `audit_entry.reason` is free text in general; `agent_run.correlation_id`
+  is kept and links surviving rows and already-delivered events to the deleted issue's work.
+- (c) The `removed` state is now effectively dead: still a legal `transition()` target, but no caller
+  enters it (deletion deletes the row), so the `removed` checks in `merge.ts` / `prisma-issue-merge.ts`
+  and invariant (B) of the merged-state migration never fire in practice. Whether to drop the state from
+  the graph is a spec decision.
+- (d) Refusing to delete a survivor with merged children, and (new) an issue that is itself merged, are
+  product calls; the alternative is to unmerge inside the deletion.
+- (e) Delivered outbox events, BullMQ jobs still holding a signal, and backups cannot be recalled.
+
 ## Decisions waiting on Pavlo — phase 8 integration (index; the detail is in the named sections)
 
 Nothing below blocks the work already done; each has a default in place and a cost if the default is
@@ -998,6 +1220,11 @@ wrong. Ordered by how much a wrong default costs.
    `recordOccurrence` does ~7 round trips per signal with the row locked for 4 of them — folding the
    SELECT and event INSERT into one statement would cut the lock hold 3-4x, a source change for the
    owner of ingestion, not made here.
-10. **Publishing this work.** Everything for T045-T057 except T053/T056 sits on the local branch
+10. **Deleting a survivor, or an issue that is itself merged, is refused**, and a deletion writes no
+    `audit_entry` (the immutable tombstone is the record). Cheap alternatives: unmerge inside the
+    deletion; an entry targeting the tombstone id (the fourth answer to item 5). A link from a conclusion
+    the deletion cannot attribute to an issue is deleted with the evidence — unknowable until 006's
+    tables exist. `findTombstone` exists; no route calls it. (`001 T053`.)
+11. **Publishing this work.** Everything for T045-T057 except T056 sits on the local branch
     `worktree-001-phase8-staleness` (plus the two agent branches it merged), unpushed by instruction.
     Squash or keep the history, and when to run a full green `make ci` first, are yours to call.

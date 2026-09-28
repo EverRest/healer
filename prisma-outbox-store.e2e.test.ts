@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import {
   drain,
+  OutboxRowGoneError,
   PrismaOutboxStore,
   toOutboxRecord,
   type DomainEvent,
@@ -113,5 +114,38 @@ describe('PrismaOutboxStore (001 T013, review fixes)', () => {
     const reclaimed = await store.claimUnpublished(1);
     expect(reclaimed).toHaveLength(1);
     expect(reclaimed[0]!.attempts).toBe(1);
+  });
+
+  it('a claimed row deleted before it is marked is "gone", not a failed batch (001 T053)', async () => {
+    await query(pg, `delete from "events"."outbox"`);
+    const records = ['First', 'Second', 'Third'].map((name) => toOutboxRecord(event(name)));
+    for (const record of records) {
+      await prisma.outbox.create({ data: { ...record, payload: record.payload as object } });
+    }
+    // The row is deleted while the broker call for it is in flight — after the claim committed, so
+    // the deletion did not have to wait for anything.
+    const broker: EventBroker = {
+      publish: async (record) => {
+        if (record.name === 'First') {
+          await query(pg, `delete from "events"."outbox" where id = '${record.id}'`);
+        }
+      },
+    };
+
+    const result = await drain(store, broker);
+
+    expect(result).toEqual({ published: 2, failed: 0, vanished: 1 });
+    expect(
+      await query(pg, `select count(*) from "events"."outbox" where published_at is not null`),
+    ).toBe('2');
+  });
+
+  it('recordFailure on a deleted row is also "gone"', async () => {
+    await expect(store.recordFailure(randomUUID(), 'boom')).rejects.toBeInstanceOf(
+      OutboxRowGoneError,
+    );
+    await expect(store.markPublished(randomUUID(), new Date())).rejects.toBeInstanceOf(
+      OutboxRowGoneError,
+    );
   });
 });

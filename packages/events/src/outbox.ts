@@ -64,9 +64,23 @@ export async function enqueue(
   return record;
 }
 
+/**
+ * A store throws this from `markPublished` / `recordFailure` when the row is no longer there — it was
+ * deleted after this worker claimed it (tenant deletion of an issue, 001 T053). Nothing is wrong with
+ * the rest of the batch, so `drain` counts it and moves on.
+ */
+export class OutboxRowGoneError extends Error {
+  constructor(readonly recordId: string) {
+    super(`outbox record ${recordId} no longer exists`);
+    this.name = 'OutboxRowGoneError';
+  }
+}
+
 export interface DrainResult {
   readonly published: number;
   readonly failed: number;
+  /** Claimed rows deleted before this worker could mark them; counted, not retried. */
+  readonly vanished: number;
 }
 
 /**
@@ -84,15 +98,26 @@ export async function drain(
 
   let published = 0;
   let failed = 0;
+  let vanished = 0;
   for (const record of batch) {
     try {
       await broker.publish(record);
       await store.markPublished(record.id, now());
       published += 1;
     } catch (error) {
-      await store.recordFailure(record.id, error instanceof Error ? error.message : 'unknown');
-      failed += 1;
+      if (error instanceof OutboxRowGoneError) {
+        vanished += 1;
+        continue;
+      }
+      try {
+        await store.recordFailure(record.id, error instanceof Error ? error.message : 'unknown');
+        failed += 1;
+      } catch (recordError) {
+        // Deleted while its failure was being recorded: the row is gone, the rest of the batch is not.
+        if (!(recordError instanceof OutboxRowGoneError)) throw recordError;
+        vanished += 1;
+      }
     }
   }
-  return { published, failed };
+  return { published, failed, vanished };
 }

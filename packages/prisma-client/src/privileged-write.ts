@@ -15,13 +15,18 @@ import type { Prisma, PrismaClient } from '@healer/prisma-generated';
  * triggers accept any UPDATE, DELETE or TRUNCATE on every append-only table while it is on. Keep
  * `fn` to the destructive statement and the audit write that describes it; do not do a
  * read-modify-write in here.
+ *
+ * `options` are Prisma's interactive-transaction bounds, passed through unchanged (omitted: Prisma's
+ * 5 s). Note `timeout` does not cut a statement blocked on a lock short — set `lock_timeout` inside
+ * `fn` for that.
  */
 export async function withPrivilegedWrite<T>(
   prisma: PrismaClient,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  options?: { readonly maxWait?: number; readonly timeout?: number },
 ): Promise<T> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT set_config('healer.privileged_write', 'on', true)`;
     return fn(tx);
-  });
+  }, options);
 }
