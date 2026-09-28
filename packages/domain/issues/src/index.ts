@@ -14,6 +14,7 @@ export * from './domain/signal.js';
 export * from './domain/signal-queue.js';
 export * from './domain/state-machine.js';
 export * from './domain/timeline.js';
+export * from './application/commands/close-issue.js';
 export * from './application/commands/correlate-issue.js';
 export * from './application/commands/enqueue-signal-batch.js';
 export * from './application/commands/ingest-signal-batch.js';

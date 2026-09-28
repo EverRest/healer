@@ -9,13 +9,18 @@ import { createQueue } from '@healer/workflow';
 import {
   BullmqSignalQueue,
   PrismaAuditRepository,
+  PrismaTimelineRepository,
   PrismaIngestionDeliveryRepository,
   PrismaIssueRepository,
   type AuditRepository,
   type IngestionDeliveryRepository,
   type IssueRepository,
 } from '@healer/domain-issues';
-import { PrismaEvidenceRepository, type EvidenceRepository } from '@healer/domain-evidence';
+import {
+  PrismaEvidenceGraphRepository,
+  PrismaEvidenceRepository,
+  type EvidenceRepository,
+} from '@healer/domain-evidence';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import {
@@ -82,6 +87,8 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaIssueRepository(prisma),
       new PrismaEvidenceRepository(prisma),
       new PrismaAuditRepository(prisma),
+      new PrismaTimelineRepository(prisma),
+      new PrismaEvidenceGraphRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -354,6 +361,8 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopIssues,
       noopEvidence,
       noopAudit,
+      { forIssue: () => Promise.resolve([]) },
+      { forIssue: () => Promise.resolve({ nodes: [], edges: [] }) },
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

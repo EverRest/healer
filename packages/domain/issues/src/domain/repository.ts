@@ -55,6 +55,12 @@ export interface StaleCandidate {
   readonly lastProgressAt: Date;
 }
 
+/** The audit entry a transition writes atomically with itself. `action` should be a registered
+ *  `policy_action.action_key` (002, not built — the same known gap as `AuditRepository.record`). */
+export interface TransitionAudit {
+  readonly action: string;
+}
+
 /**
  * Create, read, transition and record-occurrence only (FR-006) — there is no generic update.
  * `transition` and `recordOccurrence` are the two legitimate mutations, and both always write
@@ -89,6 +95,15 @@ export interface IssueRepository {
     to: Issue['state'],
     cause: IssueEventCause,
     actorRef: string,
+    /** Free text a person gave for the change (a close's `reason`); recorded on the event. */
+    reason?: string,
+    /**
+     * Also write the `audit_entry` for this human action (FR-012) in the same transaction as the
+     * state change, its event and the outbox rows. Human-caused transitions only, and `reason` is
+     * required with it (it becomes the entry's reason) — either violation is refused before
+     * anything is written.
+     */
+    audit?: TransitionAudit,
   ): Promise<Issue>;
   /**
    * A matching signal attaching to an already-open issue (FR-002): `occurrenceCount` increments,

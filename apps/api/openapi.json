@@ -121,6 +121,91 @@
         "responses": { "200": { "description": "" } },
         "tags": ["Issues"]
       }
+    },
+    "/api/v1/issues/{issueId}/timeline": {
+      "get": {
+        "operationId": "IssuesController_getTimeline",
+        "parameters": [
+          {
+            "name": "issueId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Issues"]
+      }
+    },
+    "/api/v1/issues/{issueId}/evidence-graph": {
+      "get": {
+        "operationId": "IssuesController_getEvidenceGraph",
+        "parameters": [
+          {
+            "name": "issueId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Issues"]
+      }
+    },
+    "/api/v1/issues/{issueId}/close": {
+      "post": {
+        "operationId": "IssuesController_close",
+        "parameters": [
+          {
+            "name": "issueId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-actor-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resolved issue. A close that changed nothing (already resolved, or another close won the race) is also a 200 and is marked with `Idempotent-Replay: true`; its actor and reason were not recorded. 400: missing/invalid Idempotency-Key (uuid), X-Actor-Id (1-128) or reason (1-1000). 404: unknown issue or another tenant. 409: merged or removed.",
+            "headers": {
+              "Idempotent-Replay": {
+                "description": "Present (`true`) only when this request closed nothing",
+                "schema": { "type": "string", "enum": ["true"] }
+              }
+            }
+          }
+        },
+        "tags": ["Issues"]
+      }
     }
   },
   "info": {

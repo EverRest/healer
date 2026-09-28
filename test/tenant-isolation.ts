@@ -38,21 +38,26 @@ export async function assertTenantIsolated(
     createUnderTenant(tenantId: string): Promise<string>;
     /** The status tenant A's own request for its own resource should return. Default 200. */
     ownRequestStatus?: number;
+    /** Extra headers and a body for a mutation that will not even reach its lookup without them
+     *  (001 T057: `POST /issues/{id}/close` needs an idempotency key, an actor and a reason).
+     *  Sent identically for both tenants, so the only difference between the two requests is
+     *  the tenant. */
+    readonly requestHeaders?: Record<string, string>;
+    readonly body?: unknown;
   },
 ): Promise<void> {
   const httpMethod = method.toLowerCase() as 'get' | 'post' | 'patch' | 'put' | 'delete';
   const realId = await config.createUnderTenant(config.tenantA);
   const realPath = path.replace(/:[^/]+/, encodeURIComponent(realId));
+  const send = (tenant: string) => {
+    const pending = request(app.getHttpServer())
+      [httpMethod](realPath)
+      .set({ ...config.requestHeaders, [config.tenantHeader]: tenant });
+    return config.body === undefined ? pending : pending.send(config.body as object);
+  };
 
-  await request(app.getHttpServer())
-    [httpMethod](realPath)
-    .set(config.tenantHeader, config.tenantA)
-    .expect(config.ownRequestStatus ?? 200);
-
-  await request(app.getHttpServer())
-    [httpMethod](realPath)
-    .set(config.tenantHeader, config.tenantB)
-    .expect(404);
+  await send(config.tenantA).expect(config.ownRequestStatus ?? 200);
+  await send(config.tenantB).expect(404);
 }
 
 /**
