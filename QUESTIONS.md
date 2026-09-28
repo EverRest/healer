@@ -952,3 +952,41 @@ its own issue. Nothing surprising; not run together here since the branches are 
 
 **Not done.** HTTP routes (`/merge`, `/unmerge` and their isolation tests, and `Idempotency-Key`
 handling); OpenAPI; the ingestion routing above; anything in `apps/api`.
+
+## Decisions waiting on Pavlo — phase 8 integration (index; the detail is in the named sections)
+
+Nothing below blocks the work already done; each has a default in place and a cost if the default is
+wrong. Ordered by how much a wrong default costs.
+
+1. **A merge hides an issue but does not absorb its future signals.** A signal whose fingerprint
+   belongs to a merged issue opens a *new* issue instead of attaching to the survivor, and the
+   survivor's timeline / graph / `GET /issues/{id}` show nothing about what was merged into it.
+   Fixing it changes ingestion's fingerprint lookup — a batch of its own. (`001 T049/T050`.)
+2. **Cited evidence keeps its excerpt forever.** Retention detaches it but cannot purge it; whether
+   a cited record should lose its text at expiry (a privileged scrub) is a decision about what
+   FR-009's "support" requires. (`001 T052`.)
+3. **A signal on a `stale` issue does not un-stale it.** The state graph has no edge out of `stale`,
+   and `findOpenByFingerprint` counts it as open. (`001 T051`.)
+4. **Nothing schedules the staleness sweep or evidence retention.** Both are routed in `apps/worker`
+   and tested, but no code enqueues them: they need a tenant enumerator and a repeatable schedule
+   (012's territory; a new pattern, so an ADR first). Until then both are correct and read by
+   nothing. (`001 T051`, `001 T052`.)
+5. **Audit action keys are invented placeholders.** `issue.close`, `evidence.retention_purge` and the
+   merge path's absence of any audit entry are three different answers to the same gap: 002's closed
+   `policy_action.action_key` list does not exist. Merge/unmerge writes no `audit_entry` at all,
+   unlike close and purge. (`001 T057`, `001 T052`, `001 T049/T050`.)
+6. **`@ApiOkResponse` is the first swagger decorator in `apps/api`.** It documents the
+   `Idempotent-Replay` header; the dependency is already installed, but the rule is "new pattern ->
+   ADR first". Keep it and write the ADR, or revert the decorator. (`001 T057`.)
+7. **The human actor is a caller-asserted `X-Actor-Id` header** (free-form, can be `system` or
+   `ingestion`), the same trust level as `X-Tenant-Id`: the auth layer carries only a tenant id.
+   Real identity needs authentication, which does not exist. (`001 T057`.)
+8. **`Idempotency-Key` is validated but not stored**, so "same key, different body -> 409" from the
+   contract is not implemented; close is idempotent by state instead. A key table is a new pattern.
+   (`001 T057`.)
+9. **The 12 000-signal replay test times out in a full `make ci` when the machine is loaded**
+   (load average 11-19 from other applications; it passes alone, also at load 19). Not
+   investigated beyond that. If the pilot's CI shares a machine, this will be red there too.
+10. **Publishing this work.** Everything for T045-T057 except T053/T056 sits on the local branch
+    `worktree-001-phase8-staleness` (plus the two agent branches it merged), unpushed by instruction.
+    Squash or keep the history, and when to run a full green `make ci` first, are yours to call.
