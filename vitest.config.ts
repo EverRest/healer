@@ -60,7 +60,16 @@ export default defineConfig({
           ],
           // pnpm symlinks workspace dependencies under each package, so a bare
           // `packages/**` glob reaches into every dependency's own test suite.
-          exclude: ['**/node_modules/**', '**/dist/**', '**/*.e2e.test.ts'],
+          // `.claude/worktrees/**` is excluded for the same reason `node_modules` is: each
+          // worktree is a full second checkout of this repo (Claude Code's own git-worktree
+          // isolation), so an unscoped glob run from one worktree also picks up every test file
+          // sitting inside every sibling worktree.
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/*.e2e.test.ts',
+            '**/.claude/worktrees/**',
+          ],
           environment: 'node',
         },
       },
@@ -71,7 +80,12 @@ export default defineConfig({
         test: {
           name: 'e2e',
           include: ['**/*.e2e.test.ts'],
-          exclude: ['**/node_modules/**', '**/dist/**'],
+          // Confirmed reachable, not just theoretical (001 review, 2026-09-28): two concurrent
+          // sessions each running the full e2e suite from their own worktree also ran each
+          // other's copy of it, quadrupling load on the suite's two heaviest tests (a 12 000-
+          // signal replay, a sustained-load test) and producing spurious timeouts neither
+          // session's own diff caused.
+          exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/worktrees/**'],
           environment: 'node',
           testTimeout: 120_000,
           hookTimeout: 180_000,
