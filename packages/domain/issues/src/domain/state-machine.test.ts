@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { InvalidIssueTransitionError, transitionIssue } from './state-machine.js';
+import {
+  InvalidIssueTransitionError,
+  mergeTransition,
+  transitionIssue,
+  unmergeTransition,
+} from './state-machine.js';
 import type { Issue } from './issue.js';
 
 /**
@@ -93,21 +98,75 @@ describe('transitionIssue (001 T012, FR-006)', () => {
     ).toBe('investigating');
   });
 
-  it('every non-removed state can be merged, and merged can only be removed', () => {
-    for (const state of [
-      'detected',
-      'investigating',
-      'diagnosed',
-      'acting',
-      'needs_human',
-      'stale',
-      'resolved',
-    ] as const) {
-      expect(transitionIssue(issue(state), 'merged', 'human', 'pavlo').issue.state).toBe('merged');
-    }
+  const MERGEABLE = [
+    'detected',
+    'investigating',
+    'diagnosed',
+    'acting',
+    'needs_human',
+    'stale',
+    'resolved',
+  ] as const;
+
+  it('merged can only be removed by a plain transition', () => {
     expect(transitionIssue(issue('merged'), 'removed', 'policy', 'retention').issue.state).toBe(
       'removed',
     );
+    expect(() => transitionIssue(issue('merged'), 'investigating', 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+  });
+
+  it('a plain transition can never land on merged — state and merged_into row must not disagree (001 T049)', () => {
+    for (const state of MERGEABLE) {
+      expect(() => transitionIssue(issue(state), 'merged', 'human', 'pavlo')).toThrow(
+        /merge is its own operation/,
+      );
+    }
+  });
+
+  it('mergeTransition: every state the graph lets reach merged does, and records who and from where', () => {
+    for (const state of MERGEABLE) {
+      const result = mergeTransition(issue(state), 'human', 'pavlo');
+      expect(result.issue.state).toBe('merged');
+      expect(result.event).toMatchObject({
+        fromState: state,
+        toState: 'merged',
+        cause: 'human',
+        actorRef: 'pavlo',
+      });
+    }
+  });
+
+  it('mergeTransition refuses an issue that is already merged or removed', () => {
+    expect(() => mergeTransition(issue('merged'), 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+    expect(() => mergeTransition(issue('removed'), 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+  });
+
+  it('unmergeTransition restores any state a merge could have started from', () => {
+    for (const state of MERGEABLE) {
+      const result = unmergeTransition(issue('merged'), state, 'human', 'pavlo');
+      expect(result.issue.state).toBe(state);
+      expect(result.event).toMatchObject({ fromState: 'merged', toState: state, cause: 'human' });
+    }
+  });
+
+  it('unmergeTransition refuses an issue that is not merged, and a restore state a merge could not have left', () => {
+    expect(() => unmergeTransition(issue('detected'), 'investigating', 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+    expect(() => unmergeTransition(issue('removed'), 'detected', 'human', 'pavlo')).toThrow(
+      InvalidIssueTransitionError,
+    );
+    for (const bad of ['merged', 'removed'] as const) {
+      expect(() => unmergeTransition(issue('merged'), bad, 'human', 'pavlo')).toThrow(
+        InvalidIssueTransitionError,
+      );
+    }
   });
 
   it('every state, including merged and resolved, can be removed — tenant deletion is unconditional', () => {

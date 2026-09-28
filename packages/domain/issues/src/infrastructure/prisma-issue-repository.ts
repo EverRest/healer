@@ -4,8 +4,14 @@ import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { Issue, IssueRelationship } from '../domain/issue.js';
 import { toDomain } from './issue-row.js';
+import { mergeIssue, unmergeIssue } from './prisma-issue-merge.js';
 import { findStaleCandidates, markStale } from './prisma-issue-staleness.js';
 import { issueDetectedEvent, issueRelatedEvent, issueStateChangedEvent } from '../domain/events.js';
+import type {
+  IssueMergeRepository,
+  MergeResult,
+  UnmergeResult,
+} from '../domain/merge-repository.js';
 import {
   FingerprintAlreadyOpenError,
   type IssueRepository,
@@ -48,7 +54,7 @@ function isIssueRelationshipTarget(meta: unknown): boolean {
   );
 }
 
-export class PrismaIssueRepository implements IssueRepository {
+export class PrismaIssueRepository implements IssueRepository, IssueMergeRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   async create(issue: TenantScoped<NewIssue>): Promise<Issue> {
@@ -430,6 +436,20 @@ export class PrismaIssueRepository implements IssueRepository {
       }
       throw error;
     }
+  }
+
+  /** See `mergeIssue` in `prisma-issue-merge.ts` (001 T049). */
+  merge(
+    where: TenantScoped<{ readonly id: string; readonly intoId: string }>,
+    actorRef: string,
+    reason: string,
+  ): Promise<MergeResult> {
+    return mergeIssue(this.prisma, where, actorRef, reason);
+  }
+
+  /** See `unmergeIssue` in `prisma-issue-merge.ts` (001 T050). */
+  unmerge(where: TenantScoped<{ readonly id: string }>, actorRef: string): Promise<UnmergeResult> {
+    return unmergeIssue(this.prisma, where, actorRef);
   }
 
   async list(

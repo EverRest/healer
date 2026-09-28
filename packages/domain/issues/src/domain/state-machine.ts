@@ -86,20 +86,71 @@ function checkKnowledgeDriftGuard(issue: Issue, to: IssueState, cause: IssueEven
   }
 }
 
-/** Refuses a transition the graph does not declare — see the module comment. */
+function result(
+  issue: Issue,
+  to: IssueState,
+  cause: IssueEventCause,
+  actorRef: string,
+): IssueTransitionResult {
+  return {
+    issue: { ...issue, state: to },
+    event: { issueId: issue.id, fromState: issue.state, toState: to, cause, actorRef },
+  };
+}
+
+/**
+ * Refuses a transition the graph does not declare — see the module comment. **Never lands on
+ * `merged`** (001 T049): `merged` is the state of an issue with a live `merged_into` relationship
+ * (data-model.md), and a bare state write has nowhere to put that row, so the two would disagree.
+ * The edges into `merged` stay in the graph — they are what `mergeTransition` consults — but the
+ * only door through them is the merge operation, which writes the row in the same transaction.
+ */
 export function transitionIssue(
   issue: Issue,
   to: IssueState,
   cause: IssueEventCause,
   actorRef: string,
 ): IssueTransitionResult {
+  if (to === 'merged') {
+    throw new InvalidIssueTransitionError('merge is its own operation, not a plain transition');
+  }
   const allowed = GRAPH[issue.state];
   if (!allowed.includes(to)) {
     throw new InvalidIssueTransitionError(`${issue.state} -> ${to} is not a declared transition`);
   }
   checkKnowledgeDriftGuard(issue, to, cause);
-  return {
-    issue: { ...issue, state: to },
-    event: { issueId: issue.id, fromState: issue.state, toState: to, cause, actorRef },
-  };
+  return result(issue, to, cause, actorRef);
+}
+
+/** `any --merge--> merged` (data-model.md): whichever states the graph declares an edge to `merged` from. */
+export function mergeTransition(
+  issue: Issue,
+  cause: IssueEventCause,
+  actorRef: string,
+): IssueTransitionResult {
+  if (!GRAPH[issue.state].includes('merged')) {
+    throw new InvalidIssueTransitionError(`${issue.state} -> merged is not a declared transition`);
+  }
+  return result(issue, 'merged', cause, actorRef);
+}
+
+/**
+ * The unmerge (R-08): `merged` back to `restoreTo`, the state the merge started from. Not a graph
+ * edge — the graph has no edge out of `merged` but `removed` — so the one thing this can check is
+ * that `restoreTo` is a state a merge could have started from at all (one with an edge *into*
+ * `merged`); which state it actually was is recorded on the merge event, not derivable here.
+ */
+export function unmergeTransition(
+  issue: Issue,
+  restoreTo: IssueState,
+  cause: IssueEventCause,
+  actorRef: string,
+): IssueTransitionResult {
+  if (issue.state !== 'merged') {
+    throw new InvalidIssueTransitionError(`${issue.state} is not merged, so it cannot be unmerged`);
+  }
+  if (!GRAPH[restoreTo].includes('merged')) {
+    throw new InvalidIssueTransitionError(`no merge can have started from ${restoreTo}`);
+  }
+  return result(issue, restoreTo, cause, actorRef);
 }
