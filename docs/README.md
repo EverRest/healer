@@ -34,3 +34,5 @@ Agent instructions in [AGENTS.md](../AGENTS.md).
 | [0010](adr/0010-inference-follows-the-source.md) | Inference follows the source — model calls over customer source run in the runner |
 | [0011](adr/0011-agent-driven-development.md) | Agent-driven development under the same gates |
 | [0012](adr/0012-openapi-contract-generation.md) | OpenAPI generated via `@nestjs/swagger` |
+| [0013](adr/0013-prisma-client-workspace-package.md) | A dedicated `@healer/prisma-client` workspace package |
+| [0014](adr/0014-runner-artifact-build-and-versioning.md) | Runner artifact build, versioning and packaging |

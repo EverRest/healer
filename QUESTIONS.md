@@ -27,6 +27,37 @@ ahead of the thing that owns it. Waits for Phase 13's diff infra.
 - **T067/T068 (`packages/llm` provider adapter): wait** for 010's or a dedicated 012 slice's real
   build (retry, secret resolution, per-tenant config) rather than a throwaway minimal adapter now.
 
+## 012 phase 6 — runner tasks T042, T045, T048–T051
+
+001's repository/controller pattern (`packages/domain/issues`) and `apps/runner` having real
+source have unblocked all six deferred phase-6 tasks (roadmap.md's own "Next" note, 2026-09-28).
+Working through them now in `worktree-012-runner`.
+
+- **No registry or hosting exists for the runner image, and none is invented here.**
+  `make runner-build` builds and tags the image locally and stamps version + digest
+  ([ADR 0014](docs/adr/0014-runner-artifact-build-and-versioning.md)); pushing to a registry and
+  publishing a customer-facing changelog entry stay manual, undecided steps until a registry is
+  provisioned. Added to the index below.
+- **Directive delivery is a heartbeat-response field, not a second inbound channel.** Outbound-only
+  transport (T045, `contracts/runner-protocol.md`) rules out the control plane pushing a directive
+  in; the runner's own heartbeat POST (T042) is the only outbound call it currently makes, so the
+  control plane's heartbeat response carries `directives: ControlPlaneDirective[]` (pending, if
+  any) for T051's dispatcher to execute. No separate poll endpoint added — one outbound call
+  serves both registration and directive collection.
+- **T051's idempotency is runner-local, not control-plane-tracked.** The spec text is exactly "a
+  directive arrives twice → execution is idempotent by directive identifier" — no requirement that
+  the control plane know what was already executed. The dispatcher keeps a seen-set of directive
+  ids (bounded, same drop-oldest shape as `OutboundBuffer`) and executes each id once; simplest
+  mechanism that satisfies the stated contract without inventing a delivery-receipt protocol
+  nothing yet asks for.
+- **FR-020's resource state and clock offset are heartbeat payload fields, not new durable
+  columns on `RunnerRegistration` by default.** `make runner-diagnostics` reads them from the
+  runner's own local state (queue depths, timing histograms are runner-local per
+  `contracts/runner-protocol.md`'s diagnostics section) — the control plane doesn't need a second
+  copy to satisfy FR-020's "reports health... carrying resource state... clock offset" unless a
+  control-plane-side consumer needs to query it, and none exists yet. If that turns out wrong,
+  it's an additive migration, not a redesign.
+
 ## 001 data-model.md — fingerprint index exclusion set
 
 **Resolved and confirmed**: `where state not in ('merged', 'removed')`, already applied in
@@ -1237,6 +1268,10 @@ wrong. Ordered by how much a wrong default costs.
     and an unparseable signal has no issue; today the `rejected` array in the 202 response is the
     only record. Junk-drawer issue, a new evidence type, or reword the scenario. Blocks T056.
     (`001 T024`.)
+14. **No registry or hosting is provisioned for the runner image.** `make runner-build` stops at a
+    local tagged image plus a stamped version/digest file; pushing it anywhere, and publishing a
+    customer-facing changelog entry, are manual steps with no target yet. Revisit once a registry
+    exists. (`012 phase 6`, [ADR 0014](docs/adr/0014-runner-artifact-build-and-versioning.md).)
 
 ## 001 T056 — quickstart run
 
