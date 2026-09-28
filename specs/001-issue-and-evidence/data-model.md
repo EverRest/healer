@@ -121,7 +121,10 @@ observation. This mapping is 001's call (FR-007a).
 `UPDATE` and `DELETE` are rejected by rule, except `ref_state` transitioning `linked → detached`
 and the privileged retention path (R-03).
 
-Index `(tenant_id, issue_id, observed_at)`, `(expires_at) where ref_state = 'linked'`.
+Index `(tenant_id, issue_id, observed_at)`, `(tenant_id, expires_at)`. The second is not partial on
+`ref_state`: retention (T052) lists expired evidence nothing cites whatever its `ref_state`, and
+expired-and-cited evidence still `linked`, so a `where ref_state = 'linked'` index could not serve the
+first branch.
 
 ## evidence.evidence_link (append-only)
 
@@ -175,8 +178,15 @@ issue:  detected ──context collected──▶ investigating
         any ──merge──▶ merged (a live merged_into relationship; reversible)
         any ──tenant deletion──▶ removed + tombstone
 
-evidence: linked ──source unavailable──▶ detached ──expires_at──▶ purged
+evidence: linked ──expires_at, or source unavailable──▶ detached   (a conclusion cites it: the row,
+                                                                    its excerpt and label stay)
+          any state ──expires_at, and no evidence_link names it──▶ purged   (deleted; audited)
 ```
+
+`detached` is a terminal state for evidence a conclusion cites: purging it would leave that
+conclusion with no support (FR-009, R-04), and `evidence_link` is append-only with a `Restrict`
+foreign key. Whether such a record should also lose its excerpt at expiry is open — see
+QUESTIONS.md "001 T052".
 
 ## Invariants
 

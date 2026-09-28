@@ -20,6 +20,9 @@
     },
     {
       "path": "../../packages/domain/issues"
+    },
+    {
+      "path": "../../packages/domain/evidence"
     }
   ]
 }

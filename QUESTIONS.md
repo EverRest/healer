@@ -617,3 +617,53 @@ progress from being linked.
 misspelled `staleness-sweep` from a future scheduler would complete as a successful no-op. That is
 how every route in that dispatcher already behaves, not something T051 introduced; changing it
 touches all queues and is left for whoever wires the scheduler.
+
+## 001 T052 — evidence retention: what "expired" does to evidence a conclusion cites
+
+**Decided.** T052 reads "purging expired evidence and detaching what outlives its source". The two
+requirements pull apart for cited evidence: R-04 and FR-009 say a conclusion must keep its support,
+and `evidence_link` has a `Restrict` foreign key to `evidence` besides. So, per tenant, oldest expiry
+first, at most 500 a run:
+
+- expired and **nothing cites it** -> deleted, through the `healer.privileged_write` bypass, with
+  the `audit_entry` written in the same transaction (id and fact only, never the excerpt);
+- expired and **a conclusion cites it** -> only detached (`linked -> detached`); the row, excerpt and
+  `source_label` stay;
+- cited and already detached -> finished, not listed again, so a second run converges.
+
+The "nothing cites it" test is inside the `DELETE`'s own `WHERE`, not a read before it; the foreign
+key is the second wall, and the only one that answers when a link is *uncommitted* at the moment of
+the delete (a test holds exactly that open; it fails if the error mapping is removed). The two
+walls are not separately testable — with the `NOT EXISTS` gone the FK still refuses — so that
+predicate is defence in depth, not something a test pins on its own.
+
+The bypass goes through `withPrivilegedWrite` (`@healer/prisma-client`), which opens the
+transaction itself and issues `set_config(..., true)` — the migration asked for exactly one such
+helper, and T053 (tenant deletion) must use it too, not a second copy. A test on a
+`connection_limit=1` client proves a plain `DELETE` on the very same connection is still refused
+afterwards, and fails if the setting is made session-level. **The bypass covers every statement in
+its transaction**, not only the delete: the triggers accept any UPDATE, DELETE or TRUNCATE on any
+append-only table while it is on. Keep the callback to the destructive statement and its audit write.
+
+`detach` is now idempotent (it only updates a `linked` row), because two overlapping runs — the
+`maintenance` queue runs two at a time, with retries — each listed the same cited record and each
+published `EvidenceDetached`. A second call is a no-op that returns the row.
+
+**Open — cited evidence keeps its excerpt forever.** Detached is not purged. `data-model.md`'s
+diagram ends `detached --expires_at--> purged`, which cannot happen for a record a link still
+names, and `evidence` rows cannot be updated to blank the excerpt. If "retention" is meant to bound
+how long customer text is held even when a conclusion cites it, that needs a privileged excerpt scrub
+(the row and label stay, the text goes) — a decision about what FR-009's "support" requires the
+text to be. Not chosen here.
+
+**Open — "outlives its source" is read as `expires_at` only.** Nothing asks the source system
+whether the log line or branch is still there; that needs a runner call (003) and belongs to whatever
+notices the source is gone. `DetachEvidence` already exists for that caller.
+
+**Open — the audit action is unregistered.** `evidence.retention_purge` is not a
+`policy_action.action_key`: 002's closed list does not exist yet, the gap `NewAuditEntry` already
+documents. One line to change in `prisma-evidence-retention-repository.ts` when it does.
+
+**Open — nothing schedules it**, for the same reason as the staleness sweep: no tenant enumerator and
+no repeatable schedule. The batch cap means a large backlog needs several runs to clear.
+

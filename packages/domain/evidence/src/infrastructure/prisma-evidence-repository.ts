@@ -68,22 +68,25 @@ export class PrismaEvidenceRepository implements EvidenceRepository {
     return row === null ? null : toDomain(row);
   }
 
+  /**
+   * Idempotent: only a `linked` record is updated, so a second call (a retried job, two
+   * overlapping retention runs) changes nothing and publishes nothing — the row comes back as it
+   * is. The trigger accepts `detached -> detached`, so it is this predicate, not the database, that
+   * keeps `EvidenceDetached` from being published twice.
+   */
   async detach(where: TenantScoped<{ readonly id: string }>): Promise<Evidence> {
     return this.prisma.$transaction(async (tx) => {
-      let row: EvidenceRow;
-      try {
-        row = await tx.evidence.update({
-          where: { id_tenantId: { id: where.id, tenantId: where.tenantId } },
-          data: { refState: 'detached' },
-        });
-      } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-          throw new NotFoundError('Evidence');
-        }
-        throw error;
-      }
+      const key = { id_tenantId: { id: where.id, tenantId: where.tenantId } };
+      const changed = await tx.evidence.updateMany({
+        where: { id: where.id, tenantId: where.tenantId, refState: 'linked' },
+        data: { refState: 'detached' },
+      });
+      const row = await tx.evidence.findUnique({ where: key });
+      if (row === null) throw new NotFoundError('Evidence');
       const detached = toDomain(row);
-      await enqueue(new PrismaOutboxTransaction(tx), evidenceDetachedEvent(detached));
+      if (changed.count > 0) {
+        await enqueue(new PrismaOutboxTransaction(tx), evidenceDetachedEvent(detached));
+      }
       return detached;
     });
   }

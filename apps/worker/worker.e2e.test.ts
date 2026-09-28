@@ -133,6 +133,58 @@ describe('apps/worker consuming the ingestion queue (001 T025, FR-019)', () => {
     }
   }, 30_000);
 
+  it('an evidence-retention job purges expired uncited evidence and detaches expired cited evidence (001 T052)', async () => {
+    const tenantId = '00000000-0000-0000-8000-0000000000d3';
+    const issueId = randomUUID();
+    const unused = randomUUID();
+    const cited = randomUUID();
+    await query(
+      pg,
+      `insert into "issue"."issue"
+         (id, tenant_id, kind, environment, severity, state, fingerprint, ruleset_version,
+          occurrence_count, first_seen_at, last_seen_at)
+       values ('${issueId}', '${tenantId}', 'production_incident', 'prod', 'high', 'detected',
+               'retention-fp', 1, 1, now(), now())`,
+    );
+    for (const id of [unused, cited]) {
+      await query(
+        pg,
+        `insert into "evidence"."evidence"
+           (id, tenant_id, issue_id, type, source_system, source_ref, source_label, payload,
+            produced_by_step, observed_at, expires_at)
+         values ('${id}', '${tenantId}', '${issueId}', 'error_signature', 'loki', 'ref1',
+                 'from logs', '{}', 'collector', now(), '2020-01-01')`,
+      );
+    }
+    await query(
+      pg,
+      `begin;
+       select set_config('healer.current_step', 'diagnose', true);
+       insert into "evidence"."evidence_link"
+         (id, tenant_id, evidence_id, conclusion_type, conclusion_id, relation, asserted_by_step)
+       values ('${randomUUID()}', '${tenantId}', '${cited}', 'diagnosis', '${randomUUID()}',
+               'supports', 'diagnose');
+       commit;`,
+    );
+    const queue = createQueue('maintenance', { url: redis.url });
+    try {
+      await queue.add('evidence-retention', { tenantId, correlationId: randomUUID() });
+
+      const citedState = await waitFor(async () => {
+        const row = await prisma.evidence.findUnique({
+          where: { id_tenantId: { id: cited, tenantId } },
+        });
+        return row?.refState === 'detached' ? row.refState : null;
+      });
+      expect(citedState).toBe('detached');
+      expect(
+        await prisma.evidence.findUnique({ where: { id_tenantId: { id: unused, tenantId } } }),
+      ).toBeNull();
+    } finally {
+      await queue.close();
+    }
+  }, 30_000);
+
   it('a job that can never succeed becomes an observable dead letter, not a silent loss', async () => {
     const queue = createQueue('ingestion', { url: redis.url });
     try {

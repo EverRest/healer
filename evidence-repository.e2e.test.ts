@@ -139,6 +139,26 @@ describe('PrismaEvidenceRepository (001 T006, FR-010, R-03)', () => {
       expect(found?.refState).toBe('detached');
     }));
 
+  it('detaching twice is idempotent: the record comes back both times and EvidenceDetached is published once (001 T052)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const input = newEvidence();
+      await repo.record(scope(CONTEXT, input));
+
+      // Two overlapping retention runs, or one retried: the second must be a no-op, not a second
+      // event for consumers to dedupe ("jobs may run twice" — AGENTS.md).
+      await repo.detach(scope(CONTEXT, { id: input.id }));
+      const again = await repo.detach(scope(CONTEXT, { id: input.id }));
+
+      expect(again).toMatchObject({ id: input.id, refState: 'detached' });
+      expect(
+        await query(
+          pg,
+          `select count(*) from "events"."outbox"
+           where name = 'EvidenceDetached' and payload->>'evidenceId' = '${input.id}'`,
+        ),
+      ).toBe('1');
+    }));
+
   it('detach throws NotFoundError rather than leaking whether another tenant’s row exists', () =>
     withCorrelation(newCorrelationId(), async () => {
       const input = newEvidence();

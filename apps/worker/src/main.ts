@@ -14,7 +14,12 @@ import {
   PrismaNormalisationRulesetRepository,
   type SignalJobData,
 } from '@healer/domain-issues';
+import { applyEvidenceRetention, PrismaEvidenceRetentionRepository } from '@healer/domain-evidence';
 import { createPrismaClient } from './infrastructure/prisma.js';
+
+/** Records one retention run works through. The rest wait for the next run — oldest expiry first —
+ *  rather than one pass outliving the `maintenance` queue's wall-clock budget. */
+const RETENTION_BATCH = 500;
 
 /**
  * The worker process. Same code as the api, separate process (plan.md): a flood of jobs must
@@ -41,6 +46,7 @@ export function start(): { close: () => Promise<void> } {
   const prisma = createPrismaClient(config.DATABASE_URL);
   const rulesetRepo = new PrismaNormalisationRulesetRepository(prisma);
   const issueRepo = new PrismaIssueRepository(prisma);
+  const retentionRepo = new PrismaEvidenceRetentionRepository(prisma);
 
   const workers = CONSUMED.map((queue) =>
     createWorker(queue, connection, async (job) => {
@@ -82,6 +88,23 @@ export function start(): { close: () => Promise<void> } {
             'staleness sweep finished',
           );
           return { marked: marked.length, skipped };
+        }
+        // Evidence retention (001 T052, R-04, FR-009): one job per tenant, like the sweep above.
+        // Also unscheduled — see QUESTIONS.md "001 T051"; retention is per tenant, so the same
+        // enumerator would feed both.
+        if (queue === 'maintenance' && job.name === 'evidence-retention') {
+          const { tenantId } = job.data as { tenantId: string };
+          const result = await applyEvidenceRetention(
+            retentionRepo,
+            TenantContext.forTrustedInternalUse(tenantId),
+            new Date(),
+            RETENTION_BATCH,
+          );
+          logger.info(
+            { queue, jobId: job.id, correlationId, tenantId, ...result },
+            'retention run',
+          );
+          return result;
         }
         return undefined;
       });

@@ -644,6 +644,8 @@ model Evidence {
 
   @@unique([id, tenantId])
   @@index([tenantId, issueId, observedAt])
+  // 001 T052: what the retention sweep filters and orders on.
+  @@index([tenantId, expiresAt])
   @@map("evidence")
   @@schema("evidence")
 }

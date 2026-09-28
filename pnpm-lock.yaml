@@ -111,6 +111,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@healer/domain-evidence':
+        specifier: workspace:*
+        version: link:../../packages/domain/evidence
       '@healer/domain-issues':
         specifier: workspace:*
         version: link:../../packages/domain/issues
