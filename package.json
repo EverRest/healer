@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "format-check": "prettier --check .",
     "test-unit": "vitest run --project unit --coverage",
-    "test-e2e": "vitest run --project e2e",
+    "test-e2e": "vitest run --project 'e2e*'",
     "db-generate": "prisma generate",
     "db-check": "node scripts/db-check.mjs",
     "db-seed": "node --env-file=.env scripts/db-seed.mjs",

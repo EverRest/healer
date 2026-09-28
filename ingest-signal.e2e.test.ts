@@ -112,7 +112,11 @@ describe('ingestSignal (001 T018, FR-002)', () => {
     () =>
       withCorrelation(newCorrelationId(), async () => {
         const TOTAL = 12_000;
-        const CONCURRENCY = 25;
+        // Every signal updates the same row, so its lock — not this number — sets the pace:
+        // measured 2, 4 and 25 in flight finish in the same time, while at 25 each transaction
+        // queues ~10x longer (340 ms vs 30 ms) and the 20 s transaction timeout below is what a
+        // stalled host trips first. Still genuinely concurrent, which is all the count needs.
+        const CONCURRENCY = 5;
 
         // Two providers, two different volatile shapes for the *same* underlying failure — a
         // UUID request id (provider A) and a memory address plus a generated-file line:column
