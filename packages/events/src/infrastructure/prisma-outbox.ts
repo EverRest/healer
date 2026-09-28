@@ -1,5 +1,10 @@
 import { Prisma, type PrismaClient } from '@healer/prisma-client';
-import type { OutboxRecord, OutboxStore, OutboxTransaction } from '../outbox.js';
+import {
+  OutboxRowGoneError,
+  type OutboxRecord,
+  type OutboxStore,
+  type OutboxTransaction,
+} from '../outbox.js';
 
 /**
  * The outbox's first real backing store (001 T013) — 012 T012 built only the pure logic.
@@ -30,7 +35,7 @@ export class PrismaOutboxTransaction implements OutboxTransaction {
 
 // A crashed worker's claim never gets released — after this long since `claimed_at`, the row is
 // treated as abandoned and becomes claimable again, not permanently stuck.
-const CLAIM_TIMEOUT_SQL = "interval '5 minutes'";
+export const CLAIM_TIMEOUT_SQL = "interval '5 minutes'";
 
 /** Raw `$queryRaw` rows are the real column names (snake_case), never Prisma's mapped field
  * names — this is the one place that boundary is crossed, so it is the one place that maps it. */
@@ -100,16 +105,25 @@ export class PrismaOutboxStore implements OutboxStore {
   }
 
   async markPublished(id: string, at: Date): Promise<void> {
-    await this.prisma.outbox.update({ where: { id }, data: { publishedAt: at } });
+    await this.updateOrGone(id, { publishedAt: at });
   }
 
   async recordFailure(id: string, error: string): Promise<void> {
     // Clears the claim too: this worker is done with this attempt, and the row should be
     // reclaimable immediately — the `attempts` ordering above is what deprioritises it, not a
     // timer this failure would otherwise have to wait out.
-    await this.prisma.outbox.update({
-      where: { id },
-      data: { attempts: { increment: 1 }, lastError: error, claimedAt: null },
-    });
+    await this.updateOrGone(id, { attempts: { increment: 1 }, lastError: error, claimedAt: null });
+  }
+
+  /** P2025 ("record to update not found") is a row deleted after the claim (tenant deletion). */
+  private async updateOrGone(id: string, data: Prisma.OutboxUpdateInput): Promise<void> {
+    try {
+      await this.prisma.outbox.update({ where: { id }, data });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+        throw new OutboxRowGoneError(id);
+      }
+      throw error;
+    }
   }
 }

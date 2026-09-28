@@ -8,8 +8,8 @@ import type { IssueEventCause, NewIssueStateChangedEvent } from './state-machine
  * (001 T012), `correlate` (001 T039), the staleness sweep (T051) and a human close (T057,
  * `IssueResolved(self_resolved)` from `transition`) each have a real producing operation; the
  * remaining events in the contract (`IssueReopened`, `IssueRecurred`, `IssueMerged`/`Unmerged`,
- * `IssueDeleted`, and `IssueResolved`'s verified kinds) have no operation to hang off yet and are
- * wired when the task that builds it lands (T049, T053, 010 and friends) — flagged in
+ * and `IssueResolved`'s verified kinds) have no operation to hang off yet and are
+ * wired when the task that builds it lands (T049, 010 and friends) — flagged in
  * QUESTIONS.md rather than guessed at ahead of them.
  */
 
@@ -179,5 +179,23 @@ export function issueUnmergedEvent(
     subjectId: issueId,
     correlationId: requireCorrelationId(),
     payload: { intoIssueId },
+  };
+}
+
+/**
+ * `IssueDeleted` (001 T053, contracts/events.md): the tombstone id and nothing else. `subjectId` is
+ * the deleted issue's id — an identifier the tombstone also holds, not content.
+ */
+export function issueDeletedEvent(
+  tenantId: string,
+  issueId: string,
+  tombstoneId: string,
+): DomainEvent {
+  return {
+    name: 'IssueDeleted',
+    tenantId,
+    subjectId: issueId,
+    correlationId: requireCorrelationId(),
+    payload: { tombstoneId },
   };
 }

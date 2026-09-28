@@ -773,6 +773,9 @@ model DeletionTombstone {
   deletedAt   DateTime @default(now()) @map("deleted_at") @db.Timestamptz(6)
   reason      String
 
+  // 001 T053: one tombstone per deleted target. Immutable and length-bounded by triggers/CHECKs
+  // in migration 20260929000000, which Prisma cannot express.
+  @@unique([tenantId, targetType, targetId])
   @@index([tenantId, deletedAt])
   @@map("deletion_tombstone")
   @@schema("audit")

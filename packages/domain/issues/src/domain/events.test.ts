@@ -1,6 +1,7 @@
 import { withCorrelation } from '@healer/shared';
 import { describe, expect, it } from 'vitest';
 import {
+  issueDeletedEvent,
   issueDetectedEvent,
   issueMergedEvent,
   issueRelatedEvent,
@@ -148,5 +149,26 @@ describe('issueMergedEvent / issueUnmergedEvent (001 T049/T050, contracts/events
       /correlated scope/,
     );
     expect(() => issueUnmergedEvent('tenant-1', 'issue-1', 'issue-2')).toThrow(/correlated scope/);
+  });
+});
+
+describe('issueDeletedEvent (001 T053, contracts/events.md)', () => {
+  it('carries the tombstone id and nothing else — no content (FR-018, R-12)', () => {
+    const event = withCorrelation('corr-1', () =>
+      issueDeletedEvent('tenant-1', 'issue-1', 'tombstone-1'),
+    );
+    expect(event).toEqual({
+      name: 'IssueDeleted',
+      tenantId: 'tenant-1',
+      subjectId: 'issue-1',
+      correlationId: 'corr-1',
+      payload: { tombstoneId: 'tombstone-1' },
+    });
+  });
+
+  it('refuses to build outside a correlated scope', () => {
+    expect(() => issueDeletedEvent('tenant-1', 'issue-1', 'tombstone-1')).toThrow(
+      /correlated scope/,
+    );
   });
 });
