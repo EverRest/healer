@@ -595,8 +595,25 @@ the dashboard keeps saying "nothing is happening" about something that is. Optio
 `stale` from "open" so the signal starts a new issue. Not chosen here — it changes the state graph
 and the fingerprint rules both.
 
-**Open — the sweep tolerates a race, it does not eliminate it.** `markStale` re-measures progress
-inside its transaction and refuses (`ConcurrentModificationError`, skipped by the sweep) if
-anything arrived since the read. A signal landing in the microseconds between that check and the
-`UPDATE` can still be marked stale; it is corrected only by the next signal being attached to a
-`stale` issue — which, per the item above, does not un-stale it.
+**Resolved by review — the race with a signal that is mid-commit.** The first version of `markStale`
+re-measured progress at READ COMMITTED and then ran an `UPDATE` guarded only by `state`. A
+`recordOccurrence` that had locked the row but not yet committed was invisible to that check; the
+`UPDATE` waited on the lock, re-tested only `state`, and marked a live issue stale over a committed
+signal — a window as wide as the other transaction, not "microseconds" as this note first said.
+`markStale` now takes `SELECT … FOR UPDATE` first and reads and measures afterwards, which works
+because `recordOccurrence` and `transition` both take that row lock before writing their event. The
+test that proves it holds a transaction open exactly as `recordOccurrence` does. **Still relies on
+that lock order:** a future writer of `issue_event` that inserts the event without touching the
+`issue` row first would not be waited on.
+
+**Progress is `issue_event.received_at` only.** Evidence recorded and audit entries written do not
+count, so a long investigation that changes no state and receives no signals can be swept. That
+follows the spec's wording ("no signals and no progress") read as issue-level facts; if an
+investigation that is still collecting evidence should keep an issue alive, that needs its own
+decision. `correlate` writes its event for one side of the pair only, so the other issue gets no
+progress from being linked.
+
+**Not addressed — unknown job names.** `apps/worker/src/main.ts` ends with `return undefined`, so a
+misspelled `staleness-sweep` from a future scheduler would complete as a successful no-op. That is
+how every route in that dispatcher already behaves, not something T051 introduced; changing it
+touches all queues and is left for whoever wires the scheduler.

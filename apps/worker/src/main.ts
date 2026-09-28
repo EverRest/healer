@@ -67,12 +67,21 @@ export function start(): { close: () => Promise<void> } {
         // cross-tenant. Nothing schedules these yet — see QUESTIONS.md "001 T051".
         if (queue === 'maintenance' && job.name === 'staleness-sweep') {
           const { tenantId } = job.data as { tenantId: string };
-          const marked = await markStaleIssues(
+          const { marked, skipped } = await markStaleIssues(
             issueRepo,
             TenantContext.forTrustedInternalUse(tenantId),
             new Date(),
           );
-          return { marked: marked.length };
+          // Skips are expected to be rare. A sweep that skips *everything* it found is what a
+          // broken race guard looks like — a green job that marked nothing — so it is logged
+          // at warn where an operator can see it, not folded into the return value alone.
+          const log = skipped > 0 && marked.length === 0 ? logger.warn : logger.info;
+          log.call(
+            logger,
+            { queue, jobId: job.id, correlationId, tenantId, marked: marked.length, skipped },
+            'staleness sweep finished',
+          );
+          return { marked: marked.length, skipped };
         }
         return undefined;
       });

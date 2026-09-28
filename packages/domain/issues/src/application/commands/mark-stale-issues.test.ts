@@ -1,36 +1,51 @@
 import { describe, expect, it } from 'vitest';
-import { TenantContext } from '@healer/shared';
-import { markStaleIssues, STALE_WINDOW_MS } from './mark-stale-issues.js';
+import { NotFoundError, TenantContext } from '@healer/shared';
+import { markStaleIssues, STALE_WINDOW_MS, type StalenessRepository } from './mark-stale-issues.js';
 import type { Issue } from '../../domain/issue.js';
-import type { IssueRepository, StaleCandidate } from '../../domain/repository.js';
-import { ConcurrentModificationError } from '../../domain/state-machine.js';
+import type { StaleCandidate } from '../../domain/repository.js';
+import {
+  ConcurrentModificationError,
+  InvalidIssueTransitionError,
+} from '../../domain/state-machine.js';
 
 const TENANT_ID = '00000000-0000-0000-8000-0000000000ab';
 const CONTEXT = TenantContext.forTrustedInternalUse(TENANT_ID);
 const NOW = new Date('2026-06-01T00:00:00Z');
+const LAST_PROGRESS = new Date('2026-01-01T00:00:00Z');
 
-function issue(overrides: Partial<Issue> = {}): Issue {
+function issue(id: string): Issue {
   return {
-    id: 'issue-1',
+    id,
     tenantId: TENANT_ID,
     kind: 'monitoring_alert',
     componentId: null,
     environment: 'prod',
     severity: 'high',
-    state: 'detected',
+    state: 'stale',
     fingerprint: 'fp1',
     rulesetVersion: 1,
     occurrenceCount: 1n,
-    firstSeenAt: new Date('2026-01-01T00:00:00Z'),
-    lastSeenAt: new Date('2026-01-01T00:00:00Z'),
-    staleAt: null,
+    firstSeenAt: LAST_PROGRESS,
+    lastSeenAt: LAST_PROGRESS,
+    staleAt: NOW,
     resolvedAt: null,
-    createdAt: new Date('2026-01-01T00:00:00Z'),
-    ...overrides,
+    createdAt: LAST_PROGRESS,
   };
 }
 
-function repoWith(candidates: readonly StaleCandidate[]): IssueRepository & {
+function candidates(...ids: string[]): StaleCandidate[] {
+  return ids.map((id) => ({ id, lastProgressAt: LAST_PROGRESS }));
+}
+
+/**
+ * Only the two methods the sweep is typed to take — there is no `transition` on this stub to
+ * reject, because `StalenessRepository` has none to call. That the object type-checks at all is the
+ * proof the sweep cannot reach the general transition API (R-11).
+ */
+function repoWith(
+  found: readonly StaleCandidate[],
+  markStale?: StalenessRepository['markStale'],
+): StalenessRepository & {
   readonly markStaleCalls: { tenantId: string; id: string; at: Date; lastProgressAt: Date }[];
   readonly idleBefore: Date[];
 } {
@@ -39,43 +54,31 @@ function repoWith(candidates: readonly StaleCandidate[]): IssueRepository & {
   return {
     markStaleCalls,
     idleBefore,
-    create: () => Promise.reject(new Error('not used in this test')),
-    findById: () => Promise.reject(new Error('not used in this test')),
-    findOpenByFingerprint: () => Promise.reject(new Error('not used in this test')),
-    findMostRecentlyResolvedByFingerprint: () => Promise.reject(new Error('not used in this test')),
-    // A job that reaches for `transition` at all is a job that can resolve an issue (R-11).
-    transition: () => Promise.reject(new Error('markStaleIssues must never transition an issue')),
-    recordOccurrence: () => Promise.reject(new Error('not used in this test')),
-    findOpenCorrelationCandidates: () => Promise.reject(new Error('not used in this test')),
-    correlate: () => Promise.reject(new Error('not used in this test')),
-    list: () => Promise.reject(new Error('not used in this test')),
-    findRelationships: () => Promise.reject(new Error('not used in this test')),
     findStaleCandidates: async (where) => {
       idleBefore.push(where.idleBefore);
-      return candidates;
+      return found;
     },
-    markStale: async (where) => {
-      markStaleCalls.push(where);
-      return { ...issue({ id: where.id }), state: 'stale', staleAt: where.at };
-    },
+    markStale:
+      markStale ??
+      (async (where) => {
+        markStaleCalls.push(where);
+        return issue(where.id);
+      }),
   };
 }
 
 describe('markStaleIssues (001 T051, FR-017, R-11)', () => {
   it('marks every candidate stale, carrying the progress time the query measured', async () => {
-    const lastProgressAt = new Date('2026-01-01T00:00:00Z');
-    const repo = repoWith([
-      { issue: issue({ id: 'issue-1' }), lastProgressAt },
-      { issue: issue({ id: 'issue-2' }), lastProgressAt },
-    ]);
+    const repo = repoWith(candidates('issue-1', 'issue-2'));
 
-    const marked = await markStaleIssues(repo, CONTEXT, NOW);
+    const result = await markStaleIssues(repo, CONTEXT, NOW);
 
     expect(repo.markStaleCalls).toEqual([
-      { tenantId: TENANT_ID, id: 'issue-1', at: NOW, lastProgressAt },
-      { tenantId: TENANT_ID, id: 'issue-2', at: NOW, lastProgressAt },
+      { tenantId: TENANT_ID, id: 'issue-1', at: NOW, lastProgressAt: LAST_PROGRESS },
+      { tenantId: TENANT_ID, id: 'issue-2', at: NOW, lastProgressAt: LAST_PROGRESS },
     ]);
-    expect(marked.map((i) => i.state)).toEqual(['stale', 'stale']);
+    expect(result.marked.map((i) => i.id)).toEqual(['issue-1', 'issue-2']);
+    expect(result.skipped).toBe(0);
   });
 
   it('asks for issues idle since exactly one stale window before now', async () => {
@@ -86,34 +89,44 @@ describe('markStaleIssues (001 T051, FR-017, R-11)', () => {
     expect(repo.idleBefore).toEqual([new Date(NOW.getTime() - STALE_WINDOW_MS)]);
   });
 
-  it('skips an issue that made progress after it was read, and still marks the rest', async () => {
-    const lastProgressAt = new Date('2026-01-01T00:00:00Z');
-    const repo = repoWith([
-      { issue: issue({ id: 'busy' }), lastProgressAt },
-      { issue: issue({ id: 'idle' }), lastProgressAt },
-    ]);
-    const markStale = repo.markStale;
-    repo.markStale = (where) =>
-      where.id === 'busy'
-        ? Promise.reject(new ConcurrentModificationError('Issue'))
-        : markStale(where);
-
-    const marked = await markStaleIssues(repo, CONTEXT, NOW);
-
-    expect(marked.map((i) => i.id)).toEqual(['idle']);
-  });
-
-  it('lets any other failure through — a broken sweep must be visible, not swallowed', async () => {
-    const repo = repoWith([{ issue: issue(), lastProgressAt: new Date('2026-01-01T00:00:00Z') }]);
-    repo.markStale = () => Promise.reject(new Error('database is down'));
-
-    await expect(markStaleIssues(repo, CONTEXT, NOW)).rejects.toThrow('database is down');
-  });
-
   it('writes nothing when no issue is idle', async () => {
     const repo = repoWith([]);
 
-    expect(await markStaleIssues(repo, CONTEXT, NOW)).toEqual([]);
+    expect(await markStaleIssues(repo, CONTEXT, NOW)).toEqual({ marked: [], skipped: 0 });
     expect(repo.markStaleCalls).toEqual([]);
+  });
+
+  it.each([
+    ['made progress after it was read', new ConcurrentModificationError('Issue')],
+    [
+      'stopped being a candidate (resolved, merged, already stale)',
+      new InvalidIssueTransitionError('resolved -> stale is not a declared transition'),
+    ],
+    ['was deleted', new NotFoundError('Issue')],
+  ])('skips, counts, and moves on from an issue that %s', async (_why, error) => {
+    const repo = repoWith(candidates('gone', 'idle'), async (where) => {
+      if (where.id === 'gone') throw error;
+      return issue(where.id);
+    });
+
+    const result = await markStaleIssues(repo, CONTEXT, NOW);
+
+    expect(result.marked.map((i) => i.id)).toEqual(['idle']);
+    expect(result.skipped).toBe(1);
+  });
+
+  it('finishes the sweep past an unexpected failure, then fails the job with every error', async () => {
+    const boom = new Error('database is down');
+    const repo = repoWith(candidates('bad', 'good'), async (where) => {
+      if (where.id === 'bad') throw boom;
+      return issue(where.id);
+    });
+
+    const failure = await markStaleIssues(repo, CONTEXT, NOW).catch((error: unknown) => error);
+
+    // The job fails — a broken sweep must be visible, not swallowed — but 'good' was still marked:
+    // one deterministic failure must not block every issue behind it on every run.
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([boom]);
   });
 });

@@ -63,7 +63,11 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
    * event, leaving the issue's other history as it was.
    */
   async function ageIssue(id: string, when: Date, eventType?: string): Promise<void> {
-    const events = `update "issue"."issue_event" set received_at = '${when.toISOString()}'
+    // 456 microseconds on top: `received_at` is microsecond-precise in production, and the
+    // sweep's progress check has to survive `lastProgressAt` having been truncated to
+    // milliseconds by a JS `Date`. Whole-millisecond test data would hide that entirely.
+    const events = `update "issue"."issue_event"
+      set received_at = '${when.toISOString()}'::timestamptz + interval '456 microseconds'
       where issue_id = '${id}' ${eventType === undefined ? '' : `and type = '${eventType}'`};`;
     const issue =
       eventType === undefined
@@ -103,7 +107,7 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
     withCorrelation(newCorrelationId(), async () => {
       const id = await idleIssue();
 
-      const marked = await markStaleIssues(repo, CONTEXT, NOW);
+      const { marked } = await markStaleIssues(repo, CONTEXT, NOW);
 
       expect(marked.map((i) => i.id)).toContain(id);
       const row = await repo.findById(scope(CONTEXT, { id }));
@@ -122,7 +126,7 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
       await repo.transition(scope(CONTEXT, { id }), 'investigating', 'agent', 'investigator');
       await ageIssue(id, RECENTLY, 'state_changed');
 
-      const marked = await markStaleIssues(repo, CONTEXT, NOW);
+      const { marked } = await markStaleIssues(repo, CONTEXT, NOW);
 
       expect(marked.map((i) => i.id)).not.toContain(id);
       expect(await repo.findById(scope(CONTEXT, { id }))).toMatchObject({
@@ -136,7 +140,7 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
       const id = await idleIssue();
       const idleBefore = new Date(NOW.getTime() - STALE_WINDOW_MS);
       const [candidate] = (await repo.findStaleCandidates(scope(CONTEXT, { idleBefore }))).filter(
-        (c) => c.issue.id === id,
+        (c) => c.id === id,
       );
       expect(candidate).toBeDefined();
 
@@ -152,19 +156,70 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
       });
     }));
 
+  it('waits for a signal that is mid-commit on the same issue, rather than marking it stale over the top', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const id = await idleIssue();
+      const idleBefore = new Date(NOW.getTime() - STALE_WINDOW_MS);
+      const [candidate] = (await repo.findStaleCandidates(scope(CONTEXT, { idleBefore }))).filter(
+        (c) => c.id === id,
+      );
+      expect(candidate).toBeDefined();
+
+      // What `recordOccurrence` does — lock the row with an UPDATE, then write the event — held
+      // open. The sweep's progress check cannot see this uncommitted event; only waiting on the
+      // row lock and re-reading afterwards can.
+      let commit!: () => void;
+      const mayCommit = new Promise<void>((resolve) => (commit = resolve));
+      let inFlight!: () => void;
+      const signalInFlight = new Promise<void>((resolve) => (inFlight = resolve));
+      const signal = prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          UPDATE "issue"."issue" SET occurrence_count = occurrence_count + 1
+          WHERE id = ${id}::uuid AND tenant_id = ${TENANT_ID}::uuid`;
+        await tx.issueEvent.create({
+          data: {
+            id: randomUUID(),
+            tenantId: TENANT_ID,
+            issueId: id,
+            type: 'signal_received',
+            cause: 'ingestion',
+            actorRef: 'ingestion',
+            payload: {},
+            observedAt: NOW,
+          },
+        });
+        inFlight();
+        await mayCommit;
+      });
+      await signalInFlight;
+
+      const marking = repo
+        .markStale(scope(CONTEXT, { id, at: NOW, lastProgressAt: candidate!.lastProgressAt }))
+        .then(
+          () => 'marked' as const,
+          (error: unknown) => error,
+        );
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      commit();
+      await signal;
+
+      expect(await marking).toBeInstanceOf(ConcurrentModificationError);
+      expect(await repo.findById(scope(CONTEXT, { id }))).toMatchObject({
+        state: 'detected',
+        staleAt: null,
+      });
+    }));
+
   it('never resolves anything, and sweeping twice marks nothing new (R-11)', () =>
     withCorrelation(newCorrelationId(), async () => {
       const id = await idleIssue();
       await markStaleIssues(repo, CONTEXT, NOW);
 
-      const second = await markStaleIssues(repo, CONTEXT, NOW);
+      const { marked: second } = await markStaleIssues(repo, CONTEXT, NOW);
 
       expect(second.map((i) => i.id)).not.toContain(id);
-      const states = await query(
-        pg,
-        `select string_agg(distinct state::text, ',') from "issue"."issue" where tenant_id = '${TENANT_ID}'`,
-      );
-      expect(states).not.toContain('resolved');
+      // This issue's own state — a query over the whole tenant depends on what other tests left.
+      expect(await repo.findById(scope(CONTEXT, { id }))).toMatchObject({ state: 'stale' });
       const names = await query(
         pg,
         `select string_agg(name, ',' order by occurred_at) from "events"."outbox"
@@ -179,7 +234,7 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
       await repo.transition(scope(CONTEXT, { id }), 'resolved', 'human', 'operator');
       await ageIssue(id, LONG_AGO);
 
-      const marked = await markStaleIssues(repo, CONTEXT, NOW);
+      const { marked } = await markStaleIssues(repo, CONTEXT, NOW);
 
       expect(marked.map((i) => i.id)).not.toContain(id);
       expect(await repo.findById(scope(CONTEXT, { id }))).toMatchObject({ state: 'resolved' });
@@ -189,7 +244,7 @@ describe('staleness sweep (001 T051, FR-017, R-11)', () => {
     withCorrelation(newCorrelationId(), async () => {
       const id = await idleIssue();
 
-      const marked = await markStaleIssues(repo, OTHER_CONTEXT, NOW);
+      const { marked } = await markStaleIssues(repo, OTHER_CONTEXT, NOW);
 
       expect(marked).toEqual([]);
       expect(await repo.findById(scope(CONTEXT, { id }))).toMatchObject({ state: 'detected' });

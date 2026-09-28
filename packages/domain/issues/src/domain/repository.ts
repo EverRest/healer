@@ -43,13 +43,15 @@ export class FingerprintAlreadyOpenError extends Error {
 }
 
 /**
- * An issue the staleness sweep may mark (001 T051, FR-017): the issue itself plus the progress time
- * the query measured it against — `lastProgressAt` is the later of its last signal and its last
- * state change, and it is what `IssueStale` carries (contracts/events.md). It is returned rather
- * than recomputed by the caller so the value published is the one the decision was made on.
+ * An issue the staleness sweep may mark (001 T051, FR-017): its id plus the progress time the query
+ * measured it against — `lastProgressAt` is the later of its last signal and its last state
+ * change, and it is what `IssueStale` carries (contracts/events.md). It is returned rather than
+ * recomputed by the caller so the value published is the one the decision was made on. Just the
+ * id, not the `Issue`: `markStale` re-reads the row under its own lock, so anything more here
+ * would be a copy that can already be out of date.
  */
 export interface StaleCandidate {
-  readonly issue: Issue;
+  readonly id: string;
   readonly lastProgressAt: Date;
 }
 
@@ -144,13 +146,15 @@ export interface IssueRepository {
     where: TenantScoped<{ readonly idleBefore: Date }>,
   ): Promise<readonly StaleCandidate[]>;
   /**
-   * Marks one issue stale (001 T051, FR-017, R-11): sets `state` and `staleAt`, writes the
-   * `issue_event` recording it and publishes `IssueStale` — all in one transaction, the same
-   * shape `transition` uses. Deliberately its own method rather than a `transition` call: a
-   * staleness sweep that can reach the general transition API is a sweep that can resolve an
-   * issue, and "stale is surfaced, never auto-resolved" is the whole of R-11. `at` is passed in
-   * rather than taken from the clock inside so the sweep's own run time is what every issue it
-   * marks records.
+   * Marks one issue stale (001 T051, FR-017, R-11): locks the row, then sets `state` and
+   * `staleAt`, writes the `issue_event` recording it and publishes `IssueStale` — all in one
+   * transaction. Throws `ConcurrentModificationError` if the issue made progress after
+   * `lastProgressAt` was measured. A separate method rather than a `transition` call so that the
+   * sweep's type (`Pick<IssueRepository, 'findStaleCandidates' | 'markStale'>`) has no way to
+   * reach `transition`: "stale is surfaced, never auto-resolved" is the whole of R-11, and a type
+   * that cannot express the call is a stronger guarantee than a convention. `at` is passed in
+   * rather than taken from the clock so the sweep's own run time is what every issue it marks
+   * records.
    */
   markStale(
     where: TenantScoped<{
