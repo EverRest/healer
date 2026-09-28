@@ -238,7 +238,8 @@ export class PrismaIssueRepository implements IssueRepository, IssueMergeReposit
   ): Promise<Issue> {
     // SERIALIZABLE, not the default READ COMMITTED — two concurrent transitions both reading the
     // same `current.state` and both validating fine against the graph (review finding: both
-    // `detected -> merged` and `detected -> investigating` are legal edges) used to both commit,
+    // `detected -> stale` and `detected -> investigating` are legal edges; the original pair was
+    // `-> merged`, which `transition()` no longer reaches — 001 T049) used to both commit,
     // each writing its own `state_changed` event from the same `fromState`. A guarded
     // `UPDATE ... WHERE state = <the state validation ran against>` under READ COMMITTED — even
     // with an explicit `SELECT ... FOR UPDATE` locking the row first — still measurably let both
