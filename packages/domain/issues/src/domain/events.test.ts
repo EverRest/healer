@@ -1,6 +1,11 @@
 import { withCorrelation } from '@healer/shared';
 import { describe, expect, it } from 'vitest';
-import { issueDetectedEvent, issueRelatedEvent, issueStateChangedEvent } from './events.js';
+import {
+  issueDetectedEvent,
+  issueRelatedEvent,
+  issueStaleEvent,
+  issueStateChangedEvent,
+} from './events.js';
 import type { Issue, IssueRelationship } from './issue.js';
 
 const ISSUE: Issue = {
@@ -93,5 +98,20 @@ describe('issueDetectedEvent / issueStateChangedEvent (001 T013, contracts/event
         actorRef: 'x',
       }),
     ).toThrow(/correlated scope/);
+  });
+});
+
+describe('issueStaleEvent (001 T051, contracts/events.md)', () => {
+  it('carries lastProgressAt as an ISO string — the one payload field the contract names', () => {
+    const event = withCorrelation('corr-1', () =>
+      issueStaleEvent('tenant-1', 'issue-1', new Date('2026-01-01T00:00:00Z')),
+    );
+    expect(event).toMatchObject({
+      name: 'IssueStale',
+      tenantId: 'tenant-1',
+      subjectId: 'issue-1',
+      correlationId: 'corr-1',
+      payload: { lastProgressAt: '2026-01-01T00:00:00.000Z' },
+    });
   });
 });

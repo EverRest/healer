@@ -27,6 +27,8 @@ const noopIssues: IssueRepository = {
   correlate: () => Promise.reject(new Error('not implemented in this test')),
   list: () => Promise.resolve([]),
   findRelationships: () => Promise.reject(new Error('not implemented in this test')),
+  findStaleCandidates: () => Promise.reject(new Error('not implemented in this test')),
+  markStale: () => Promise.reject(new Error('not implemented in this test')),
 };
 const noopEvidence: EvidenceRepository = {
   record: () => Promise.reject(new Error('not implemented in this test')),

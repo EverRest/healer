@@ -28,6 +28,8 @@ const noopIssues: IssueRepository = {
   correlate: () => Promise.reject(new Error('not implemented for contract generation')),
   list: () => Promise.resolve([]),
   findRelationships: () => Promise.resolve([]),
+  findStaleCandidates: () => Promise.resolve([]),
+  markStale: () => Promise.reject(new Error('not implemented for OpenAPI generation')),
 };
 const noopEvidence: EvidenceRepository = {
   record: () => Promise.reject(new Error('not implemented for contract generation')),

@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { NotFoundError, type TenantScoped } from '@healer/shared';
-import { Prisma, type Issue as IssueRow, type PrismaClient } from '@healer/prisma-client';
+import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { Issue, IssueRelationship } from '../domain/issue.js';
+import { toDomain } from './issue-row.js';
+import { findStaleCandidates, markStale } from './prisma-issue-staleness.js';
 import { issueDetectedEvent, issueRelatedEvent, issueStateChangedEvent } from '../domain/events.js';
 import {
   FingerprintAlreadyOpenError,
   type IssueRepository,
   type NewIssue,
+  type StaleCandidate,
 } from '../domain/repository.js';
 import {
   ConcurrentModificationError,
@@ -43,26 +46,6 @@ function isIssueRelationshipTarget(meta: unknown): boolean {
     target.includes('other_issue_id') &&
     target.includes('kind')
   );
-}
-
-function toDomain(row: IssueRow): Issue {
-  return {
-    id: row.id,
-    tenantId: row.tenantId,
-    kind: row.kind,
-    componentId: row.componentId,
-    environment: row.environment,
-    severity: row.severity,
-    state: row.state,
-    fingerprint: row.fingerprint,
-    rulesetVersion: row.rulesetVersion,
-    occurrenceCount: row.occurrenceCount,
-    firstSeenAt: row.firstSeenAt,
-    lastSeenAt: row.lastSeenAt,
-    staleAt: row.staleAt,
-    resolvedAt: row.resolvedAt,
-    createdAt: row.createdAt,
-  };
 }
 
 export class PrismaIssueRepository implements IssueRepository {
@@ -487,5 +470,23 @@ export class PrismaIssueRepository implements IssueRepository {
       rule: row.rule,
       createdAt: row.createdAt,
     }));
+  }
+
+  /** See `findStaleCandidates` in `prisma-issue-staleness.ts` (001 T051). */
+  findStaleCandidates(
+    where: TenantScoped<{ readonly idleBefore: Date }>,
+  ): Promise<readonly StaleCandidate[]> {
+    return findStaleCandidates(this.prisma, where);
+  }
+
+  /** See `markStale` in `prisma-issue-staleness.ts` (001 T051). */
+  markStale(
+    where: TenantScoped<{
+      readonly id: string;
+      readonly at: Date;
+      readonly lastProgressAt: Date;
+    }>,
+  ): Promise<Issue> {
+    return markStale(this.prisma, where);
   }
 }

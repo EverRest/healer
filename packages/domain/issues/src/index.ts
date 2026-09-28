@@ -17,6 +17,7 @@ export * from './domain/timeline.js';
 export * from './application/commands/correlate-issue.js';
 export * from './application/commands/enqueue-signal-batch.js';
 export * from './application/commands/ingest-signal-batch.js';
+export * from './application/commands/mark-stale-issues.js';
 export * from './application/commands/process-signal-job.js';
 export * from './infrastructure/prisma-issue-repository.js';
 export * from './infrastructure/prisma-timeline-repository.js';

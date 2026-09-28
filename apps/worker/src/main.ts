@@ -1,7 +1,14 @@
-import { createLogger, loadConfig, newCorrelationId, withCorrelation } from '@healer/shared';
+import {
+  createLogger,
+  loadConfig,
+  newCorrelationId,
+  TenantContext,
+  withCorrelation,
+} from '@healer/shared';
 import { type DrainResult } from '@healer/events';
 import { createWorker, deadLetterDepth, createQueue, type QueueClass } from '@healer/workflow';
 import {
+  markStaleIssues,
   processSignalJob,
   PrismaIssueRepository,
   PrismaNormalisationRulesetRepository,
@@ -55,6 +62,17 @@ export function start(): { close: () => Promise<void> } {
           // -count the very occurrence it just recorded. Return a JSON-safe summary instead; the
           // domain result itself is for `ingestSignal`'s other, non-queue callers.
           return { issueId: result.issue.id, created: result.created };
+        }
+        // The staleness sweep (001 T051, R-11): one job per tenant, so no query in it is ever
+        // cross-tenant. Nothing schedules these yet — see QUESTIONS.md "001 T051".
+        if (queue === 'maintenance' && job.name === 'staleness-sweep') {
+          const { tenantId } = job.data as { tenantId: string };
+          const marked = await markStaleIssues(
+            issueRepo,
+            TenantContext.forTrustedInternalUse(tenantId),
+            new Date(),
+          );
+          return { marked: marked.length };
         }
         return undefined;
       });

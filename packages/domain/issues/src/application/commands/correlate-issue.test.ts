@@ -44,6 +44,8 @@ function repoWithCandidates(candidates: readonly Issue[]): IssueRepository & {
     findOpenCorrelationCandidates: async () => candidates,
     list: () => Promise.reject(new Error('not used in this test')),
     findRelationships: () => Promise.reject(new Error('not used in this test')),
+    findStaleCandidates: () => Promise.reject(new Error('not used in this test')),
+    markStale: () => Promise.reject(new Error('not used in this test')),
     correlate: async (where) => {
       correlateCalls.push(where);
       return {
@@ -106,6 +108,8 @@ describe('correlateIssue (001 T039, FR-020, quickstart 26)', () => {
       correlate: () => Promise.reject(new Error('not used in this test')),
       list: () => Promise.reject(new Error('not used in this test')),
       findRelationships: () => Promise.reject(new Error('not used in this test')),
+      findStaleCandidates: () => Promise.reject(new Error('not used in this test')),
+      markStale: () => Promise.reject(new Error('not used in this test')),
     };
 
     expect(await correlateIssue(repo, CONTEXT, subject)).toEqual([]);

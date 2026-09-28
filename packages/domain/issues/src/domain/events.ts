@@ -72,3 +72,18 @@ export function issueStateChangedEvent(
     },
   };
 }
+
+/** `IssueStale` (001 T051, contracts/events.md): surfaced to the dashboard, never a resolution. */
+export function issueStaleEvent(
+  tenantId: string,
+  issueId: string,
+  lastProgressAt: Date,
+): DomainEvent {
+  return {
+    name: 'IssueStale',
+    tenantId,
+    subjectId: issueId,
+    correlationId: requireCorrelationId(),
+    payload: { lastProgressAt: lastProgressAt.toISOString() },
+  };
+}

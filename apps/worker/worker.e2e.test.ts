@@ -106,6 +106,33 @@ describe('apps/worker consuming the ingestion queue (001 T025, FR-019)', () => {
     }
   }, 30_000);
 
+  it('a staleness-sweep job on the maintenance queue marks an idle issue stale — and only that (001 T051, R-11)', async () => {
+    const tenantId = '00000000-0000-0000-8000-0000000000d2';
+    const issueId = randomUUID();
+    await query(
+      pg,
+      `insert into "issue"."issue"
+         (id, tenant_id, kind, environment, severity, state, fingerprint, ruleset_version,
+          occurrence_count, first_seen_at, last_seen_at, created_at)
+       values ('${issueId}', '${tenantId}', 'production_incident', 'prod', 'high', 'detected',
+               'idle-fp', 1, 1, '2020-01-01', '2020-01-01', '2020-01-01')`,
+    );
+    const queue = createQueue('maintenance', { url: redis.url });
+    try {
+      await queue.add('staleness-sweep', { tenantId, correlationId: randomUUID() });
+
+      const state = await waitFor(async () => {
+        const row = await prisma.issue.findUnique({
+          where: { id_tenantId: { id: issueId, tenantId } },
+        });
+        return row?.state === 'stale' ? row.state : null;
+      });
+      expect(state).toBe('stale');
+    } finally {
+      await queue.close();
+    }
+  }, 30_000);
+
   it('a job that can never succeed becomes an observable dead letter, not a silent loss', async () => {
     const queue = createQueue('ingestion', { url: redis.url });
     try {

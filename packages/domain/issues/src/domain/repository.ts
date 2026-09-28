@@ -43,6 +43,17 @@ export class FingerprintAlreadyOpenError extends Error {
 }
 
 /**
+ * An issue the staleness sweep may mark (001 T051, FR-017): the issue itself plus the progress time
+ * the query measured it against — `lastProgressAt` is the later of its last signal and its last
+ * state change, and it is what `IssueStale` carries (contracts/events.md). It is returned rather
+ * than recomputed by the caller so the value published is the one the decision was made on.
+ */
+export interface StaleCandidate {
+  readonly issue: Issue;
+  readonly lastProgressAt: Date;
+}
+
+/**
  * Create, read, transition and record-occurrence only (FR-006) — there is no generic update.
  * `transition` and `recordOccurrence` are the two legitimate mutations, and both always write
  * the `issue_event` that records what happened in the same operation: a state change or a signal
@@ -122,6 +133,32 @@ export interface IssueRepository {
       readonly since?: Date;
     }>,
   ): Promise<readonly Issue[]>;
+  /**
+   * Issues with neither a new signal nor a state change since `idleBefore` (001 T051, FR-017,
+   * R-11). Only genuinely live states are considered: `resolved`, `merged`, `removed` and
+   * already-`stale` issues are excluded, so the sweep is idempotent and never touches history.
+   * "No progress" counts state changes as well as signals — an issue being actively worked on
+   * with no new occurrences is not stale, which is why this cannot be a `last_seen_at` filter.
+   */
+  findStaleCandidates(
+    where: TenantScoped<{ readonly idleBefore: Date }>,
+  ): Promise<readonly StaleCandidate[]>;
+  /**
+   * Marks one issue stale (001 T051, FR-017, R-11): sets `state` and `staleAt`, writes the
+   * `issue_event` recording it and publishes `IssueStale` — all in one transaction, the same
+   * shape `transition` uses. Deliberately its own method rather than a `transition` call: a
+   * staleness sweep that can reach the general transition API is a sweep that can resolve an
+   * issue, and "stale is surfaced, never auto-resolved" is the whole of R-11. `at` is passed in
+   * rather than taken from the clock inside so the sweep's own run time is what every issue it
+   * marks records.
+   */
+  markStale(
+    where: TenantScoped<{
+      readonly id: string;
+      readonly at: Date;
+      readonly lastProgressAt: Date;
+    }>,
+  ): Promise<Issue>;
   /**
    * Every non-removed relationship touching this issue, in *either* direction (001 T040, FR-020):
    * `recurrence_of`/`merged_into` are written with this issue as the subject (`issueId`), while a

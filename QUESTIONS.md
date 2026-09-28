@@ -570,3 +570,33 @@ correlate idempotency, `findOpenCorrelationCandidates` including resolved issues
 `check:evidence-coverage`'s tenant-scoping and fail-closed gaps, and `NewAuditEntry`'s discriminated
 union. Two findings considered and deliberately not fixed, also recorded there (a DB CHECK
 constraint the type-level fix already supersedes; logging for a currently-unreachable branch).
+
+## 001 T051 — staleness sweep: what "progress" is, and three things it leaves open
+
+**Decided.** Progress is the *system's* clock: the latest `issue_event.received_at` for the issue,
+or `created_at` if it has none. Not `last_seen_at`: that is the source clock (R-10) and never moves
+backwards, so a delayed signal from last month would leave it untouched — yet it is a signal that
+just arrived, and the issue it landed on is not idle. State changes count as progress too, so an
+issue being worked on with no new occurrences is not swept. The window is 30 days
+(`STALE_WINDOW_MS`), a placeholder in the same way `REOPEN_WINDOW_MS` is — S0-7 lists it as unset.
+
+**Open — nothing schedules the sweep.** `staleness-sweep` (queue `maintenance`, data
+`{ tenantId }`) is routed in `apps/worker` and tested, but no code enqueues it: that needs
+something to enumerate tenants and a repeatable schedule, which is 012's scheduling territory and
+a new pattern (ADR first). Until then the sweep is correct and consumed by nothing — the
+"guarantee with no reader" shape AGENTS.md names. Whoever picks up scheduling should also decide
+whether the window becomes per-tenant configuration.
+
+**Open — a signal arriving on a `stale` issue.** `data-model.md`'s state diagram has no edge out of
+`stale` except resolve/merge/remove, and `findOpenByFingerprint` counts `stale` as open. So today a
+matching signal attaches to the stale issue (count goes up) and the issue stays `stale` forever:
+the dashboard keeps saying "nothing is happening" about something that is. Options: a
+`stale -> investigating` edge on a new signal (the reopen path, without a window), or exclude
+`stale` from "open" so the signal starts a new issue. Not chosen here — it changes the state graph
+and the fingerprint rules both.
+
+**Open — the sweep tolerates a race, it does not eliminate it.** `markStale` re-measures progress
+inside its transaction and refuses (`ConcurrentModificationError`, skipped by the sweep) if
+anything arrived since the read. A signal landing in the microseconds between that check and the
+`UPDATE` can still be marked stale; it is corrected only by the next signal being attached to a
+`stale` issue — which, per the item above, does not un-stale it.

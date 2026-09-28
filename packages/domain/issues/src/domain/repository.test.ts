@@ -25,6 +25,8 @@ const repo: IssueRepository = {
   correlate: () => Promise.reject(new Error('type-proof stub, never called')),
   list: () => Promise.reject(new Error('type-proof stub, never called')),
   findRelationships: () => Promise.reject(new Error('type-proof stub, never called')),
+  findStaleCandidates: () => Promise.reject(new Error('type-proof stub, never called')),
+  markStale: () => Promise.reject(new Error('type-proof stub, never called')),
 };
 
 const NEW_ISSUE: NewIssue = {
@@ -66,6 +68,10 @@ function typeProofNeverCalled(): void {
   repo.list({});
   // @ts-expect-error findRelationships requires a TenantScoped<{ id }>, not a plain { id }
   repo.findRelationships({ id: 'issue-1' });
+  // @ts-expect-error findStaleCandidates requires a TenantScoped filter, not a plain one
+  repo.findStaleCandidates({ idleBefore: new Date() });
+  // @ts-expect-error markStale requires a TenantScoped filter, not a plain one
+  repo.markStale({ id: 'issue-1', at: new Date(), lastProgressAt: new Date() });
 }
 void typeProofNeverCalled;
 

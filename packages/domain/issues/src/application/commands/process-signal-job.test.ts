@@ -63,6 +63,8 @@ function issueRepoRecording(created: Issue[], onCreate?: () => void): IssueRepos
     correlate: () => Promise.reject(new Error('not used in this test')),
     list: () => Promise.reject(new Error('not used in this test')),
     findRelationships: () => Promise.reject(new Error('not used in this test')),
+    findStaleCandidates: () => Promise.reject(new Error('not used in this test')),
+    markStale: () => Promise.reject(new Error('not used in this test')),
     create: async (issue) => {
       onCreate?.();
       const row = issueRow(issue);

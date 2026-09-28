@@ -113,7 +113,7 @@ seen to fail first; a guarantee nobody has watched fail is an assumption.
 
 - [ ] T049 Merge: write a `merged_into` relationship row and a merge event; **evidence is not copied** (FR-016, FR-020, quickstart 17)
 - [ ] T050 Unmerge by setting `removed_at` on the relationship, restoring independence; counts restored to both sides, not split (R-08, quickstart 18)
-- [ ] T051 [P] Staleness job marking and surfacing; **never auto-resolving** (FR-017, R-11, quickstart 19)
+- [X] T051 [P] Staleness job marking and surfacing; **never auto-resolving** (FR-017, R-11, quickstart 19) — `markStaleIssues` + `IssueRepository.findStaleCandidates`/`markStale` (no path to `resolved` at all: the sweep only calls `markStale`); progress is `issue_event.received_at`, not `last_seen_at`; `IssueStale` published in the same transaction; routed as `maintenance`/`staleness-sweep` in `apps/worker`. **Not scheduled** — nothing enqueues it, and a signal on a `stale` issue does not un-stale it (both in QUESTIONS.md "001 T051")
 - [ ] T052 [P] Retention job purging expired evidence and detaching what outlives its source
 - [ ] T053 Tenant deletion: remove issue, evidence and audit content; leave a tombstone with no content (FR-018, R-12, quickstart 23)
 - [ ] T054 [P] **Test**: `IssueResolved` is emitted only by production verification (`remediated`, `fixed`) or a human close (`self_resolved`) — never by merge and never by deploy; `self_resolved` carries **no** verification evidence (quickstart 24, [contracts/events.md](contracts/events.md))
