@@ -1228,3 +1228,65 @@ wrong. Ordered by how much a wrong default costs.
 11. **Publishing this work.** Everything for T045-T057 except T056 sits on the local branch
     `worktree-001-phase8-staleness` (plus the two agent branches it merged), unpushed by instruction.
     Squash or keep the history, and when to run a full green `make ci` first, are yours to call.
+12. **Retention by received time (R-10) is a claim, not a mechanism.** `expires_at` is whatever the
+    caller passes to `recordEvidence`; nothing derives it from `received_at` (retention.ts's comment
+    says it is), and signals (`issue_event`) have no retention at all. Needs: where the retention
+    period lives (per tenant?) and whether signals expire. Blocks quickstart 7, so T056.
+    (`001 T056`.)
+13. **A parse failure is not recorded as evidence** (quickstart 20). `evidence.issue_id` is NOT NULL
+    and an unparseable signal has no issue; today the `rejected` array in the 202 response is the
+    only record. Junk-drawer issue, a new evidence type, or reword the scenario. Blocks T056.
+    (`001 T024`.)
+
+## 001 T056 — quickstart run
+
+Run 2026-09-28 on `208cd73`, every file below executed (heavy files alone under their own project:
+`e2e-heavy-1` 40 s, `-3` 6 s, `-4` 33 s; the shared e2e group 14 files / 158 tests in 110 s; 14 unit
+files). All green. **24 PASS, 2 PARTIAL, 1 NOT IMPLEMENTABLE YET** — T056 stays unticked.
+
+| # | Scenario | Status | Test | Note |
+|---|----------|--------|------|------|
+| 1 | Burst collapses | PASS | `ingest-signal.e2e.test.ts`::replaying 12 000 signals … (quickstart 1) | count, first/last seen, one row; 34.7 s alone |
+| 2 | Volatile parts ignored | PASS | `fingerprint.test.ts`::is identical for the same failure with different request ids, addresses and line offsets | also exercised at 12 000 scale in #1 |
+| 3 | Different failures | PASS | `fingerprint.test.ts`::differs for a genuinely different exception type …; `ingest-signal.e2e.test.ts`::a genuinely different exception type creates a separate issue … | |
+| 4 | Delivery retry | PASS | `apps/api/ingest.e2e.test.ts`::the same delivery posted twice returns duplicate: true … | nothing enqueued the second time |
+| 5 | Reopen | PASS | `ingest-signal.e2e.test.ts`::… inside the reopen window, reopens it … | |
+| 6 | Recurrence | PASS | `ingest-signal.e2e.test.ts`::… outside the reopen window, creates a new issue linked recurrence_of … | rule `reopen_window_exceeded` on the row |
+| 7 | Clock skew | **PARTIAL** | `ingest-signal.e2e.test.ts`::a signal with a clock five minutes ahead …; `timeline.e2e.test.ts`::orders by observed time … | ordering by observed: proven. Retention by received: **not implemented** — see finding 1 |
+| 8 | Evidence immutable | PASS | `append-only.e2e.test.ts`::rejects an UPDATE that changes anything but evidence.ref_state | raw SQL, i.e. at the database |
+| 9 | Conclusion without evidence | PASS | `evidence-link-repository.e2e.test.ts`::rejects a conclusion with no evidence_link …; `evidence-required.test.ts` (message `EVIDENCE_REQUIRED`) | the guard; no diagnosis table exists until 006 |
+| 10 | Producer attribution | PASS | `step-attribution.e2e.test.ts`::rejects a link attributed to a step other than the one executing | `STEP_ATTRIBUTION_MISMATCH` |
+| 11 | No retrospective links | PASS | `no-retrospective-link-api.test.ts` | contract review, as the scenario says |
+| 12 | Detachment | PASS | `evidence-repository.e2e.test.ts`::detaching evidence leaves every conclusion built on it intact; `issue-close-and-views.e2e.test.ts` (quickstart 16) shows `refState: detached` in the graph | "delete the source log range" is modelled as `detach`; nothing detects source loss yet |
+| 13 | Oversized excerpt | PASS | `evidence-repository.e2e.test.ts`::a 40 MB excerpt is bounded at capture … | through `recordEvidence`, not HTTP (the ingest body limit is 5 MB, and a dump is evidence, not a signal) |
+| 14 | Timeline determinism | PASS | `timeline.e2e.test.ts`::renders byte-identical output twice …; `issue-close-and-views.e2e.test.ts`::renders byte-identical timeline and graph across separate requests | |
+| 15 | Timeline has no model | PASS | `timeline.e2e.test.ts`::unions domain facts, machine steps and evidence …; **new** `timeline-no-model.test.ts` | no-model half had no test; added |
+| 16 | Views agree | PASS | `issue-close-and-views.e2e.test.ts`::timeline, evidence graph and audit for one issue contain the same facts (quickstart 16) | |
+| 17 | Merge | PASS | `issue-merge.e2e.test.ts`::records a merged_into row, the merge event …; ::does not copy or move any evidence row … | repository level; no `/merge` route (finding 3) |
+| 18 | Unmerge | PASS | `issue-merge.e2e.test.ts`::counts on both sides are what they were, never split (R-08); ::sets removed_at … | repository level; no `/unmerge` route |
+| 19 | Stale | PASS | `stale-issues.e2e.test.ts`::marks an idle issue stale …; ::never resolves anything …; `worker.e2e.test.ts`::a staleness-sweep job … | nothing schedules the sweep (index item 4) |
+| 20 | Malformed payload | **PARTIAL** | `apps/api/ingest.e2e.test.ts`::a batch mixing valid and malformed signals …; ::a wrongly typed but non-identity errorSignature field is dropped … | issue from what parsed, nothing silent: proven. "Parse failure recorded as evidence": **not implemented** — finding 2 |
+| 21 | Downstream failure | PASS | **new** `worker.e2e.test.ts`::a signal whose downstream keeps failing is retained, retried … (quickstart 21); ::a job that can never succeed becomes an observable dead letter … | before: dead letter only, with `attempts: 1`, so retry was never exercised |
+| 22 | Tenant isolation | PASS | `apps/api/issues.e2e.test.ts` (issue, evidence, audit: 404s another tenant's issue — never 403); `issue-close-and-views.e2e.test.ts` (timeline, graph, close) | `assertTenantIsolated` expects 404 exactly |
+| 23 | Deletion | PASS | `issue-deletion.e2e.test.ts`::leaves no row of the issue in any table …; ::holds the identifier, time and requester — and no field derived … | repository level; no `DELETE /issues/{id}` route, so a tenant cannot ask yet (finding 3) |
+| 24 | Resolved means verified | PASS | `issue-resolved.test.ts`::IssueResolved has exactly one producer (6 tests); `issue-resolved.e2e.test.ts`::no other transition publishes it … | |
+| 25 | Knowledge drift terminates | PASS | `state-machine.test.ts`::knowledge_drift terminates at human adjudication (5); `issue-repository.e2e.test.ts`::a knowledge_drift issue cannot enter acting … | "never enters reproduction": no reproduction step exists — 007 must honour it |
+| 26 | Correlation, not merge | NOT IMPLEMENTABLE YET | `issue-repository.e2e.test.ts`::correlate records a related relationship …; `correlate-issue.test.ts`; `correlation.test.ts` | rule, row, `IssueRelated`, states unchanged: proven at repository level. End to end ("ingest … sharing component") needs **004**: ingestion leaves `componentId` null and `correlateIssue` has no caller |
+| 27 | Human close | PASS | `issue-close-and-views.e2e.test.ts`::resolves the issue as self_resolved, with no verification evidence … | "a held 009 ticket escalates": NOT IMPLEMENTABLE YET, needs **009** |
+
+**Findings** (no product code changed):
+
+1. **R-10 retention is unenforced** (#7). `recordEvidence` stores the caller's absolute `expiresAt`.
+   Failing case: record evidence with `observedAt = now + 5 min` and `expiresAt = observedAt + 30 d` —
+   accepted as-is, so a skewed source clock moves the expiry, exactly what R-10 forbids. Nothing in
+   001 computes `expires_at`, and `issue_event` has no retention at all. Index item 12.
+2. **Parse failures are not evidence** (#20) — the open T024 question, now blocking T056. Index item 13.
+3. **Three contract routes have no task and no code**: `DELETE /issues/{issueId}`, `POST
+   /issues/{issueId}/merge`, `POST /issues/{issueId}/unmerge` (`contracts/openapi.yaml`). The
+   behaviour behind them is built and tested; a tenant cannot reach it. Already noted as "not done"
+   under T049/T050 and T053; recorded here because no task in `tasks.md` owns it.
+
+**Tests added** (each passed, then was watched failing against a temporary break, restored byte for
+byte): `worker.e2e.test.ts` quickstart 21 — ingestion `attempts: 5 -> 1` made it fail (`waitFor timed
+out`); `timeline-no-model.test.ts` — adding `@healer/llm` to `@healer/events`' dependencies (a
+transitive dependency of `@healer/domain-issues`) made it fail.
