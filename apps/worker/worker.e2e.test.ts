@@ -177,9 +177,16 @@ describe('apps/worker consuming the ingestion queue (001 T025, FR-019)', () => {
         return row?.refState === 'detached' ? row.refState : null;
       });
       expect(citedState).toBe('detached');
-      expect(
-        await prisma.evidence.findUnique({ where: { id_tenantId: { id: unused, tenantId } } }),
-      ).toBeNull();
+      // Wait for this one too rather than reading it once: the sweep works through the records
+      // one at a time (same `expires_at`, so by id), and `cited` can be finished before `unused`
+      // has been reached — a single read here raced the sweep and failed under load.
+      const purged = await waitFor(async () =>
+        (await prisma.evidence.findUnique({ where: { id_tenantId: { id: unused, tenantId } } })) ===
+        null
+          ? true
+          : null,
+      );
+      expect(purged).toBe(true);
     } finally {
       await queue.close();
     }
