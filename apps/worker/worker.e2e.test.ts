@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createQueue, deadLetterDepth } from '@healer/workflow';
 import { PrismaClient } from '@healer/prisma-client';
-import type { SignalJobData } from '@healer/domain-issues';
+import { BullmqSignalQueue, type SignalJobData } from '@healer/domain-issues';
+import { TenantContext, scope } from '@healer/shared';
 import {
   applySqlFile,
   query,
@@ -212,6 +213,62 @@ describe('apps/worker consuming the ingestion queue (001 T025, FR-019)', () => {
       await queue.close();
     }
   }, 30_000);
+
+  // Quickstart 21 (R-09): the downstream fails, the signal is kept and retried, the repeated
+  // failure is visible while it is still retrying, and once the downstream recovers the same
+  // signal lands. Enqueued through the production `BullmqSignalQueue`, so the retry policy under
+  // test is the one real jobs get — not an option this test sets.
+  it('a signal whose downstream keeps failing is retained, retried with its failures visible, and lands once it recovers (quickstart 21)', async () => {
+    const tenantId = '00000000-0000-0000-8000-0000000000d4';
+    await query(
+      pg,
+      `create function test_downstream_down() returns trigger language plpgsql as $$
+         begin raise exception 'downstream unavailable (quickstart 21)'; end $$;
+       create trigger test_downstream_down before insert on "issue"."issue"
+         for each row when (new.tenant_id = '${tenantId}') execute function test_downstream_down();`,
+    );
+    const producer = new BullmqSignalQueue({ url: redis.url });
+    const queue = createQueue('ingestion', { url: redis.url });
+    try {
+      await producer.enqueueBatch([
+        scope(TenantContext.forTrustedInternalUse(tenantId), {
+          observedAt: new Date('2026-01-01T00:00:00Z'),
+          component: 'checkout-service',
+          environment: 'prod',
+          errorSignature: { exceptionType: 'DownstreamFailureCase' },
+        }),
+      ]);
+      const own = async () =>
+        (await queue.getJobs(['waiting', 'delayed', 'active', 'failed', 'completed'])).find(
+          (job) => job.data.tenantId === tenantId,
+        );
+
+      // Failed twice, and still pending another attempt: observable, not a dead letter yet.
+      const failing = await waitFor(async () => {
+        const job = await own();
+        return job !== undefined && job.attemptsMade >= 2 ? job : null;
+      });
+      expect(failing.failedReason).toMatch(/downstream unavailable/);
+      expect(['delayed', 'waiting', 'active']).toContain(await failing.getState());
+      expect(failing.data.signal.errorSignature).toEqual({
+        exceptionType: 'DownstreamFailureCase',
+      });
+      expect(await prisma.issue.count({ where: { tenantId } })).toBe(0);
+
+      await query(pg, 'drop trigger test_downstream_down on "issue"."issue"');
+
+      const landed = await waitFor(async () => {
+        const rows = await prisma.issue.findMany({ where: { tenantId } });
+        return rows.length > 0 ? rows : null;
+      });
+      expect(landed).toHaveLength(1);
+      expect(landed[0]).toMatchObject({ occurrenceCount: 1n });
+      expect(await (await own())?.getState()).toBe('completed');
+    } finally {
+      await query(pg, 'drop trigger if exists test_downstream_down on "issue"."issue"');
+      await queue.close();
+    }
+  }, 60_000);
 });
 
 /** Polls `check` until it returns a non-null value, or throws after the budget. */
