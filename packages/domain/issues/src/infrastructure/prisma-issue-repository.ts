@@ -367,7 +367,11 @@ export class PrismaIssueRepository implements IssueRepository {
         componentId: where.componentId,
         environment: where.environment,
         id: { not: where.excludeId },
-        state: { notIn: ['merged', 'removed'] },
+        // "Open" means the same thing everywhere in this repository (review finding: this used
+        // to only exclude merged/removed, letting a resolved issue — closed, done, no longer under
+        // investigation — count as a live correlation candidate) — `findOpenByFingerprint`'s own
+        // exclusion set is the one authority for what "open" means here (FR-002).
+        state: { notIn: ['resolved', 'merged', 'removed'] },
         firstSeenAt: { gte: where.since, lte: where.until },
       },
     });
@@ -377,14 +381,23 @@ export class PrismaIssueRepository implements IssueRepository {
   async correlate(
     where: TenantScoped<{ readonly id: string; readonly otherId: string; readonly rule: string }>,
   ): Promise<IssueRelationship | null> {
+    // `related` is symmetric (either issue may be the subject) but the unique index backing
+    // idempotency, `issue_relationship_tenant_id_issue_id_other_kind_key`, is directional —
+    // review finding: without a canonical order, issue A correlating against B and B correlating
+    // against A (both real, concurrent orderings once two issues discover each other) each pass
+    // the index's own uniqueness check and insert a second row for the same pair. Sorting by id
+    // here, once, is the one place this needs deciding — every caller gets real idempotency
+    // regardless of which side happened to call first.
+    const [issueId, otherIssueId] =
+      where.id < where.otherId ? [where.id, where.otherId] : [where.otherId, where.id];
     try {
       return await this.prisma.$transaction(async (tx) => {
         const row = await tx.issueRelationship.create({
           data: {
             id: randomUUID(),
             tenantId: where.tenantId,
-            issueId: where.id,
-            otherIssueId: where.otherId,
+            issueId,
+            otherIssueId,
             kind: 'related',
             rule: where.rule,
           },

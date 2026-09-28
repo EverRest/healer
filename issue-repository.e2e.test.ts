@@ -575,7 +575,9 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
         ),
       );
       // Each excluded for a different reason: different component, different environment,
-      // outside the window, and the subject's own tenant-isolated twin.
+      // outside the window, the subject's own tenant-isolated twin, and — review finding —
+      // already resolved: "open" means the same thing everywhere in this repository
+      // (`findOpenByFingerprint`), and a resolved issue is closed, not a live correlation target.
       await repo.create(scope(CONTEXT, newIssue({ componentId: billing, environment: 'prod' })));
       await repo.create(
         scope(CONTEXT, newIssue({ componentId: checkout, environment: 'staging' })),
@@ -593,6 +595,17 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       await repo.create(
         scope(OTHER_CONTEXT, newIssue({ componentId: checkout, environment: 'prod' })),
       );
+      const resolved = await repo.create(
+        scope(
+          CONTEXT,
+          newIssue({
+            componentId: checkout,
+            environment: 'prod',
+            firstSeenAt: new Date(subject.firstSeenAt.getTime() + 30_000),
+          }),
+        ),
+      );
+      await repo.transition(scope(CONTEXT, { id: resolved.id }), 'resolved', 'human', 'pavlo');
 
       const candidates = await repo.findOpenCorrelationCandidates(
         scope(CONTEXT, {
@@ -615,35 +628,61 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       const relationship = await repo.correlate(
         scope(CONTEXT, { id: a.id, otherId: b.id, rule: 'component_environment_window' }),
       );
+      // `related` is symmetric and stored canonically (review finding) — which side ends up as
+      // `issueId` vs `otherIssueId` in the row is an implementation detail, not a guarantee this
+      // test should assume; what matters is that the pair, in either order, is a relationship.
+      expect(new Set([relationship?.issueId, relationship?.otherIssueId])).toEqual(
+        new Set([a.id, b.id]),
+      );
       expect(relationship).toMatchObject({
-        issueId: a.id,
-        otherIssueId: b.id,
         kind: 'related',
         rule: 'component_environment_window',
       });
 
-      const rows = await query(
-        pg,
-        `select kind, rule from "issue"."issue_relationship"
-         where issue_id = '${a.id}' and other_issue_id = '${b.id}'`,
-      );
-      expect(rows).toBe('related|component_environment_window');
+      const count = async () =>
+        query(
+          pg,
+          `select count(*) from "issue"."issue_relationship"
+           where (issue_id = '${a.id}' and other_issue_id = '${b.id}')
+              or (issue_id = '${b.id}' and other_issue_id = '${a.id}')`,
+        );
+      expect(await count()).toBe('1');
 
-      // Correlating the identical pair again is a no-op, not a duplicate row or an error.
+      // Correlating the identical pair again — same order — is a no-op, not a duplicate row.
       const again = await repo.correlate(
         scope(CONTEXT, { id: a.id, otherId: b.id, rule: 'component_environment_window' }),
       );
       expect(again).toBeNull();
-      const count = await query(
-        pg,
-        `select count(*) from "issue"."issue_relationship" where issue_id = '${a.id}' and other_issue_id = '${b.id}'`,
-      );
-      expect(count).toBe('1');
+      expect(await count()).toBe('1');
 
       // Neither issue's state changed — a `related` link is never itself a state transition.
       const subjectAfter = await repo.findById(scope(CONTEXT, { id: a.id }));
       const otherAfter = await repo.findById(scope(CONTEXT, { id: b.id }));
       expect(subjectAfter?.state).toBe('detected');
       expect(otherAfter?.state).toBe('detected');
+    }));
+
+  it('correlate is idempotent regardless of which side calls first (001 T039 review — the backing index is directional, this method must not be)', () =>
+    withCorrelation(newCorrelationId(), async () => {
+      const a = await repo.create(scope(CONTEXT, newIssue()));
+      const b = await repo.create(scope(CONTEXT, newIssue()));
+
+      await repo.correlate(
+        scope(CONTEXT, { id: a.id, otherId: b.id, rule: 'component_environment_window' }),
+      );
+      // The reverse order — as if b's own correlation pass discovered a second, concurrently —
+      // must recognize the same fact already recorded, not insert a second row for it.
+      const reversed = await repo.correlate(
+        scope(CONTEXT, { id: b.id, otherId: a.id, rule: 'component_environment_window' }),
+      );
+      expect(reversed).toBeNull();
+
+      const count = await query(
+        pg,
+        `select count(*) from "issue"."issue_relationship"
+         where (issue_id = '${a.id}' and other_issue_id = '${b.id}')
+            or (issue_id = '${b.id}' and other_issue_id = '${a.id}')`,
+      );
+      expect(count).toBe('1');
     }));
 });

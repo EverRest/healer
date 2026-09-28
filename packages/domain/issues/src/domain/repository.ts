@@ -101,10 +101,15 @@ export interface IssueRepository {
     }>,
   ): Promise<readonly Issue[]>;
   /**
-   * Records a `related` relationship between two issues (001 T039, FR-020) — idempotent: a second
-   * call for the same `(id, otherId)` pair returns `null` rather than a duplicate row or an error,
-   * backed by the same unique index `create`'s `recurrenceOf` path already relies on
-   * (`issue_relationship_tenant_id_issue_id_other_kind_key`). Never touches either issue's state.
+   * Records a `related` relationship between two issues (001 T039, FR-020) — idempotent
+   * regardless of which side calls first: `related` is symmetric, so the implementation stores
+   * the pair in a canonical order before writing, and a second call naming the identical pair in
+   * either direction returns `null` rather than a duplicate row or an error. Backed by the same
+   * unique index `create`'s `recurrenceOf` path already relies on
+   * (`issue_relationship_tenant_id_issue_id_other_kind_key`), which is itself directional — the
+   * canonical ordering is what makes this method's own idempotency hold regardless of argument
+   * order (review finding: without it, A-correlates-B and B-correlates-A each pass the index's
+   * uniqueness check and insert a second row for the same fact). Never touches either issue's state.
    */
   correlate(
     where: TenantScoped<{ readonly id: string; readonly otherId: string; readonly rule: string }>,

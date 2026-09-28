@@ -8,26 +8,51 @@ import request from 'supertest';
  *
  * `gate-isolation` (012 T029) enumerates the committed OpenAPI document and greps e2e test
  * sources for a call to this function naming each path — a real function call is a much less
- * fragile signal than pattern-matching prose in a test's `it(...)` title.
+ * fragile signal than pattern-matching prose in a test's `it(...)` title. The `path` argument
+ * stays the literal `:param` template (never a real id substituted by the caller) so the gate's
+ * static text match keeps working; this function does the substitution itself, at runtime,
+ * against the real id `createUnderTenant` returns.
  *
- * Implemented now (001 T031 review): the earlier comment held this needed "a second tenant's
- * authenticated request context, which does not exist until 001/002 land auth" — but every
- * endpoint in this codebase, including every one built since, resolves tenant identity from a
- * bare, unverified `X-Tenant-Id` header (`TenantContext.forTrustedInternalUse`, the same stub
- * `assertTenantScopedEnqueue` already exercises this way). A "second tenant" under that stub is
- * just a second header value — no real auth is needed to prove a resource created under tenant A
- * is invisible to a request naming tenant B, only that the query itself is scoped, which is
- * exactly what this proves. The caller creates whatever the concrete `path` names under a real
- * tenant of its own choosing; this sends the same request under a fresh, guaranteed-different
- * one and asserts 404 — never 403, which would itself leak that the resource exists (SC-004).
+ * **Fixed (review finding, post-T044)**: the previous version fired one request under a random
+ * tenant and asserted 404 — which this codebase's own `findById` P2023 handling (C-55) already
+ * guarantees for a syntactically invalid id, with or without any tenant scoping at all. Every
+ * caller passes the literal `:issueId`-shaped placeholder as `path` (C-54, for `gate-isolation`'s
+ * benefit), so the "resource" being requested was never real, and this proved nothing about
+ * whether the query itself is tenant-scoped — a repository with `tenantId` silently dropped from
+ * its `WHERE` clause would have passed every one of these tests unchanged. Now: a real resource is
+ * created under tenant A, tenant A's own request for it is confirmed to succeed first (otherwise
+ * the rest proves nothing), and only then is the identical request repeated under a fresh,
+ * guaranteed-different tenant B and asserted 404 — never 403, which would itself leak that the
+ * resource exists (SC-004).
  */
 export async function assertTenantIsolated(
   app: INestApplication,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
+  config: {
+    readonly tenantA: string;
+    readonly tenantB: string;
+    readonly tenantHeader: string;
+    /** Creates the resource under `tenantA` and returns its real id, substituted for the path's
+     *  `:param` placeholder before the request is actually sent. */
+    createUnderTenant(tenantId: string): Promise<string>;
+    /** The status tenant A's own request for its own resource should return. Default 200. */
+    ownRequestStatus?: number;
+  },
 ): Promise<void> {
   const httpMethod = method.toLowerCase() as 'get' | 'post' | 'patch' | 'put' | 'delete';
-  await request(app.getHttpServer())[httpMethod](path).set('X-Tenant-Id', randomUUID()).expect(404);
+  const realId = await config.createUnderTenant(config.tenantA);
+  const realPath = path.replace(/:[^/]+/, encodeURIComponent(realId));
+
+  await request(app.getHttpServer())
+    [httpMethod](realPath)
+    .set(config.tenantHeader, config.tenantA)
+    .expect(config.ownRequestStatus ?? 200);
+
+  await request(app.getHttpServer())
+    [httpMethod](realPath)
+    .set(config.tenantHeader, config.tenantB)
+    .expect(404);
 }
 
 /**

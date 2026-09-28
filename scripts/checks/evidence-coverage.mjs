@@ -43,10 +43,15 @@ export function modelTable(schemaSource, modelName) {
 export async function findUnlinkedConclusions(prisma, taggedTables) {
   const violations = [];
   for (const { type, schema, table } of taggedTables) {
+    // Review finding: `el.tenant_id = c.tenant_id` is not redundant with the UUID join alone — a
+    // link recorded under the wrong tenant naming a real conclusion id would otherwise still
+    // count as coverage for that row, exactly the class of leak this repository's own rule
+    // ("every query carries tenantId") exists to close.
     const rows = await prisma.$queryRawUnsafe(
       `SELECT id FROM "${schema}"."${table}" c WHERE NOT EXISTS (
          SELECT 1 FROM "evidence"."evidence_link" el
          WHERE el.conclusion_type = $1::"evidence"."conclusion_type" AND el.conclusion_id = c.id
+           AND el.tenant_id = c.tenant_id
        )`,
       type,
     );
@@ -59,9 +64,18 @@ export async function findUnlinkedConclusions(prisma, taggedTables) {
 /* v8 ignore start -- CLI wiring; the parsers above are unit tested, the query by an e2e test */
 function taggedTables() {
   const schemaSource = readFileSync(SCHEMA_PATH, 'utf8');
-  return parseConclusionTags(schemaSource)
-    .map((tag) => ({ ...tag, ...modelTable(schemaSource, tag.model) }))
-    .filter((tag) => tag.schema !== undefined);
+  return parseConclusionTags(schemaSource).map((tag) => {
+    const table = modelTable(schemaSource, tag.model);
+    // Review finding: silently dropping an unresolvable tag from the checked set would make
+    // SC-002 pass by omission — a `@conclusion` tag with a typo'd or missing `@@map`/`@@schema`
+    // must fail this gate loudly, not disappear from "N conclusion table(s) checked" uncounted.
+    if (table === null) {
+      throw new Error(
+        `${tag.model} is tagged @conclusion ${tag.type} but has no resolvable @@map/@@schema`,
+      );
+    }
+    return { ...tag, ...table };
+  });
 }
 
 if (isMainModule(import.meta.url)) {

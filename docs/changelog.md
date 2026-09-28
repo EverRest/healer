@@ -95,6 +95,30 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.43.0 — 2026-09-28
+
+**Review of 001 T027–T044**: six real findings, all fixed and re-verified (`pr-review-toolkit`
+code-reviewer, silent-failure-hunter and type-design-analyzer against the full diff).
+
+- **Most serious**: the HTTP tenant-isolation tests for `GET /issues/{id}`,
+  `/issues/{id}/evidence` and `/issues/{id}/audit` proved nothing — every one always got its 404
+  from a malformed-id fallback (C-55), never from real tenant scoping, since callers pass the
+  literal `:issueId` placeholder C-54 established. Fixed: `assertTenantIsolated` now creates a
+  real resource under tenant A, confirms tenant A can see it, then asserts tenant B gets 404 for
+  the same real id. Verified by deliberately breaking tenant scoping and watching the fixed tests
+  go red where the old ones stayed green.
+- `PrismaIssueRepository.correlate` now canonicalizes the issue pair before writing — the
+  directional unique index backing its idempotency let A-correlates-B and B-correlates-A insert
+  two rows for the same symmetric fact.
+- `findOpenCorrelationCandidates` now excludes `resolved` issues, matching what "open" means
+  everywhere else in this repository.
+- `check:evidence-coverage`'s join now also matches on tenant, and a `@conclusion` tag that can't
+  resolve to a real table now fails the gate instead of silently dropping out of what's checked.
+- `NewAuditEntry`/`AuditEntry` are now a discriminated union: `agentRunId` is required exactly
+  when `actorType === 'agent'`, unrepresentable otherwise — closing a gap the plain-optional shape
+  left open before any real caller could depend on it.
+- `make ci` green: 316 unit tests, 187 e2e tests, all 16 gates.
+
 ## 0.42.0 — 2026-09-28
 
 **001 T042–T044**: the audit trail — `AuditRepository`, the SC-007 agent-run resolution, and

@@ -1,12 +1,12 @@
 import type { TenantScoped } from '@healer/shared';
 import type { PrismaClient } from '@healer/prisma-client';
-import type { AgentRunFacts, AuditEntry, NewAuditEntry } from '../domain/audit.js';
+import type { AgentRunFacts, AuditActorType, AuditEntry, NewAuditEntry } from '../domain/audit.js';
 import type { AuditRepository } from '../domain/audit-repository.js';
 
 function toDomain(row: {
   id: string;
   tenantId: string;
-  actorType: AuditEntry['actorType'];
+  actorType: AuditActorType;
   actorRef: string;
   action: string;
   targetType: string;
@@ -18,21 +18,29 @@ function toDomain(row: {
   outcome: string;
   occurredAt: Date;
 }): AuditEntry {
-  return {
+  const shared = {
     id: row.id,
     tenantId: row.tenantId,
-    actorType: row.actorType,
     actorRef: row.actorRef,
     action: row.action,
     targetType: row.targetType,
     targetId: row.targetId,
     reason: row.reason,
     evidenceIds: row.evidenceIds,
-    ...(row.agentRunId !== null ? { agentRunId: row.agentRunId } : {}),
     ...(row.policyDecisionId !== null ? { policyDecisionId: row.policyDecisionId } : {}),
     outcome: row.outcome,
     occurredAt: row.occurredAt,
   };
+  if (row.actorType === 'agent') {
+    // `record` always writes `agentRunId` alongside `actorType: 'agent'` (the type makes the two
+    // unrepresentable apart) — a row that fails this only reaches here via a raw-SQL bypass, and
+    // fabricating a fake resolution would be worse than refusing to read it back as this type.
+    if (row.agentRunId === null) {
+      throw new Error(`audit entry ${row.id} has actorType 'agent' but no agentRunId`);
+    }
+    return { ...shared, actorType: 'agent', agentRunId: row.agentRunId };
+  }
+  return { ...shared, actorType: row.actorType };
 }
 
 export class PrismaAuditRepository implements AuditRepository {

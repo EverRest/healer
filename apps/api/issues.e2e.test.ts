@@ -51,6 +51,25 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
       .get(`/api/v1/issues/${issueId}/evidence${type !== undefined ? `?type=${type}` : ''}`)
       .set('X-Tenant-Id', tenantId);
 
+  /** For `assertTenantIsolated`'s `createUnderTenant`: a fresh, real issue under whichever
+   *  tenant is passed, so the isolation proof has an actual resource to request. */
+  const createIssueUnderTenant = (tenantId: string) =>
+    withCorrelation(newCorrelationId(), async () => {
+      const created = await issues.create(
+        scope(TenantContext.forTrustedInternalUse(tenantId), {
+          id: randomUUID(),
+          kind: 'production_incident',
+          environment: 'prod',
+          severity: 'high',
+          fingerprint: `fp-isolation-${randomUUID()}`,
+          rulesetVersion: 1,
+          firstSeenAt: new Date(),
+          lastSeenAt: new Date(),
+        }),
+      );
+      return created.id;
+    });
+
   beforeAll(async () => {
     pg = await startPostgres();
     for (const name of migrationNames()) {
@@ -136,7 +155,12 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
   });
 
   it("404s another tenant's issue rather than returning an empty list — never falls through to the evidence query", () =>
-    assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId/evidence'));
+    assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId/evidence', {
+      tenantA: randomUUID(),
+      tenantB: randomUUID(),
+      tenantHeader: 'X-Tenant-Id',
+      createUnderTenant: createIssueUnderTenant,
+    }));
 
   function newIssue(overrides: Partial<NewIssue> = {}): NewIssue {
     return {
@@ -201,7 +225,12 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
     });
 
     it("404s another tenant's issue — never 403", () =>
-      assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId'));
+      assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId', {
+        tenantA: randomUUID(),
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        createUnderTenant: createIssueUnderTenant,
+      }));
   });
 
   describe('GET /issues (001 T040, FR-001, SC-004)', () => {
@@ -359,6 +388,11 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
     });
 
     it("404s another tenant's issue — never 403", () =>
-      assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId/audit'));
+      assertTenantIsolated(app, 'GET', '/api/v1/issues/:issueId/audit', {
+        tenantA: randomUUID(),
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        createUnderTenant: createIssueUnderTenant,
+      }));
   });
 });

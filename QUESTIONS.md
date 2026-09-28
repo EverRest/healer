@@ -561,3 +561,12 @@ and the SC-007 `agent_run` resolution. `GET /issues/{id}/audit` (T044) is real a
 returns nothing today, since nothing has ever called `record`. Whoever builds 002 or a real agent
 execution path is the one who wires a real call into `transition`/`create`/wherever the first
 real action lives — not this task, and not guessed at here.
+
+## Review of T027–T044 — resolved
+
+See [decisions.md](docs/decisions.md) C-67 through C-71: the vacuous HTTP isolation tests (fixed,
+verified by deliberately breaking tenant scoping and watching the tests go red), directional
+correlate idempotency, `findOpenCorrelationCandidates` including resolved issues,
+`check:evidence-coverage`'s tenant-scoping and fail-closed gaps, and `NewAuditEntry`'s discriminated
+union. Two findings considered and deliberately not fixed, also recorded there (a DB CHECK
+constraint the type-level fix already supersedes; logging for a currently-unreachable branch).
