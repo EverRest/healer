@@ -3,6 +3,7 @@
 export { ACTION_CLASSES, type ActionClass } from './domain/action-class.js';
 export type { AuditActorType, NewAuditEntry } from './domain/audit-entry.js';
 export { ACTION_CEILING, type AutonomyLevel, type Ceiling } from './domain/ceiling.js';
+export { computeConflictWarnings, couldBothMatch, type ConflictWarning } from './domain/conflict-warnings.js';
 export { decisionInputSchema, type DecisionInput } from './domain/decision-input.js';
 export { evaluate, type BudgetState, type Decision, type EvaluationTrace, type MatchedRuleTrace } from './domain/evaluate.js';
 export * from './domain/events.js';
@@ -17,5 +18,13 @@ export {
 export * from './domain/predicates/index.js';
 export { REASON_CODES, type ReasonCode } from './domain/reason-code.js';
 export type { CooldownBounds, ResolvedRuleset, Rule } from './domain/rule.js';
+export { computeRulesetDigest, type RuleBody } from './domain/policy-ruleset.js';
+export type {
+  NewPublishedRuleset,
+  PolicyRulesetRepository,
+  PublishedRuleset,
+} from './domain/policy-ruleset-repository.js';
+export { publishRuleset } from './application/commands/publish-ruleset.js';
 export { PrismaPolicyActionRepository } from './infrastructure/prisma-policy-action-repository.js';
+export { PrismaPolicyRulesetRepository } from './infrastructure/prisma-policy-ruleset-repository.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
