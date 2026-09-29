@@ -17,3 +17,4 @@ export * from './domain/predicates/index.js';
 export { REASON_CODES, type ReasonCode } from './domain/reason-code.js';
 export type { CooldownBounds, ResolvedRuleset, Rule } from './domain/rule.js';
 export { PrismaPolicyActionRepository } from './infrastructure/prisma-policy-action-repository.js';
+export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
