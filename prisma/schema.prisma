@@ -1111,6 +1111,9 @@ model GraphEdge {
   // tenant-leading indexes now that the version columns exist.
   @@index([tenantId, fromNodeId, validFromVersion, validToVersion])
   @@index([tenantId, toNodeId, validFromVersion, validToVersion])
+  // `(tenant_id, from_node_id, to_node_id, edge_type, layer) where valid_to_version = 2147483647`
+  // (T009, at most one open row per logical edge) is partial — Prisma cannot express it, so it
+  // lives in migration.sql only, same convention as graph_node's lifecycle_state index.
   @@map("graph_edge")
   @@schema("architecture")
 }
