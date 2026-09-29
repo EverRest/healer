@@ -1290,3 +1290,37 @@ files). All green. **24 PASS, 2 PARTIAL, 1 NOT IMPLEMENTABLE YET** — T056 stay
 byte): `worker.e2e.test.ts` quickstart 21 — ingestion `attempts: 5 -> 1` made it fail (`waitFor timed
 out`); `timeline-no-model.test.ts` — adding `@healer/llm` to `@healer/events`' dependencies (a
 transitive dependency of `@healer/domain-issues`) made it fail.
+
+## 004 T001 — `DiscoveryAdapter`/`ProvenanceClass` live in `packages/domain/architecture`, not `packages/integrations`
+
+**Decided, not deferred.** `plan.md`'s Project Structure puts adapters in `packages/integrations/*`
+implementing `DiscoveryAdapter`, but doesn't say which package owns the interface itself. Put it in
+`packages/domain/architecture/src/domain/discovery-adapter.ts` (the domain owns the port, adapters
+are the implementations — ADR 0005's shape) and had `packages/integrations` take a new `workspace:*`
+dependency on `@healer/domain-architecture` to import it. This is the first adapter package to depend
+on a domain package; no lint rule forbids it.
+
+## 004 T002/T005–T011 boundary — which guarantees T002's first migration does NOT yet enforce
+
+**Decided, not deferred.** T002 ("Prisma models... first migration") creates every table in
+data-model.md, but deliberately leaves nullable / unindexed exactly the guarantees T005/T006/T008/T009
+individually own and must prove via their own red-then-green test: `graph_node`/`graph_edge`'s
+`provenance`/`strength`/`confidence` NOT NULL and the two CHECK constraints (T006, proven by T005's
+failing test), `valid_from_version`/`valid_to_version` plus the `graph_version` table (T008), the
+partial unique index over open edge rows (T009), and `edge_provenance`'s append-only triggers (T011).
+Otherwise a later "tightening" migration would have nothing to tighten and T005/T009's failing tests
+would never have been red. See the relevant task's own commit for what it added.
+
+## 004 T003 — per-element `provenance`/`layer` on `DependencyObservation` isn't constrained to its adapter's fixed constant
+
+**Not decided, flagged for T017.** Review of T003 found that while `DiscoveryAdapter.provenance` and
+`.layer` are fixed per adapter (frozen, `as const`), the wire shape `DependencyObservation` a `collect()`
+returns has its *own* free `provenance`/`layer` fields — nothing stops an adapter's `collect()` from
+emitting an observation whose `provenance` is stronger than the adapter's own constant. Not exploited
+today (every adapter returns an empty array), and the shape itself is a placeholder — this file's own
+comment already says T017 replaces it with the boundary-contract Zod-inferred type. **When T017 builds
+the real `dependency_observation` schema**: prefer removing `provenance`/`layer` from the wire shape
+entirely and having the discovery ingest step stamp both from the emitting adapter's fixed constant
+(makes the unsafe state unrepresentable, per this repo's own pattern) over accepting the field on the
+wire and validating it matches at ingest — the latter is a check that can be forgotten at a second call
+site; the former has no second call site to forget it at.
