@@ -80,6 +80,12 @@ Index `(tenant_id, action_key, environment) where revoked_at is null`. A narrowe
 widens a broader one — grants are additive and the ceiling clamps the maximum, so overlapping grants
 cannot raise a level above what either grants alone.
 
+> Implementation note (batch 1, T002/T003): the `level` check constraint above is not yet a
+> database constraint. It depends on `ACTION_CEILING` and `has_tested_undo`, which resolve through
+> 010's remediation catalogue — not implemented in this repository yet. The table and its FK to
+> `policy_action` exist; the ceiling check lands with `ceiling.ts` and 010's catalogue in a later
+> batch. Until then nothing publishes a row through this table, so the gap has no live effect.
+
 ## policy.autonomy_epoch
 
 `tenant_id` (PK), `epoch` bigint, `bumped_at`, `bumped_by`, `bump_reason`.

@@ -14,7 +14,7 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   extensions = [vector, pg_trgm]
-  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events"]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events", "policy"]
 }
 
 // ─────────────────────────────── workflow execution ───────────────────────────────
@@ -779,4 +779,330 @@ model DeletionTombstone {
   @@index([tenantId, deletedAt])
   @@map("deletion_tombstone")
   @@schema("audit")
+}
+
+// ────────────────────────── policy engine, autonomy and budgets (002) ──────────────────────────
+
+/// Immutable (R-01): republishing identical content is a no-op, changed content is a new version.
+/// No update or delete path — enforced by a `BEFORE UPDATE OR DELETE` trigger, not application
+/// discipline (T003).
+model PolicyRuleset {
+  id                String   @id @db.Uuid
+  tenantId          String   @map("tenant_id") @db.Uuid
+  /// Monotone per tenant; a decision cites this.
+  version           Int
+  /// Content hash over the ordered rule bodies.
+  digest            String
+  publishedAt       DateTime @map("published_at") @db.Timestamptz(6)
+  publishedBy       String   @map("published_by")
+  /// The version this replaced.
+  supersedesVersion Int?     @map("supersedes_version")
+  /// Rule pairs that can both match with different outcomes (FR-006).
+  conflictWarnings  Json     @map("conflict_warnings")
+
+  rules PolicyRule[]
+
+  // A decision's ruleset_version must resolve to exactly one ruleset per tenant, forever
+  // (FR-004, SC-003) — the unique constraint the join relies on.
+  @@unique([tenantId, version])
+  @@unique([tenantId, digest])
+  @@map("policy_ruleset")
+  @@schema("policy")
+}
+
+/// Immutable, belongs to a rule set — it carries no tenant_id of its own; a rule is never read
+/// except through its ruleset. No update or delete path (T003).
+model PolicyRule {
+  id         String           @id @db.Uuid
+  rulesetId  String           @map("ruleset_id") @db.Uuid
+  /// Stable across versions, so a rule can be followed through history.
+  ruleKey    String           @map("rule_key")
+  /// Conjunction of (field, operator, value) from the closed predicate vocabulary
+  /// (contracts/evaluation.md) — schema-validated on publish, not here.
+  predicates Json
+  outcome    PolicyOutcome
+  /// Carried into the decision; never free text.
+  reasonCode PolicyReasonCode @map("reason_code")
+  /// Tenant-facing explanation, shown in the approval summary.
+  note       String
+
+  ruleset PolicyRuleset @relation(fields: [rulesetId], references: [id], onDelete: Restrict)
+
+  // There is no priority column — evaluation matches every rule and folds (R-04).
+  @@unique([rulesetId, ruleKey])
+  @@map("policy_rule")
+  @@schema("policy")
+}
+
+/// Shared by policy_rule.outcome and policy_decision.outcome (contracts/evaluation.md).
+enum PolicyOutcome {
+  allow
+  require_approval
+  deny
+
+  @@map("policy_outcome")
+  @@schema("policy")
+}
+
+/// The closed reason-code vocabulary (data-model.md) — adding one is a spec change, so a decision
+/// can never carry a reason nobody planned for. Spelled upper-snake exactly as data-model.md and
+/// contracts/evaluation.md's error-code vocabulary give it, unlike this file's other enums.
+enum PolicyReasonCode {
+  NO_MATCHING_RULE
+  CEILING_EXCEEDED
+  NO_AUTONOMY_GRANT
+  GRANT_REVOKED
+  ENVIRONMENT_RESTRICTED
+  COMPONENT_RESTRICTED
+  ISSUE_KIND_RESTRICTED
+  IMPACT_CLASS_RESTRICTED
+  EVIDENCE_INCOMPLETE
+  NO_ADOPTED_EXPECTATION
+  UNDO_NOT_ATTESTED
+  BUDGET_EXHAUSTED
+  RATE_LIMITED
+  COOLDOWN
+  ATTEMPT_CAP_REACHED
+  APPROVAL_REQUIRED
+  APPROVAL_EXPIRED
+  TARGET_BLOCKED
+  CATEGORY_NOT_ALLOWLISTED
+  TOPIC_BLOCKED
+
+  @@map("policy_reason_code")
+  @@schema("policy")
+}
+
+/// The action registry — global, not tenant-scoped: the set of actions the product can perform is
+/// a product fact. Reversibility is not here; it is derived from 010's catalogue (R-06).
+model PolicyAction {
+  actionKey    String            @id @map("action_key")
+  actionClass  PolicyActionClass @map("action_class")
+  mutating     Boolean
+  owningSpec   String            @map("owning_spec")
+  introducedAt DateTime          @map("introduced_at") @db.Timestamptz(6)
+
+  autonomyGrants AutonomyGrant[]
+
+  @@map("policy_action")
+  @@schema("policy")
+}
+
+enum PolicyActionClass {
+  read_only
+  code_change
+  repository_write
+  reversible_remediation
+  merge
+  forward_deploy
+  irreversible
+
+  @@map("policy_action_class")
+  @@schema("policy")
+}
+
+/// A narrower grant never widens a broader one — grants are additive and the ceiling clamps the
+/// maximum (R-05). The `level <= ACTION_CEILING(action_class, has_tested_undo)` check (C-18) is
+/// not a database constraint yet: `has_tested_undo` resolves through 010's remediation catalogue,
+/// which does not exist in this repository yet — deferred to the batch that adds ceiling.ts.
+model AutonomyGrant {
+  id          String    @id @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  /// Null = all components (004).
+  componentId String?   @map("component_id") @db.Uuid
+  /// Null = all environments.
+  environment String?
+  /// Null = all kinds (001 FR-001).
+  issueKind   String?   @map("issue_kind")
+  actionKey   String    @map("action_key")
+  level       Int
+  grantedBy   String    @map("granted_by")
+  grantedAt   DateTime  @map("granted_at") @db.Timestamptz(6)
+  revokedBy   String?   @map("revoked_by")
+  /// Set once; a revoked grant is never reactivated.
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  action PolicyAction @relation(fields: [actionKey], references: [actionKey], onDelete: Restrict)
+
+  // Partial index `(tenant_id, action_key, environment) WHERE revoked_at IS NULL` — Prisma cannot
+  // express a partial index (same limitation as WorkflowRun's deadline index above); created
+  // directly in the migration and deliberately not declared here.
+  @@map("autonomy_grant")
+  @@schema("policy")
+}
+
+/// One row per tenant; incremented by every grant revocation — the single write that makes
+/// revocation immediate (R-07).
+model AutonomyEpoch {
+  tenantId   String   @id @map("tenant_id") @db.Uuid
+  epoch      BigInt
+  bumpedAt   DateTime @map("bumped_at") @db.Timestamptz(6)
+  bumpedBy   String   @map("bumped_by")
+  bumpReason String   @map("bump_reason")
+
+  @@map("autonomy_epoch")
+  @@schema("policy")
+}
+
+/// Append-only except `consumed_at` and `invalidated_reason` transitioning from null — enforced
+/// by database trigger (T003), not application discipline.
+model PolicyDecision {
+  id                String        @id @db.Uuid
+  tenantId          String        @map("tenant_id") @db.Uuid
+  issueId           String?       @map("issue_id") @db.Uuid
+  /// 012 — the run this decision is bound to.
+  workflowRunId     String?       @map("workflow_run_id") @db.Uuid
+  /// The guarded step.
+  workflowState     String?       @map("workflow_state")
+  actionKey         String        @map("action_key")
+  /// The target the action was proposed against — the limit scope (C-11).
+  targetRef         String?       @map("target_ref")
+  /// The issue fingerprint (001 FR-002) — the other half of the limit scope.
+  fingerprint       String?
+  /// Canonical hash of the DecisionInput; a decision is valid for this digest only.
+  proposalDigest    String        @map("proposal_digest")
+  /// The full closed record, stored for replay (R-03).
+  decisionInput     Json          @map("decision_input")
+  /// Resolves forever (FR-004, SC-003).
+  rulesetVersion    Int           @map("ruleset_version")
+  matchedRuleKeys   String[]      @map("matched_rule_keys")
+  outcome           PolicyOutcome
+  reasonCodes       String[]      @map("reason_codes")
+  /// True when the clamp changed the outcome (R-05).
+  ceilingApplied    Boolean       @map("ceiling_applied")
+  /// Consumed, limit, declared max of the next step, degradation step.
+  budgetState       Json          @map("budget_state")
+  /// Passed in, not read from a clock inside the evaluator — a decision replays identically.
+  evaluatedAt       DateTime      @map("evaluated_at") @db.Timestamptz(6)
+  /// Set when the guarded step executes against it.
+  consumedAt        DateTime?     @map("consumed_at") @db.Timestamptz(6)
+  /// epoch_bump · approval_expired · digest_mismatch.
+  invalidatedReason String?       @map("invalidated_reason")
+
+  approvalRequests ApprovalRequest[]
+
+  // Backs ApprovalRequest's composite FK (decisionId, tenantId) — same pattern as WorkflowRun /
+  // Issue / Evidence (FR-048): an approval naming a wrong tenant's decision is unrepresentable,
+  // not merely unindexed.
+  @@unique([id, tenantId])
+  // Also the index the rate, cooldown and attempt-cap predicates read (R-13, C-11).
+  @@index([tenantId, actionKey, targetRef, fingerprint, evaluatedAt])
+  @@index([workflowRunId])
+  @@map("policy_decision")
+  @@schema("policy")
+}
+
+/// `summary` holds identifiers and structured fields only — collected customer text never enters
+/// it: an approval screen rendering attacker-influenced prose is a phishing surface aimed at the
+/// one human whose click authorises a mutation (data-model.md).
+model ApprovalRequest {
+  id            String        @id @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  decisionId    String        @map("decision_id") @db.Uuid
+  /// 012.
+  workflowRunId String        @map("workflow_run_id") @db.Uuid
+  /// Proposed action, reason, evidence ids, impact summary, rollback plan (FR-015).
+  summary       Json
+  /// 001 — the approver sees the evidence, not a narrative.
+  evidenceIds   String[]      @map("evidence_ids") @db.Uuid
+  /// Recorded at issue; re-checked at redemption (R-07).
+  autonomyEpoch BigInt        @map("autonomy_epoch")
+  /// Projected onto workflow_run.deadline_at.
+  expiresAt     DateTime      @map("expires_at") @db.Timestamptz(6)
+  state         ApprovalState
+  /// The human, for approved and rejected (FR-017).
+  resolvedBy    String?       @map("resolved_by")
+  resolvedAt    DateTime?     @map("resolved_at") @db.Timestamptz(6)
+
+  decision PolicyDecision @relation(fields: [decisionId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([decisionId])
+  @@index([tenantId, state, expiresAt])
+  @@map("approval_request")
+  @@schema("policy")
+}
+
+enum ApprovalState {
+  pending
+  approved
+  rejected
+  expired
+  revoked
+
+  @@map("approval_state")
+  @@schema("policy")
+}
+
+/// Per-issue limits, and the per-tenant-period limits inherited from 012's tenant_budget.
+model BudgetLimit {
+  id                   String            @id @db.Uuid
+  tenantId             String            @map("tenant_id") @db.Uuid
+  scopeType            BudgetScopeType   @map("scope_type")
+  scopeId              String?           @map("scope_id") @db.Uuid
+  period               BudgetLimitPeriod
+  spendLimit           Decimal           @map("spend_limit") @db.Decimal(12, 4)
+  timeLimitMs          Int               @map("time_limit_ms")
+  /// Ordered degradation steps (R-12) — same shape as 012's tenant_budget.soft_threshold_pcts,
+  /// which is what makes the per-tenant-period limits inheritable rather than convertible.
+  softThresholdPcts    Int[]             @map("soft_threshold_pcts")
+  escalationAttemptCap Int               @map("escalation_attempt_cap")
+  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedBy            String            @map("updated_by")
+
+  @@index([tenantId, scopeType, scopeId])
+  @@map("budget_limit")
+  @@schema("policy")
+}
+
+enum BudgetScopeType {
+  issue
+  tenant
+
+  @@map("budget_scope_type")
+  @@schema("policy")
+}
+
+/// Distinct from tenant.budget_period (012): this one also has `issue` as a period.
+enum BudgetLimitPeriod {
+  issue
+  day
+  month
+
+  @@map("budget_limit_period")
+  @@schema("policy")
+}
+
+/// Rate limits, cooldowns and attempt caps (FR-014) — owned here and nowhere else (C-11). Counts
+/// are not stored: aggregated from policy_decision history for (action_key, target_ref,
+/// fingerprint) in the same query that loads the rule set (R-13). 010 keeps no limit store of its
+/// own and projects only the refusal reason codes.
+model ActionLimit {
+  tenantId        String   @map("tenant_id") @db.Uuid
+  actionKey       String   @map("action_key")
+  ratePerWindow   Int      @map("rate_per_window")
+  windowSeconds   Int      @map("window_seconds")
+  cooldownSeconds Int      @map("cooldown_seconds")
+  attemptCap      Int      @map("attempt_cap")
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedBy       String   @map("updated_by")
+
+  @@id([tenantId, actionKey])
+  @@map("action_limit")
+  @@schema("policy")
+}
+
+/// The idempotency key for "this degradation step has already been recorded as evidence" (R-12).
+/// Carries no state of its own — the state is the evidence record.
+model BudgetDegradationMark {
+  tenantId   String          @map("tenant_id") @db.Uuid
+  scopeType  BudgetScopeType @map("scope_type")
+  scopeId    String          @map("scope_id") @db.Uuid
+  periodKey  String          @map("period_key")
+  step       Int
+  evidenceId String          @map("evidence_id") @db.Uuid
+  markedAt   DateTime        @map("marked_at") @db.Timestamptz(6)
+
+  @@id([tenantId, scopeType, scopeId, periodKey, step])
+  @@map("budget_degradation_mark")
+  @@schema("policy")
 }

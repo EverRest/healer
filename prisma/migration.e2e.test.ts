@@ -25,6 +25,12 @@ const GLOBAL_TABLES = new Set([
   // 001: versioned product-level fingerprint rules, not tenant-configurable — the same shape as
   // prompt_version (data-model.md "normalisation_ruleset").
   'issue.normalisation_ruleset',
+  // 002: the action registry — the set of actions the product can perform is a product fact,
+  // not a tenant one (data-model.md "policy_action").
+  'policy.policy_action',
+  // 002: a rule belongs to a ruleset, which is tenant-scoped; the rule itself carries no
+  // tenant_id and is never read except through its ruleset (data-model.md "policy_rule").
+  'policy.policy_rule',
 ]);
 
 function migrationNames(): string[] {
