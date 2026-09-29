@@ -156,6 +156,75 @@ regenerated and committed.
   still `export {}`. Out of scope here; the endpoint is exercised and tested from the
   control-plane side only.
 
+### T045/T051 landed — outbound-only transport and directive idempotency, judgment calls
+
+`apps/runner` has real source now: `heartbeat-client.ts` (the outbound POST), `directive-
+dispatcher.ts` (the idempotency mechanism), `main.ts` (wires both on an interval). `pnpm run
+typecheck`, `lint`, `format-check` and `test-unit` (444 tests, global coverage 94%/89%) all green;
+`runner-contract-test`/`runner-compat-test` unaffected and still green.
+
+- **`ControlPlaneDirective`'s closed union carries no identifier field on any of its seven
+  variants** (`packages/boundary-contract/src/index.ts`), yet `runner-protocol.md`'s own failure-
+  behaviour section and FR-028 require idempotency "by directive identifier" — a real gap between
+  the contract document's prose and its own schema, same shape as T042's undocumented `name` field.
+  Not invented away by adding an `id` to the closed union itself (that union is FR-022's single
+  authority for what crosses the boundary, reviewed like the rest of the document — not a change to
+  make in passing here). Instead, `apps/runner/src/directive-dispatcher.ts` defines its own
+  transport-level `DirectiveEnvelope = { id: string; directive: ControlPlaneDirective }`, and
+  `heartbeat-client.ts`'s response schema validates the heartbeat response's `directives` array
+  against that envelope. Since `RunnersController` still always sends `directives: []` (T042, no
+  producer exists), this envelope shape is exercised only by the dispatcher's own unit tests, not
+  proven against a real control-plane response — honest, per this section's own earlier framing
+  ("the mechanism, not the full pipeline"). Whoever builds the first real directive producer should
+  decide where the identifier actually belongs (this envelope, or a field added to the contract
+  document and every variant) and update `runner-protocol.md`'s own table to say so.
+- **The directive seen-set is a new, dedicated `BoundedSeenSet`, not `OutboundBuffer<string>`.**
+  Both share one policy — evict the oldest entry once bounded — but `OutboundBuffer` has no lookup
+  operation at all, only `push`/`drain` for a queue meant to be emptied wholesale; idempotency
+  needs `hasSeen` (a membership test), which nothing in `OutboundBuffer` provides without draining
+  it just to search it. `BoundedSeenSet` (`directive-dispatcher.ts`) is a ~25-line `Set` + order
+  array, drop-oldest on overflow — and refreshes an id's recency on re-delivery instead of leaving
+  it to be evicted by its own redelivery (a plain-FIFO seen-set would let an id that keeps arriving
+  get evicted purely because it arrived again; tested directly, `BoundedSeenSet (012 T051)` in
+  `directive-dispatcher.test.ts`).
+- **The heartbeat itself is now wired through `OutboundBuffer<HeartbeatRequestBody>`** (FR-021
+  applied to the heartbeat, not only to future evidence submission): `runHeartbeatCycle`
+  (`apps/runner/src/main.ts`) drains anything buffered from a past failed attempt, sends it ahead
+  of the current tick's own heartbeat, and re-buffers everything from the first failure onward,
+  oldest-first, on any POST failure. No new idempotency machinery needed for this path — T042's
+  upsert is keyed by `(tenantId, name)`, so redelivering a stale buffered heartbeat on reconnect is
+  already safe.
+- **Real evidence submission (`RunnerEvidence`) has no receiving endpoint** — grepped
+  `apps/api/src` for one; `/ingest/signals` (001) accepts a different, provider-pushed `Signal`
+  shape, not `RunnerEvidence`. Same gap shape as T042's own "directives have no producer" note:
+  not invented here. T045 is scoped to the transport *mechanism* (the outbound-only POST loop plus
+  buffering, proven end-to-end against the one real endpoint that exists — the heartbeat), not to
+  a feature with nothing to send yet. Whoever builds the first real evidence-producing task (a
+  collector, T047's redaction consumer, or similar) is also the one who needs a `POST
+  /runners/evidence`-shaped endpoint on the control plane — `heartbeat-client.ts`'s `sendHeartbeat`
+  is the pattern to follow for it (native `fetch`, buffered on failure, independently validated at
+  ingress and egress per FR-022).
+- **`apps/runner` needed its own config-loading convention, not `loadConfig()`.** The existing
+  `loadConfig()` (`packages/shared/src/config/index.ts`) hard-requires `DATABASE_URL`/`REDIS_URL` —
+  every other deployable in this repo has both. The runner must not: "no direct database access,
+  ever" is an inviolable rule (`.claude/rules/backend-nestjs.md`), and requiring a Postgres/Redis
+  URL just to start the process would be a standing lie about what it touches. Added a second,
+  separate schema and `loadRunnerConfig()` function in the *same file* — not a new authorized
+  location — since the lint rule's `no-restricted-syntax` ignore pattern is anchored literally to
+  `packages/shared/src/config/**` (a directory, not a per-app pattern); two schemas in one
+  already-authorized directory is the smaller diff than widening the lint rule's own ignore list
+  for a second location.
+- **`RUNNER_BUFFER_SIZE` also bounds the directive seen-set**, not a second, independently-tuned
+  constant — one placeholder number doing two jobs it's unrelated to tuning separately yet, same
+  status as every other un-measured bound in this codebase (`MAX_FINGERPRINT_FRAMES`, the reopen
+  window). Split them if a real fleet ever shows the two need different bounds.
+- **No `build`/`start` script was added to `apps/runner/package.json`.** Checked `apps/worker`'s
+  package.json first (the closest precedent, also a plain-process deployable): it has neither
+  either — the repo-wide `build`/`typecheck` scripts already build every app via `tsc --build`'s
+  project references, and no app in this repo has a `start` script yet (a real gap, same one
+  flagged for release/deployment automation elsewhere in this file). Not invented here to avoid
+  a one-off convention that diverges from `apps/worker`'s own shape.
+
 ## 001 data-model.md — fingerprint index exclusion set
 
 **Resolved and confirmed**: `where state not in ('merged', 'removed')`, already applied in

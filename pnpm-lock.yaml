@@ -113,7 +113,17 @@ importers:
 
   apps/mcp-server: {}
 
-  apps/runner: {}
+  apps/runner:
+    dependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../../packages/boundary-contract
+      '@healer/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   apps/worker:
     dependencies:

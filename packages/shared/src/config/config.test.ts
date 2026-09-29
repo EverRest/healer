@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigurationError, loadConfig } from './index.js';
+import { ConfigurationError, loadConfig, loadRunnerConfig } from './index.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://healer:healer@localhost:5432/healer',
   REDIS_URL: 'redis://localhost:6379',
+};
+
+const validRunner = {
+  RUNNER_CONTROL_PLANE_URL: 'https://control-plane.example.com',
+  RUNNER_TENANT_ID: 'tenant-1',
+  RUNNER_NAME: 'runner-1',
+  RUNNER_IMAGE_VERSION: '0.5.0',
 };
 
 describe('loadConfig', () => {
@@ -30,6 +37,42 @@ describe('loadConfig', () => {
     const config = loadConfig(valid);
     expect(() => {
       (config as { HTTP_PORT: number }).HTTP_PORT = 9999;
+    }).toThrow();
+  });
+});
+
+describe('loadRunnerConfig (012 T045 — apps/runner has no DATABASE_URL/REDIS_URL, ever)', () => {
+  it('applies declared defaults, with no database or queue variable required', () => {
+    const config = loadRunnerConfig(validRunner);
+    expect(config.RUNNER_PROTOCOL_VERSION).toBe(1);
+    expect(config.RUNNER_HEARTBEAT_INTERVAL_MS).toBe(30_000);
+    expect(config.RUNNER_BUFFER_SIZE).toBe(50);
+    expect(config.RUNNER_CAPABILITIES).toEqual([]);
+  });
+
+  it('parses a comma-separated capability list', () => {
+    const config = loadRunnerConfig({ ...validRunner, RUNNER_CAPABILITIES: 'inference, egress ' });
+    expect(config.RUNNER_CAPABILITIES).toEqual(['inference', 'egress']);
+  });
+
+  it('names every missing or malformed variable instead of failing later as undefined', () => {
+    try {
+      loadRunnerConfig({ RUNNER_CONTROL_PLANE_URL: 'not-a-url' });
+      expect.unreachable('configuration must not load');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigurationError);
+      const issues = (error as ConfigurationError).issues.join(' ');
+      expect(issues).toContain('RUNNER_CONTROL_PLANE_URL');
+      expect(issues).toContain('RUNNER_TENANT_ID');
+      expect(issues).toContain('RUNNER_NAME');
+      expect(issues).toContain('RUNNER_IMAGE_VERSION');
+    }
+  });
+
+  it('is frozen, so no later code can reconfigure the process', () => {
+    const config = loadRunnerConfig(validRunner);
+    expect(() => {
+      (config as { RUNNER_NAME: string }).RUNNER_NAME = 'other';
     }).toThrow();
   });
 });

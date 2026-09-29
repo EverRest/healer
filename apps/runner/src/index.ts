@@ -1,2 +1,3 @@
-// @healer/runner — entry surface. Nothing is exported until it exists (012 FR-001).
-export {};
+// @healer/runner — entry surface (012 FR-001, T045, T051).
+export { start, type RunnerHandle } from './main.js';
+export type { DirectiveHandler, DirectiveEnvelope } from './directive-dispatcher.js';

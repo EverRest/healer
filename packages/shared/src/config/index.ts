@@ -39,3 +39,48 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   }
   return Object.freeze(parsed.data);
 }
+
+/**
+ * `apps/runner`'s own configuration (012 T045). A separate schema, not an extension of `schema`
+ * above: the runner has no direct database access, ever (backend-nestjs.md), so it must not
+ * require `DATABASE_URL`/`REDIS_URL` the way every other deployable in this repo does. Living in
+ * this same file keeps `process.env` reads confined to the one directory the lint rule
+ * authorizes (`packages/shared/src/config/**`, R-01) without inventing a second authorized
+ * location for a second app.
+ */
+const runnerSchema = z.object({
+  LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
+  RUNNER_CONTROL_PLANE_URL: z.string().url(),
+  RUNNER_TENANT_ID: z.string().min(1),
+  RUNNER_NAME: z.string().min(1),
+  RUNNER_IMAGE_VERSION: z.string().min(1),
+  RUNNER_PROTOCOL_VERSION: z.coerce.number().int().min(1).default(1),
+  RUNNER_CAPABILITIES: z
+    .string()
+    .default('')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((capability) => capability.trim())
+        .filter((capability) => capability.length > 0),
+    ),
+  RUNNER_CPU_LIMIT: z.coerce.number().positive().default(1),
+  RUNNER_MEMORY_MB_LIMIT: z.coerce.number().positive().default(512),
+  RUNNER_MAX_CONCURRENT_RUNS: z.coerce.number().int().positive().default(1),
+  RUNNER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  /** Bound for the outbound heartbeat buffer (FR-021) — same placeholder status as every other
+   *  un-measured bound in this codebase (e.g. 001's `MAX_FINGERPRINT_FRAMES`). */
+  RUNNER_BUFFER_SIZE: z.coerce.number().int().positive().default(50),
+});
+
+export type RunnerConfig = Readonly<z.infer<typeof runnerSchema>>;
+
+export function loadRunnerConfig(source: NodeJS.ProcessEnv = process.env): RunnerConfig {
+  const parsed = runnerSchema.safeParse(source);
+  if (!parsed.success) {
+    throw new ConfigurationError(
+      parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`),
+    );
+  }
+  return Object.freeze(parsed.data);
+}
