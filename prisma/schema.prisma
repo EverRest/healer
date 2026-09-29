@@ -1000,20 +1000,20 @@ enum DriftFindingState {
 }
 
 /// One row per graph participant, whatever its kind (R-01). `provenance`/`strength`/`confidence`
-/// and `layer` are nullable until T006's NOT NULL + CHECK migration; `valid_from_version`/
-/// `valid_to_version` are added by T008.
+/// and `layer` are NOT NULL (T006), plus the two CHECK constraints in migration.sql (Prisma
+/// cannot express CHECK); `valid_from_version`/`valid_to_version` are added by T008.
 model GraphNode {
   id             String             @id @db.Uuid
   tenantId       String             @map("tenant_id") @db.Uuid
   nodeKind       GraphNodeKind      @map("node_kind")
-  layer          GraphLayer?
+  layer          GraphLayer
   name           String
   naturalKey     String             @map("natural_key")
-  provenance     ProvenanceClass?
+  provenance     ProvenanceClass
   /// Ordinal from the stored mapping (R-03) — written once at insert (T007), never recomputed.
-  strength       Int?               @db.SmallInt
+  strength       Int                @db.SmallInt
   /// 0-100, computed at write time only (R-15) — never recomputed on a schedule.
-  confidence     Int?               @db.SmallInt
+  confidence     Int                @db.SmallInt
   state          GraphElementState
   lifecycleState NodeLifecycleState @default(active) @map("lifecycle_state")
   /// `evidence.id` (001 FR-007) of type `graph_fact` — not FK'd across the schema boundary;
@@ -1045,7 +1045,9 @@ model GraphNode {
 }
 
 /// A typed relationship (R-01). `provenance`/`strength`/`confidence` are the **maximum** over
-/// `edge_provenance` (FR-008, R-03) once T011 adds the maintaining trigger; nullable until T006.
+/// `edge_provenance` (FR-008, R-03) once T011 adds the maintaining trigger; NOT NULL since T006
+/// (no CHECK here — unlike `graph_node`, this table has no `observation_ref`/`actor_ref` to
+/// require one of).
 /// The partial unique index (one open row per logical edge) is T009's; `valid_from_version`/
 /// `valid_to_version` and their traversal indexes are T008's.
 model GraphEdge {
@@ -1054,10 +1056,10 @@ model GraphEdge {
   fromNodeId       String            @map("from_node_id") @db.Uuid
   toNodeId         String            @map("to_node_id") @db.Uuid
   edgeType         GraphEdgeType     @map("edge_type")
-  layer            GraphLayer?
-  provenance       ProvenanceClass?
-  strength         Int?              @db.SmallInt
-  confidence       Int?              @db.SmallInt
+  layer            GraphLayer
+  provenance       ProvenanceClass
+  strength         Int               @db.SmallInt
+  confidence       Int               @db.SmallInt
   state            GraphElementState
   observationCount BigInt            @default(0) @map("observation_count")
   lastObservedAt   DateTime?         @map("last_observed_at") @db.Timestamptz(6)
