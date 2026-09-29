@@ -24,7 +24,21 @@ export type {
   PolicyRulesetRepository,
   PublishedRuleset,
 } from './domain/policy-ruleset-repository.js';
+export { computeProposalDigest } from './domain/proposal-digest.js';
+export {
+  DecisionAlreadyConsumedError,
+  DigestMismatchError,
+  type ConsumeDecisionInput,
+  type DecisionBinding,
+  type NewRecordedDecision,
+  type PolicyDecisionRepository,
+  type RecordedDecision,
+} from './domain/policy-decision-repository.js';
 export { publishRuleset } from './application/commands/publish-ruleset.js';
+export { evaluateAndBind } from './application/commands/evaluate-and-bind.js';
+export { consumeDecision } from './application/commands/consume-decision.js';
 export { PrismaPolicyActionRepository } from './infrastructure/prisma-policy-action-repository.js';
 export { PrismaPolicyRulesetRepository } from './infrastructure/prisma-policy-ruleset-repository.js';
+export { PrismaPolicyDecisionRepository } from './infrastructure/prisma-policy-decision-repository.js';
+export { PrismaAutonomyEpochRepository } from './infrastructure/prisma-autonomy-epoch-repository.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
