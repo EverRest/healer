@@ -14,7 +14,7 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   extensions = [vector, pg_trgm]
-  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events"]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events", "architecture"]
 }
 
 // ─────────────────────────────── workflow execution ───────────────────────────────
@@ -779,4 +779,563 @@ model DeletionTombstone {
   @@index([tenantId, deletedAt])
   @@map("deletion_tombstone")
   @@schema("audit")
+}
+
+// ─────────────────────────────── architecture graph (004) ───────────────────────────────
+// Schema `architecture` (spec 004-architecture-graph, data-model.md). T002 lays down the full
+// base schema; provenance/strength/confidence NOT NULL, the two provenance CHECKs, `layer`
+// NOT NULL, graph_version and the valid_from/to columns + their indexes, the partial unique
+// index on graph_edge, and edge_provenance's append-only trigger + max-maintenance are added
+// by T006/T008/T009/T011 respectively — deliberately absent here.
+
+enum GraphNodeKind {
+  component
+  deployment_unit
+  repository
+  endpoint
+  feature
+  flow
+  external
+
+  @@map("graph_node_kind")
+  @@schema("architecture")
+}
+
+enum GraphLayer {
+  code
+  runtime
+  product
+
+  @@map("graph_layer")
+  @@schema("architecture")
+}
+
+/// Closed FR-005 set. Mirrors `packages/domain/architecture/src/domain/provenance.ts`'s
+/// `ProvenanceClass` — the domain package is the TypeScript authority, this is its DB mirror.
+enum ProvenanceClass {
+  human_authored
+  human_confirmed
+  derived_from_trace
+  derived_from_runtime
+  derived_from_code
+  derived_from_config
+  inferred_from_convention
+
+  @@map("provenance_class")
+  @@schema("architecture")
+}
+
+/// `graph_node` / `graph_edge` state — not `draft_item`'s, which also has `superseded` (R-07).
+enum GraphElementState {
+  proposed
+  confirmed
+  rejected
+  stale
+
+  @@map("graph_element_state")
+  @@schema("architecture")
+}
+
+enum NodeLifecycleState {
+  active
+  unobserved
+  unresolved
+  possibly_removed
+
+  @@map("node_lifecycle_state")
+  @@schema("architecture")
+}
+
+enum GraphEdgeType {
+  depends_on
+  calls
+  deploys
+  contains
+  implements
+  exposes
+  serves_feature
+  built_from
+
+  @@map("graph_edge_type")
+  @@schema("architecture")
+}
+
+enum ComponentType {
+  service
+  library
+  frontend
+  worker
+  job
+  datastore
+  external
+
+  @@map("component_type")
+  @@schema("architecture")
+}
+
+enum DeploymentRuntimeKind {
+  container
+  function
+  vm
+  static_site
+  managed_service
+
+  @@map("deployment_runtime_kind")
+  @@schema("architecture")
+}
+
+enum RepositoryVcs {
+  gitlab
+
+  @@map("repository_vcs")
+  @@schema("architecture")
+}
+
+enum EndpointProtocol {
+  http
+  grpc
+  event
+  cli
+
+  @@map("endpoint_protocol")
+  @@schema("architecture")
+}
+
+enum DiscoveryTrigger {
+  onboarding
+  scheduled
+  manual
+  post_deploy
+
+  @@map("discovery_trigger")
+  @@schema("architecture")
+}
+
+enum DiscoveryOutcome {
+  complete
+  partial
+  failed
+
+  @@map("discovery_outcome")
+  @@schema("architecture")
+}
+
+/// 003 FR-014's six statuses, reused verbatim (data-model.md) — not a parallel set.
+enum DiscoverySourceStatus {
+  collected
+  partial
+  unavailable
+  timed_out
+  withheld
+  not_attempted
+
+  @@map("discovery_source_status")
+  @@schema("architecture")
+}
+
+/// 003 `contracts/collection-plan.md`'s closed reason set, reused verbatim.
+enum DiscoverySourceReasonCode {
+  source_unreachable
+  auth_revoked
+  timeout
+  retention_exceeded
+  capability_unavailable
+  budget_exhausted
+  redaction_withheld
+  schema_rejected
+  empty_result
+
+  @@map("discovery_source_reason_code")
+  @@schema("architecture")
+}
+
+enum DiscoveryDraftState {
+  open
+  applied
+  abandoned
+
+  @@map("discovery_draft_state")
+  @@schema("architecture")
+}
+
+enum DraftItemOp {
+  add_node
+  add_edge
+  modify_attributes
+  mark_removed
+
+  @@map("draft_item_op")
+  @@schema("architecture")
+}
+
+/// `draft_item`'s own state set — includes `superseded` (R-07), unlike `GraphElementState`.
+enum DraftItemState {
+  proposed
+  confirmed
+  rejected
+  superseded
+
+  @@map("draft_item_state")
+  @@schema("architecture")
+}
+
+enum DriftFindingKind {
+  observed_edge_absent
+  recorded_edge_contradicted
+  deployment_unit_missing
+  product_link_dangling
+
+  @@map("drift_finding_kind")
+  @@schema("architecture")
+}
+
+enum DriftFindingState {
+  open
+  resolved_graph_updated
+  resolved_observation_rejected
+  dismissed
+
+  @@map("drift_finding_state")
+  @@schema("architecture")
+}
+
+/// One row per graph participant, whatever its kind (R-01). `provenance`/`strength`/`confidence`
+/// and `layer` are nullable until T006's NOT NULL + CHECK migration; `valid_from_version`/
+/// `valid_to_version` are added by T008.
+model GraphNode {
+  id             String             @id @db.Uuid
+  tenantId       String             @map("tenant_id") @db.Uuid
+  nodeKind       GraphNodeKind      @map("node_kind")
+  layer          GraphLayer?
+  name           String
+  naturalKey     String             @map("natural_key")
+  provenance     ProvenanceClass?
+  /// Ordinal from the stored mapping (R-03) — written once at insert (T007), never recomputed.
+  strength       Int?               @db.SmallInt
+  /// 0-100, computed at write time only (R-15) — never recomputed on a schedule.
+  confidence     Int?               @db.SmallInt
+  state          GraphElementState
+  lifecycleState NodeLifecycleState @default(active) @map("lifecycle_state")
+  /// `evidence.id` (001 FR-007) of type `graph_fact` — not FK'd across the schema boundary;
+  /// checked continuously by `check:graph-fact-coverage` (data-model.md Invariants).
+  observationRef String?            @map("observation_ref") @db.Uuid
+  actorRef       String?            @map("actor_ref")
+  discoveryRunId String?            @map("discovery_run_id") @db.Uuid
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  edgesFrom          GraphEdge[]         @relation("GraphEdgeFrom")
+  edgesTo            GraphEdge[]         @relation("GraphEdgeTo")
+  componentAttr      ComponentAttr?
+  deploymentUnitAttr DeploymentUnitAttr?
+  repositoryAttr     RepositoryAttr?
+  endpointAttr       EndpointAttr?
+  featureAttr        FeatureAttr?
+  flowAttr           FlowAttr?
+
+  // Backs the composite FKs from GraphEdge and the attr tables' tenant-safe joins — same
+  // pattern as Issue/WorkflowRun (FR-024).
+  @@unique([id, tenantId])
+  @@index([tenantId, naturalKey])
+  // `(tenant_id, lifecycle_state) where lifecycle_state <> 'active'` is partial — Prisma cannot
+  // express it, so it is hand-written in migration.sql only (same pattern as Issue's fingerprint
+  // index). Declared here as a plain comment marker, not a Prisma index, to avoid Prisma trying
+  // to manage a second, non-partial index over the same columns.
+  @@map("graph_node")
+  @@schema("architecture")
+}
+
+/// A typed relationship (R-01). `provenance`/`strength`/`confidence` are the **maximum** over
+/// `edge_provenance` (FR-008, R-03) once T011 adds the maintaining trigger; nullable until T006.
+/// The partial unique index (one open row per logical edge) is T009's; `valid_from_version`/
+/// `valid_to_version` and their traversal indexes are T008's.
+model GraphEdge {
+  id               String            @id @db.Uuid
+  tenantId         String            @map("tenant_id") @db.Uuid
+  fromNodeId       String            @map("from_node_id") @db.Uuid
+  toNodeId         String            @map("to_node_id") @db.Uuid
+  edgeType         GraphEdgeType     @map("edge_type")
+  layer            GraphLayer?
+  provenance       ProvenanceClass?
+  strength         Int?              @db.SmallInt
+  confidence       Int?              @db.SmallInt
+  state            GraphElementState
+  observationCount BigInt            @default(0) @map("observation_count")
+  lastObservedAt   DateTime?         @map("last_observed_at") @db.Timestamptz(6)
+
+  fromNode       GraphNode        @relation("GraphEdgeFrom", fields: [fromNodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  toNode         GraphNode        @relation("GraphEdgeTo", fields: [toNodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  provenanceRows EdgeProvenance[]
+
+  // Backs EdgeProvenance's composite FK (same pattern as above).
+  @@unique([id, tenantId])
+  // Plain tenant_id-leading indexes to satisfy prisma-migrations.md's mandatory-index rule
+  // ahead of T008: T008 drops these two and replaces them with the version-aware composite
+  // indexes data-model.md assigns it — `(tenant_id, from_node_id, valid_from_version,
+  // valid_to_version)` and the `to_node_id` mirror — which are the traversal's real access
+  // paths once versioning exists.
+  @@index([tenantId, fromNodeId])
+  @@index([tenantId, toNodeId])
+  @@map("graph_edge")
+  @@schema("architecture")
+}
+
+/// Append-only (FR-008): every contributing observation for an edge, so a merged edge stays
+/// inspectable. T002 creates it as a plain table; T011 adds the append-only trigger and the
+/// edge.strength/.confidence max-maintenance.
+model EdgeProvenance {
+  id             String          @id @db.Uuid
+  tenantId       String          @map("tenant_id") @db.Uuid
+  edgeId         String          @map("edge_id") @db.Uuid
+  provenance     ProvenanceClass
+  strength       Int             @db.SmallInt
+  confidence     Int             @db.SmallInt
+  /// `evidence.id`; nullable — data-model.md lists no `actor_ref` on this table, so a
+  /// human-provenance row (rare: humans normally author graph_node/graph_edge directly, not
+  /// through discovery's edge_provenance path) carries neither reference. Flagged for review.
+  observationRef String?         @map("observation_ref") @db.Uuid
+  adapterKey     String          @map("adapter_key")
+  adapterVersion String          @map("adapter_version")
+  discoveryRunId String?         @map("discovery_run_id") @db.Uuid
+  recordedAt     DateTime        @default(now()) @map("recorded_at") @db.Timestamptz(6)
+
+  edge GraphEdge @relation(fields: [edgeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId, edgeId])
+  @@map("edge_provenance")
+  @@schema("architecture")
+}
+
+/// Keyed by `graph_node.id` (data-model.md "Kind attributes"). No column describes the
+/// system's architecture as a single style (FR-001, D-09); `characteristics` is an open,
+/// config-extended vocabulary, not an enum.
+///
+/// `tenantId` is denormalized onto every attr table beyond data-model.md's literal field list
+/// (which keys these purely by `node_id`) — prisma-migrations.md's inviolable rule ("every
+/// tenant-scoped table has tenant_id and a leading index") applies here too, caught by
+/// `prisma/migration.e2e.test.ts`. Deviation noted in data-model.md.
+model ComponentAttr {
+  nodeId          String        @id @map("node_id") @db.Uuid
+  tenantId        String        @map("tenant_id") @db.Uuid
+  componentType   ComponentType @map("component_type")
+  characteristics String[]      @default([])
+  ownerRef        String?       @map("owner_ref")
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@map("component_attr")
+  @@schema("architecture")
+}
+
+model DeploymentUnitAttr {
+  nodeId         String                @id @map("node_id") @db.Uuid
+  tenantId       String                @map("tenant_id") @db.Uuid
+  environment    String
+  runtimeKind    DeploymentRuntimeKind @map("runtime_kind")
+  runtimeRef     String                @map("runtime_ref")
+  currentVersion String?               @map("current_version")
+  lastDeployedAt DateTime?             @map("last_deployed_at") @db.Timestamptz(6)
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@map("deployment_unit_attr")
+  @@schema("architecture")
+}
+
+model RepositoryAttr {
+  nodeId        String        @id @map("node_id") @db.Uuid
+  tenantId      String        @map("tenant_id") @db.Uuid
+  vcs           RepositoryVcs
+  projectRef    String        @map("project_ref")
+  defaultBranch String        @map("default_branch")
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@map("repository_attr")
+  @@schema("architecture")
+}
+
+model EndpointAttr {
+  nodeId       String           @id @map("node_id") @db.Uuid
+  tenantId     String           @map("tenant_id") @db.Uuid
+  protocol     EndpointProtocol
+  method       String?
+  pathTemplate String?          @map("path_template")
+  contractRef  String?          @map("contract_ref")
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@map("endpoint_attr")
+  @@schema("architecture")
+}
+
+/// Product-layer nodes reach `confirmed` only through human confirmation (FR-013, SC-002) —
+/// enforced here by a CHECK on the owning `graph_node` row (data-model.md), added in this same
+/// migration since no later task claims it.
+model FeatureAttr {
+  nodeId          String  @id @map("node_id") @db.Uuid
+  tenantId        String  @map("tenant_id") @db.Uuid
+  description     String?
+  productOwnerRef String? @map("product_owner_ref")
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@map("feature_attr")
+  @@schema("architecture")
+}
+
+/// A `flow` is adopted, never produced by discovery (data-model.md) — product-layer, human-authored.
+model FlowAttr {
+  nodeId            String  @id @map("node_id") @db.Uuid
+  tenantId          String  @map("tenant_id") @db.Uuid
+  name              String
+  entryComponentId  String? @map("entry_component_id") @db.Uuid
+  orderedStepRefs   Json    @map("ordered_step_refs")
+  owner             String?
+  sourceDocumentRef String? @map("source_document_ref")
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId])
+  @@map("flow_attr")
+  @@schema("architecture")
+}
+
+model DiscoveryRun {
+  id              String            @id @db.Uuid
+  tenantId        String            @map("tenant_id") @db.Uuid
+  baseVersion     Int               @map("base_version")
+  trigger         DiscoveryTrigger
+  runnerId        String            @map("runner_id")
+  adapterVersions Json              @default("{}") @map("adapter_versions")
+  startedAt       DateTime          @map("started_at") @db.Timestamptz(6)
+  finishedAt      DateTime?         @map("finished_at") @db.Timestamptz(6)
+  outcome         DiscoveryOutcome?
+  nodesProposed   Int               @default(0) @map("nodes_proposed")
+  edgesProposed   Int               @default(0) @map("edges_proposed")
+
+  sourceOutcomes DiscoverySourceOutcome[]
+  drafts         DiscoveryDraft[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, startedAt])
+  @@map("discovery_run")
+  @@schema("architecture")
+}
+
+/// Per-source result in 003 FR-014's own shape (data-model.md) — not a parallel set. `tenantId`
+/// added beyond the doc's literal field list for consistency with prisma-migrations.md's
+/// "every tenant-scoped table has tenant_id" rule (deviation noted in data-model.md).
+model DiscoverySourceOutcome {
+  runId      String                     @map("run_id") @db.Uuid
+  tenantId   String                     @map("tenant_id") @db.Uuid
+  sourceKey  String                     @map("source_key")
+  status     DiscoverySourceStatus
+  reasonCode DiscoverySourceReasonCode? @map("reason_code")
+  itemCount  Int                        @default(0) @map("item_count")
+  durationMs Int?                       @map("duration_ms")
+
+  run DiscoveryRun @relation(fields: [runId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@id([runId, sourceKey])
+  @@index([tenantId, runId])
+  @@map("discovery_source_outcome")
+  @@schema("architecture")
+}
+
+/// SC-006a's onboarding baseline: `reviewSeconds`/`proposalsCount`/`acceptedUnchangedCount` are
+/// recorded with no pass threshold in v1 — column names are this migration's judgment call,
+/// data-model.md names the concepts but not the columns.
+model DiscoveryDraft {
+  id                     String              @id @db.Uuid
+  tenantId               String              @map("tenant_id") @db.Uuid
+  runId                  String              @map("run_id") @db.Uuid
+  baseVersion            Int                 @map("base_version")
+  state                  DiscoveryDraftState
+  openedAt               DateTime            @default(now()) @map("opened_at") @db.Timestamptz(6)
+  closedAt               DateTime?           @map("closed_at") @db.Timestamptz(6)
+  reviewSeconds          Int?                @map("review_seconds")
+  proposalsCount         Int?                @map("proposals_count")
+  acceptedUnchangedCount Int?                @map("accepted_unchanged_count")
+
+  run   DiscoveryRun @relation(fields: [runId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  items DraftItem[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, runId])
+  @@map("discovery_draft")
+  @@schema("architecture")
+}
+
+/// The draft **is** the diff (R-07): an operation against confirmed state at `baseVersion`.
+model DraftItem {
+  id             String          @id @db.Uuid
+  tenantId       String          @map("tenant_id") @db.Uuid
+  draftId        String          @map("draft_id") @db.Uuid
+  op             DraftItemOp
+  targetNodeId   String?         @map("target_node_id") @db.Uuid
+  targetEdgeId   String?         @map("target_edge_id") @db.Uuid
+  proposed       Json
+  current        Json?
+  /// Structural digest excluding confidence/observation counts (R-08), so a rejected proposal
+  /// is recognised across re-runs even as its confidence moves.
+  proposalDigest String          @map("proposal_digest")
+  provenance     ProvenanceClass
+  strength       Int             @db.SmallInt
+  confidence     Int             @db.SmallInt
+  observationRef String?         @map("observation_ref") @db.Uuid
+  state          DraftItemState
+  decidedBy      String?         @map("decided_by")
+  decidedAt      DateTime?       @map("decided_at") @db.Timestamptz(6)
+
+  draft DiscoveryDraft @relation(fields: [draftId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId, draftId, state])
+  @@index([tenantId, proposalDigest])
+  @@map("draft_item")
+  @@schema("architecture")
+}
+
+/// FR-011: a rejected proposal is not re-raised unchanged. Composite primary key rather than a
+/// surrogate id — `(tenant_id, proposal_digest)` is already the table's one required uniqueness
+/// (data-model.md), and every lookup is by that pair.
+model ProposalRejection {
+  tenantId       String   @map("tenant_id") @db.Uuid
+  proposalDigest String   @map("proposal_digest")
+  rejectedBy     String   @map("rejected_by")
+  rejectedAt     DateTime @default(now()) @map("rejected_at") @db.Timestamptz(6)
+  reason         String
+
+  @@id([tenantId, proposalDigest])
+  @@map("proposal_rejection")
+  @@schema("architecture")
+}
+
+/// No row here causes a graph write (data-model.md) — the only path from a finding to the graph
+/// is a human resolution (FR-018, FR-025, SC-007).
+model DriftFinding {
+  id                String            @id @db.Uuid
+  tenantId          String            @map("tenant_id") @db.Uuid
+  kind              DriftFindingKind
+  recordedSide      Json              @map("recorded_side")
+  observedSide      Json              @map("observed_side")
+  evidenceIds       String[]          @map("evidence_ids") @db.Uuid
+  /// The `knowledge_drift` issue raised for adjudication (001 FR-001, R-14) — not FK'd across
+  /// the issue/architecture schema boundary, same convention as `observationRef` above.
+  issueId           String            @map("issue_id") @db.Uuid
+  graphVersion      Int               @map("graph_version")
+  state             DriftFindingState @default(open)
+  resolvedBy        String?           @map("resolved_by")
+  resolvedAt        DateTime?         @map("resolved_at") @db.Timestamptz(6)
+  resolutionVersion Int?              @map("resolution_version")
+  detectedAt        DateTime          @default(now()) @map("detected_at") @db.Timestamptz(6)
+
+  @@index([tenantId, state])
+  @@index([tenantId, issueId])
+  @@map("drift_finding")
+  @@schema("architecture")
 }
