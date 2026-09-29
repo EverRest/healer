@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { TenantContext, type TenantScoped } from '@healer/shared';
 import { evaluate } from '../../domain/evaluate.js';
-import type { PolicyRulesetRepository, PublishedRuleset } from '../../domain/policy-ruleset-repository.js';
+import {
+  StaleRulesetVersionError,
+  type PolicyRulesetRepository,
+  type PublishedRuleset,
+} from '../../domain/policy-ruleset-repository.js';
 import type { RuleBody } from '../../domain/policy-ruleset.js';
 import type { ResolvedRuleset, Rule } from '../../domain/rule.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
@@ -37,9 +41,11 @@ class FakeRulesetRepo implements PolicyRulesetRepository {
       supersedesVersion?: number;
       conflictWarnings: readonly { ruleKeyA: string; ruleKeyB: string }[];
       rules: readonly RuleBody[];
+      auditEntry: unknown;
     }>,
   ): Promise<PublishedRuleset> {
-    const row: PublishedRuleset = { ...where };
+    const { auditEntry: _auditEntry, ...rest } = where;
+    const row: PublishedRuleset = { ...rest };
     const rows = this.byTenant.get(where.tenantId) ?? [];
     this.byTenant.set(where.tenantId, [...rows, row]);
     return row;
@@ -140,6 +146,57 @@ describe('publishRuleset — order independence at the storage layer (T018, R-04
       expect(a.decision.outcome).toBe(b.decision.outcome);
       expect([...a.decision.matchedRuleKeys].sort()).toEqual([...b.decision.matchedRuleKeys].sort());
     }
+  });
+});
+
+describe('publishRuleset — retry on a concurrent publish (review finding)', () => {
+  it('StaleRulesetVersionError carries the tenant and the attempted version', () => {
+    const error = new StaleRulesetVersionError('tenant-1', 3);
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe('StaleRulesetVersionError');
+    expect(error.tenantId).toBe('tenant-1');
+    expect(error.attemptedVersion).toBe(3);
+    expect(error.message).toContain('version 3');
+  });
+
+  it('retries with freshly read state when the repository reports a version taken by a concurrent publish', async () => {
+    const repo = new FakeRulesetRepo();
+    let publishCalls = 0;
+    const realPublish = repo.publish.bind(repo);
+    repo.publish = async (where) => {
+      publishCalls += 1;
+      if (publishCalls === 1) throw new StaleRulesetVersionError(where.tenantId, where.version);
+      return realPublish(where);
+    };
+
+    const result = await publishRuleset(repo, CONTEXT, { rules: [ruleBody({ ruleKey: 'a' })], publishedBy: 'pavlo' });
+    expect(publishCalls).toBe(2);
+    expect(result.version).toBe(1);
+  });
+
+  it('gives up after the retry bound rather than looping forever against permanent contention', async () => {
+    const repo = new FakeRulesetRepo();
+    repo.publish = async (where) => {
+      throw new StaleRulesetVersionError(where.tenantId, where.version);
+    };
+
+    await expect(
+      publishRuleset(repo, CONTEXT, { rules: [ruleBody({ ruleKey: 'a' })], publishedBy: 'pavlo' }),
+    ).rejects.toThrow(StaleRulesetVersionError);
+  });
+
+  it('a non-conflict error from the repository is never retried', async () => {
+    const repo = new FakeRulesetRepo();
+    let publishCalls = 0;
+    repo.publish = async () => {
+      publishCalls += 1;
+      throw new Error('unrelated failure');
+    };
+
+    await expect(
+      publishRuleset(repo, CONTEXT, { rules: [ruleBody({ ruleKey: 'a' })], publishedBy: 'pavlo' }),
+    ).rejects.toThrow('unrelated failure');
+    expect(publishCalls).toBe(1);
   });
 });
 

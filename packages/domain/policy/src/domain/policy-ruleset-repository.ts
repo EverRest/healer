@@ -1,5 +1,6 @@
 import type { TenantScoped } from '@healer/shared';
 import type { ConflictWarning } from './conflict-warnings.js';
+import type { NewAuditEntry } from './audit-entry.js';
 import type { RuleBody } from './policy-ruleset.js';
 
 /** A published `policy_ruleset` row plus its rules, as `PublishRuleset` and its repository read
@@ -16,7 +17,13 @@ export interface PublishedRuleset {
 }
 
 /** What `publish()` writes — everything `PublishRuleset` has already computed before the first
- *  write (digest, conflict warnings, the next monotone version). */
+ *  write attempt (digest, conflict warnings, the next monotone version it *believes* is free, and
+ *  the audit entry naming both versions — built by the application command via `scope(context,
+ *  ...)`, since it holds the real `TenantContext` and the repository never does; review finding).
+ *  `version`/`supersedesVersion` are a snapshot, not a guarantee: a concurrent publish for the
+ *  same tenant can have taken that version first, in which case `publish()` throws
+ *  `StaleRulesetVersionError` for the caller to recompute and retry (review finding — see
+ *  `publishRuleset`'s retry loop). */
 export interface NewPublishedRuleset {
   readonly id: string;
   readonly version: number;
@@ -26,6 +33,21 @@ export interface NewPublishedRuleset {
   readonly supersedesVersion?: number;
   readonly conflictWarnings: readonly ConflictWarning[];
   readonly rules: readonly RuleBody[];
+  readonly auditEntry: TenantScoped<NewAuditEntry>;
+}
+
+/**
+ * Thrown by `publish()` when the `(tenantId, version)` this call attempted is no longer free — a
+ * concurrent publish for the same tenant committed first. Distinct from "identical content already
+ * published" (`publish()` resolves that case itself, returning the existing row, since it is a
+ * real no-op regardless of which of two racing callers happened to write it — R-01). The caller
+ * re-reads the tenant's current state and retries with a freshly computed version.
+ */
+export class StaleRulesetVersionError extends Error {
+  constructor(readonly tenantId: string, readonly attemptedVersion: number) {
+    super(`policy_ruleset version ${attemptedVersion} for tenant ${tenantId} was taken by a concurrent publish`);
+    this.name = 'StaleRulesetVersionError';
+  }
 }
 
 /**
@@ -42,9 +64,16 @@ export interface PolicyRulesetRepository {
    *  tenant". */
   findLatest(where: TenantScoped<object>): Promise<PublishedRuleset | null>;
 
-  /** Writes the ruleset, its rules and the audit entry naming both versions in one transaction
-   *  (data-model.md: "the publish writes an audit_entry naming both versions — because the rule
-   *  sets are immutable and addressable, that entry *is* the diff", FR-020), and publishes
-   *  `PolicyRulesetPublished` through the outbox. */
+  /**
+   * Writes the ruleset, its rules and the audit entry naming both versions in one transaction
+   * (data-model.md: "the publish writes an audit_entry naming both versions — because the rule
+   * sets are immutable and addressable, that entry *is* the diff", FR-020), and publishes
+   * `PolicyRulesetPublished` through the outbox.
+   *
+   * Concurrency (review finding): if another publish for this tenant committed the exact same
+   * `digest` first, this resolves to that existing row rather than throwing — a real no-op no
+   * matter which caller's insert actually landed. If another publish took `version` first with
+   * *different* content, this throws `StaleRulesetVersionError` for the caller to retry.
+   */
   publish(where: TenantScoped<NewPublishedRuleset>): Promise<PublishedRuleset>;
 }

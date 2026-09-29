@@ -5,14 +5,16 @@ import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import { policyRulesetPublishedEvent } from '../domain/events.js';
 import type { ConflictWarning } from '../domain/conflict-warnings.js';
 import type { RuleBody } from '../domain/policy-ruleset.js';
-import type {
-  NewPublishedRuleset,
-  PolicyRulesetRepository,
-  PublishedRuleset,
+import {
+  StaleRulesetVersionError,
+  type NewPublishedRuleset,
+  type PolicyRulesetRepository,
+  type PublishedRuleset,
 } from '../domain/policy-ruleset-repository.js';
 import type { Outcome } from '../domain/outcome-lattice.js';
 import type { ReasonCode } from '../domain/reason-code.js';
 import type { PredicateConjunction } from '../domain/predicates/types.js';
+import { recordAuditEntry } from './record-audit-entry.js';
 
 /** `publish` publishes an event — a missing correlation scope is a caller error, the same rule
  *  `prisma-issue-merge.ts`'s `assertCorrelated` already enforces for this package's sibling
@@ -61,13 +63,30 @@ function toDomain(row: RulesetRow): PublishedRuleset {
 
 const RULESET_INCLUDE = { rules: true } as const;
 
+/** A P2002 (unique constraint violation) on this table only ever comes from `(tenantId, digest)`
+ *  or `(tenantId, version)` — the two unique indexes `policy_ruleset` declares. */
+function isUniqueConstraintViolation(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+}
+
 /**
  * `PolicyRulesetRepository` (T019, data-model.md `policy.policy_ruleset` / `policy.policy_rule`).
  * `publish` writes the ruleset, its rules and the audit entry naming both versions in one
  * transaction (data-model.md: "that entry *is* the diff", FR-020) using the shared
- * `recordAuditEntry` helper T017 built for exactly this — and publishes `PolicyRulesetPublished`
- * through the same transaction's outbox, the established convention
- * `prisma-issue-merge.ts`/`prisma-issue-repository.ts` already follow.
+ * `recordAuditEntry` helper (T017) — the caller (`publishRuleset`) already built the
+ * `TenantScoped<NewAuditEntry>` via `scope(context, ...)`, since it holds the real
+ * `TenantContext` this method never does (review finding: forcing the helper's construction in
+ * here, without a `TenantContext`, was the wrong layer for it) — and publishes
+ * `PolicyRulesetPublished` through the same transaction's outbox.
+ *
+ * Concurrency (review finding): the version/digest this call attempts is a snapshot the caller
+ * read before this transaction opened. If the insert's unique constraints reject it, this
+ * re-checks by digest inside the same transaction: if a row with this exact digest now exists,
+ * that *is* R-01's no-op, resolved here rather than left as a raw `P2002` for the caller — no
+ * matter which of two racing publishes of identical content actually landed. Otherwise, the
+ * conflict was on `version` — this tenant's next version was taken by different content between
+ * the caller's read and this write — and `StaleRulesetVersionError` tells `publishRuleset`'s
+ * retry loop to recompute against fresh state.
  */
 export class PrismaPolicyRulesetRepository implements PolicyRulesetRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -99,55 +118,40 @@ export class PrismaPolicyRulesetRepository implements PolicyRulesetRepository {
       ...(where.supersedesVersion !== undefined ? { supersedesVersion: where.supersedesVersion } : {}),
     });
 
-    const row = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.policyRuleset.create({
-        data: {
-          id: where.id,
-          tenantId,
-          version: where.version,
-          digest: where.digest,
-          publishedAt: where.publishedAt,
-          publishedBy: where.publishedBy,
-          supersedesVersion: where.supersedesVersion ?? null,
-          conflictWarnings: where.conflictWarnings as unknown as Prisma.InputJsonValue,
-          rules: { createMany: { data: where.rules.map((r: RuleBody) => ruleRow(r)) } },
-        },
-        include: RULESET_INCLUDE,
+    try {
+      const row = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.policyRuleset.create({
+          data: {
+            id: where.id,
+            tenantId,
+            version: where.version,
+            digest: where.digest,
+            publishedAt: where.publishedAt,
+            publishedBy: where.publishedBy,
+            supersedesVersion: where.supersedesVersion ?? null,
+            conflictWarnings: where.conflictWarnings as unknown as Prisma.InputJsonValue,
+            rules: { createMany: { data: where.rules.map((r: RuleBody) => ruleRow(r)) } },
+          },
+          include: RULESET_INCLUDE,
+        });
+
+        await recordAuditEntry(tx, where.auditEntry);
+        await enqueue(new PrismaOutboxTransaction(tx), event);
+        return created;
       });
 
-      // `recordAuditEntry` (T017) takes `TenantScoped<NewAuditEntry>`, and that brand is only
-      // producible by `scope(context, ...)` from a `TenantContext` — which this method, typed to
-      // take a `TenantScoped` filter rather than a `TenantContext` (T015's pattern for every
-      // *read* filter), never holds. Forcing it would mean either accepting a `TenantContext`
-      // here (a different shape from every other method in this file) or reconstructing one via
-      // `TenantContext.forTrustedInternalUse` — a constructor named specifically to flag
-      // test/seed-only use, not something to call from production infrastructure. Writing the row
-      // directly with the already-proven `tenantId` string is exactly what
-      // `prisma-issue-merge.ts` and `prisma-transition-effects.ts` already do for their own
-      // audit-shaped writes, so this follows that precedent rather than forcing T017's helper.
-      await tx.auditEntry.create({
-        data: {
-          id: randomUUID(),
-          tenantId,
-          actorType: 'human',
-          actorRef: where.publishedBy,
-          action: 'policy.publish_ruleset',
-          targetType: 'policy_ruleset',
-          targetId: where.id,
-          reason:
-            where.supersedesVersion !== undefined
-              ? `published version ${where.version}, superseding version ${where.supersedesVersion}`
-              : `published version ${where.version}`,
-          evidenceIds: [],
-          outcome: 'ok',
-        },
-      });
+      return toDomain(row);
+    } catch (error) {
+      if (!isUniqueConstraintViolation(error)) throw error;
 
-      await enqueue(new PrismaOutboxTransaction(tx), event);
-      return created;
-    });
-
-    return toDomain(row);
+      // The failed transaction rolled back everything, including the audit entry and outbox
+      // write — this re-check runs outside it, against whatever a concurrent publish actually
+      // committed. `where` already carries `digest` and a proven `tenantId` (structurally a
+      // `TenantScoped<{ digest: string }>`, no cast needed).
+      const existing = await this.findByDigest(where);
+      if (existing !== null) return existing;
+      throw new StaleRulesetVersionError(tenantId, where.version);
+    }
   }
 }
 

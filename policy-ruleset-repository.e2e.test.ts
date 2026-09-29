@@ -114,4 +114,46 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
       const resolved = await repo.findByDigest(scope(CONTEXT, { digest: published.digest }));
       expect(resolved?.rules.map((r) => r.ruleKey)).toEqual(rules.map((r) => r.ruleKey));
     }));
+
+  // Review finding: `publishRuleset` used to read-decide-write with no lock, so two concurrent
+  // publishes for the same tenant could both compute the same next version and race a raw
+  // `PrismaClientKnownRequestError` (P2002) to the loser. Fixed by having `repo.publish()`
+  // resolve a digest collision as the no-op it always was, and retry-on-conflict (via
+  // `StaleRulesetVersionError`) for a genuine version collision — proved here against real
+  // concurrent writes, the same way the existing `consumeDecision` race test proves its own lock.
+  describe('concurrent publishes for the same tenant (review finding)', () => {
+    const CONCURRENT_TENANT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000f8');
+
+    it('two concurrent publishes of different content both succeed, with distinct consecutive versions — no raw Prisma error', async () =>
+      withCorrelation('corr-publish-race-1', async () => {
+        const [a, b] = await Promise.all([
+          publishRuleset(repo, CONCURRENT_TENANT, { rules: [rule({ ruleKey: `race-a-${randomUUID()}` })], publishedBy: 'pavlo' }),
+          publishRuleset(repo, CONCURRENT_TENANT, { rules: [rule({ ruleKey: `race-b-${randomUUID()}` })], publishedBy: 'pavlo' }),
+        ]);
+
+        expect(a.digest).not.toBe(b.digest);
+        expect(new Set([a.version, b.version]).size).toBe(2);
+        expect(Math.max(a.version, b.version) - Math.min(a.version, b.version)).toBe(1);
+
+        const latest = await repo.findLatest(scope(CONCURRENT_TENANT, {}));
+        expect(latest?.version).toBe(Math.max(a.version, b.version));
+      }));
+
+    it('two concurrent publishes of identical content both resolve to the one row — no duplicate version', async () =>
+      withCorrelation('corr-publish-race-2', async () => {
+        const rules = [rule({ ruleKey: `race-same-${randomUUID()}` })];
+        const [a, b] = await Promise.all([
+          publishRuleset(repo, CONCURRENT_TENANT, { rules, publishedBy: 'pavlo' }),
+          publishRuleset(repo, CONCURRENT_TENANT, { rules, publishedBy: 'someone-else' }),
+        ]);
+
+        expect(a.id).toBe(b.id);
+        expect(a.version).toBe(b.version);
+
+        const rowCount = await prisma.policyRuleset.count({
+          where: { tenantId: CONCURRENT_TENANT.tenantId, digest: a.digest },
+        });
+        expect(rowCount).toBe(1);
+      }));
+  });
 });

@@ -19,10 +19,11 @@ export * from './domain/predicates/index.js';
 export { REASON_CODES, type ReasonCode } from './domain/reason-code.js';
 export type { CooldownBounds, ResolvedRuleset, Rule } from './domain/rule.js';
 export { computeRulesetDigest, type RuleBody } from './domain/policy-ruleset.js';
-export type {
-  NewPublishedRuleset,
-  PolicyRulesetRepository,
-  PublishedRuleset,
+export {
+  StaleRulesetVersionError,
+  type NewPublishedRuleset,
+  type PolicyRulesetRepository,
+  type PublishedRuleset,
 } from './domain/policy-ruleset-repository.js';
 export { computeProposalDigest } from './domain/proposal-digest.js';
 export {
