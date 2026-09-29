@@ -7,7 +7,7 @@
 # failure aborts immediately regardless of `-j` — prerequisite order is not guaranteed under
 # parallel make, but a single recipe's command lines always run in sequence.
 
-.PHONY: help bootstrap ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
+.PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-no-send \
 	gate-coverage-completeness
 
@@ -23,6 +23,9 @@ bootstrap: ## Install, start Postgres + Redis, migrate, seed — one command, no
 	docker compose -f docker/docker-compose.yml up -d --wait
 	pnpm exec prisma migrate deploy --schema prisma/schema.prisma
 	pnpm run db-seed
+
+graph-fixtures: ## Load the monolith, microservice and serverless architecture fixtures (004 SC-008)
+	pnpm run graph-fixtures
 
 ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) secret-scan

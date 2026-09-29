@@ -16,6 +16,7 @@
     "db-generate": "prisma generate",
     "db-check": "node scripts/db-check.mjs",
     "db-seed": "node --env-file=.env scripts/db-seed.mjs",
+    "graph-fixtures": "node --env-file=.env scripts/graph-fixtures.mjs",
     "secret-scan": "node scripts/secret-scan.mjs",
     "generate:openapi": "node scripts/generate-openapi.mjs",
     "contracts-check": "node scripts/gates/contracts-check.mjs",
