@@ -256,6 +256,13 @@ and still green.
   project references, and no app in this repo has a `start` script yet (a real gap, same one
   flagged for release/deployment automation elsewhere in this file). Not invented here to avoid a
   one-off convention that diverges from `apps/worker`'s own shape.
+- **A persistently-failing directive retries forever, logged at `error` on every occurrence, with no
+  retry-count cap or dead-letter concept.** Checked against FR-028's actual text ("idempotent under
+  re-delivery, keyed so re-running produces no duplicate effect") — that's the whole requirement,
+  and this satisfies it exactly; a retry ceiling isn't asked for. Flagged by the confirmation review
+  as a legitimate operational follow-up (infinite log spam for a directive nothing can ever execute
+  successfully), not a defect in what T051 was scoped to build. Worth an ADR if/when a real directive
+  producer (T093+) makes this a live operational concern; not decided here.
 
 ## 001 data-model.md — fingerprint index exclusion set
 
