@@ -1290,3 +1290,44 @@ files). All green. **24 PASS, 2 PARTIAL, 1 NOT IMPLEMENTABLE YET** — T056 stay
 byte): `worker.e2e.test.ts` quickstart 21 — ingestion `attempts: 5 -> 1` made it fail (`waitFor timed
 out`); `timeline-no-model.test.ts` — adding `@healer/llm` to `@healer/events`' dependencies (a
 transitive dependency of `@healer/domain-issues`) made it fail.
+
+## 002 T006–T013 — domain core: judgment calls (under independent review as of this writing)
+
+Five calls the implementer flagged in the hand-back for `packages/domain/policy/src/domain/**`
+(the pure evaluator — 489 tests, 95% coverage floor met). None block progress; recording the
+reasoning now, will amend below once both independent reviews (code-reviewer,
+silent-failure-hunter) land, in case either surfaces a real defect rather than a style question.
+
+1. **The DENY-seed fold, read literally, would force every decision to DENY.** research.md R-04:
+   "folds the matched outcomes with `max`, seeded with `DENY`." `DENY` is the lattice's top
+   element, so threading it through every reduce step (`max(DENY, x) = DENY` always) can't be the
+   intended algorithm — quickstart 6 needs a genuine allow/deny conflict to resolve to `DENY`
+   *because they conflict*, not unconditionally. Implemented as: empty matched-rule set → `DENY`
+   (`NO_MATCHING_RULE`, FR-005); non-empty set → real `max` over the matched outcomes only, no
+   `DENY` injected. This matches every quickstart scenario (1, 4, 5, 6) and FR-002/005/006.
+   **Ruling: correct reading of an ambiguous sentence — "seeded with DENY" describes the fold's
+   identity element for the empty case, not a literal extra list member.** Cost if wrong: every
+   decision would need to actually always be DENY, which contradicts the spec's own worked
+   examples, so this is very unlikely to be the intended meaning.
+2. **`ceilingApplied` is true only when the clamp changes the outcome**, not whenever
+   `grantLevel > ceiling`. Quickstart 9 wants `ceilingApplied = true` when a hand-written
+   over-ceiling grant is refused — need to confirm the test for that scenario exercises the real
+   distinction (clamp *binding* vs. clamp merely present) rather than a case where both readings
+   happen to agree. Under review now.
+3. **Invented `cooldownBounds` shape** on `ResolvedRuleset`, since `contracts/evaluation.md`'s
+   `DecisionInput.cooldown` group carries only counts (`recentAllowCount`/`windowSeconds`/
+   `attemptCount`), not bounds — the bounds live in `policy.action_limit` (T054, a later phase,
+   not built yet). This is the least-certain call in the batch: T054's real repository may shape
+   the bounds differently than what was guessed here. Under review now; likely needs revisiting
+   when T054 lands regardless of what this review finds.
+4. **`ImpactClosure` defined locally** as `{ memberIds: readonly string[]; maxDepth: number }`
+   since spec 004 hasn't landed in this repo — scoped to exactly what the four antitone closure
+   operators need. Placeholder, to be replaced by 004's real type when it exists.
+5. Quantity predicates (`atLeast`/`atMost`) don't enforce "same group only" comparison at runtime
+   (contracts/evaluation.md: "compared against a literal or against another field in the same
+   group, never against a computed expression") — deferred to publish-time validation (T019),
+   out of scope for the pure evaluator itself.
+
+Not added to "Decisions waiting on Pavlo" — none of these need a decision only Pavlo can make;
+they're implementation judgment calls on ambiguous spec prose, and two independent reviews are
+actively checking them against the actual test suite before this batch is called done.
