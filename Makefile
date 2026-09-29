@@ -9,7 +9,7 @@
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-coverage-completeness
+	gate-coverage-completeness runner-contract-test runner-compat-test
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -100,3 +100,15 @@ gate-graph-confirm-capability: ## No MCP tool/job/route exposes graph confirm; n
 
 gate-no-send: ## No package outside the egress allowlist imports an outbound mail/SMS/chat module (009 SC-005)
 	pnpm run gate-no-send
+
+# Runner targets (012 T049, contracts/make-targets.md's "Runner targets" table). Not composed
+# into `ci` above: the contract's own `ci` composition list omits them, and quickstart.md's gate
+# verification section runs them as their own step after `test-e2e`, not folded into the fast
+# loop or the e2e run. `make runner-build` (stamping version + checksum) is a separate task
+# (T050) — it needs apps/runner/Dockerfile, which does not exist yet.
+
+runner-contract-test: ## Evidence schema is closed — a free-form string field fails (R-04)
+	pnpm run runner-contract-test
+
+runner-compat-test: ## Capability handshake across the version window and below the floor refuses (R-03)
+	pnpm run runner-compat-test

@@ -33,7 +33,9 @@
     "check:append-only": "node --env-file=.env scripts/checks/append-only.mjs",
     "check:expired-evidence": "node --env-file=.env scripts/checks/expired-evidence.mjs",
     "check:decision-replay": "node --env-file=.env scripts/checks/decision-replay.mjs",
-    "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs"
+    "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs",
+    "runner-contract-test": "vitest run packages/boundary-contract/src/index.test.ts",
+    "runner-compat-test": "vitest run packages/boundary-contract/src/handshake.test.ts"
   },
   "devDependencies": {
     "@healer/domain-evidence": "workspace:*",

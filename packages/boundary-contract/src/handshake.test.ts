@@ -34,6 +34,16 @@ describe('resolveHandshake — the compatibility matrix (012 T039, R-03, quickst
     );
     expect(result.status).toBe('refused');
     expect(result.refusedReason).toMatch(/upgrade required/);
+    // R-03/`runner-compat-test`: the refusal must report the required upgrade — the runner's
+    // own version and the version it is measured against both have to be in the reason, or an
+    // operator reading it cannot tell what to upgrade to. Matched against the exact phrasing
+    // `handshake.ts` builds, not a bare substring — a bare version number (e.g. "1") would also
+    // match an unrelated digit elsewhere in the message.
+    expect(result.refusedReason).toMatch(
+      new RegExp(
+        `^protocol version ${CURRENT_PROTOCOL_VERSION - 3} is \\d+ minor versions behind current \\(${CURRENT_PROTOCOL_VERSION}\\)`,
+      ),
+    );
   });
 
   it('refuses a superseded version once the successor has existed past the 90-day floor, even within the version window', () => {
