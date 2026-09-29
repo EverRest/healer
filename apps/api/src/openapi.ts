@@ -14,6 +14,7 @@ import type {
   PolicyDecisionRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
 
 // Route shape only — none of these are ever called, contract generation never sends a request.
@@ -70,6 +71,10 @@ const noopPolicyActions: PolicyActionRepository = {
   findByKey: () => Promise.resolve(null),
   list: () => Promise.resolve([]),
 };
+const noopRunnerRegistrations: RunnerRegistrationRepository = {
+  upsert: () => Promise.reject(new Error('not implemented for contract generation')),
+  findByName: () => Promise.resolve(null),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -96,6 +101,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopPolicyRulesets,
     noopPolicyDecisions,
     noopPolicyActions,
+    noopRunnerRegistrations,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

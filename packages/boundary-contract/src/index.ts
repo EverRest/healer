@@ -404,6 +404,7 @@ export function isPermittedInSimulationSession(directive: ControlPlaneDirective)
 }
 
 export * from './handshake.js';
+export * from './runner-registration.js';
 export * from './validation.js';
 export * from './outbound-buffer.js';
 export * from './redaction.js';

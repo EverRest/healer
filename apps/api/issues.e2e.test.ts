@@ -27,6 +27,7 @@ import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantIsolated, assertTenantIsolatedList } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
+import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 
 /**
@@ -134,6 +135,7 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
       new PrismaPolicyRulesetRepository(prisma),
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
+      new PrismaRunnerRegistrationRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

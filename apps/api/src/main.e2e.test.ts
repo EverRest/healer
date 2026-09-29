@@ -14,6 +14,7 @@ import type {
   PolicyDecisionRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
 
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
@@ -63,6 +64,10 @@ const noopPolicyActions: PolicyActionRepository = {
   findByKey: () => Promise.resolve(null),
   list: () => Promise.resolve([]),
 };
+const noopRunnerRegistrations: RunnerRegistrationRepository = {
+  upsert: () => Promise.reject(new Error('not implemented in this test')),
+  findByName: () => Promise.resolve(null),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -93,6 +98,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopPolicyRulesets,
       noopPolicyDecisions,
       noopPolicyActions,
+      noopRunnerRegistrations,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

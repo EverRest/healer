@@ -56,6 +56,9 @@ import {
   POLICY_ACTION_REPOSITORY,
   PolicyEvaluationController,
 } from './policy/policy-evaluation.controller.js';
+import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
+import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
+import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -102,6 +105,7 @@ export function createApiModule(
   policyRulesets: PolicyRulesetRepository,
   policyDecisions: PolicyDecisionRepository,
   policyActions: PolicyActionRepository,
+  runnerRegistrations: RunnerRegistrationRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -111,6 +115,7 @@ export function createApiModule(
       PolicyRulesetsController,
       PolicyDecisionsController,
       PolicyEvaluationController,
+      RunnersController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -124,6 +129,7 @@ export function createApiModule(
       { provide: POLICY_RULESET_REPOSITORY, useValue: policyRulesets },
       { provide: POLICY_DECISION_REPOSITORY, useValue: policyDecisions },
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
+      { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
     ],
   })
   class ApiModule {}
@@ -153,6 +159,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyRulesetRepository(prisma),
     new PrismaPolicyDecisionRepository(prisma),
     new PrismaPolicyActionRepository(prisma),
+    new PrismaRunnerRegistrationRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

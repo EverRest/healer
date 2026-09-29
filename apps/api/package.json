@@ -15,6 +15,7 @@
     "typecheck": "tsc --build tsconfig.json"
   },
   "dependencies": {
+    "@healer/boundary-contract": "workspace:*",
     "@healer/domain-evidence": "workspace:*",
     "@healer/domain-issues": "workspace:*",
     "@healer/events": "workspace:*",

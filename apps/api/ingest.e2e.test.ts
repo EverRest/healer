@@ -37,7 +37,14 @@ import {
   startRedis,
   type StartedPostgres,
 } from '../../test/containers.js';
+import type { RunnerRegistrationRepository } from './src/runners/domain/repository.js';
+import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
+
+const noopRunnerRegistrations: RunnerRegistrationRepository = {
+  upsert: () => Promise.reject(new Error('not implemented in this test')),
+  findByName: () => Promise.resolve(null),
+};
 
 /**
  * Boots a real Redis (first consumer of `startRedis`, 012 T003), a real Postgres (for the
@@ -100,6 +107,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaPolicyRulesetRepository(prisma),
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
+      new PrismaRunnerRegistrationRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -394,6 +402,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopPolicyRulesets,
       noopPolicyDecisions,
       noopPolicyActions,
+      noopRunnerRegistrations,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
