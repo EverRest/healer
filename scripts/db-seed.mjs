@@ -16,8 +16,9 @@ export const LOCAL_DEV_TENANT_ID = '00000000-0000-0000-0000-000000000001';
 // a workspace package here would require a built `dist/` that does not exist yet at that point in
 // the sequence (confirmed: `Makefile`'s `bootstrap` target has no build step before `db-seed`).
 // Two rows, so the ponytail-lazy fix is keeping them in sync by hand rather than reordering
-// `bootstrap` or teaching this loader to resolve TypeScript sources.
-const SEED_POLICY_ACTIONS = [
+// `bootstrap` or teaching this loader to resolve TypeScript sources — `db-seed.test.ts` is what
+// catches the two copies drifting apart instead of a silently incomplete `make bootstrap`.
+export const SEED_POLICY_ACTIONS = [
   {
     actionKey: 'change.open_pull_request',
     actionClass: 'code_change',
