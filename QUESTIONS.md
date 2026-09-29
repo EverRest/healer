@@ -1378,3 +1378,73 @@ history. 48/48 new+existing tests pass, `db-check` clean, no schema/migration dr
   `graph_node.observationRef`, `edge_provenance.observationRef`/`discoveryRunId`,
   `draft_item.targetNodeId`/`targetEdgeId`, `drift_finding.issueId` — mirrors this repo's existing
   convention (`Issue.componentId`, `Evidence.producedByStep` also have no FK).
+
+## Review of T002/T005–T011 — 2 findings fixed, 1 spec gap escalated, 1 noted for T040
+
+Two independent reviews (code-reviewer, silent-failure-hunter) ran real fault-injection against a live
+Postgres — reverted a guard, confirmed the test actually goes red for the right reason, restored it —
+rather than reading the code alone. Results:
+
+**Fixed** (see the commit that follows this entry):
+- The `edge_provenance` max-maintenance trigger mutated `graph_edge` rows with no
+  `valid_to_version` filter, silently rewriting **closed/historical** edge versions — reproduced: an
+  edge closed at `valid_to_version = 1` changed after a later `edge_provenance` insert, which breaks
+  FR-014/SC-005 ("a pinned query is stable"). Fixed to filter to the open row only and to recompute
+  via a real `MAX()` aggregate over `edge_provenance` rather than an incremental `GREATEST` against
+  the edge's own current value (the incremental form could be inflated by the edge's own founding
+  value if that value were ever set independently of an `edge_provenance` row).
+- The six attribute tables' FKs referenced `graph_node(id)` alone rather than the composite
+  `(id, tenant_id)` every other child table in this migration uses — reproduced: a `component_attr`
+  row with tenant B's `tenant_id` pointing at tenant A's node was accepted. Fixed by amending T002's
+  migration directly (not yet pushed/shared, so amending is allowed per `prisma-migrations.md`) to the
+  composite FK, plus the supporting unique constraint on `graph_node(id, tenant_id)`.
+- `edge_provenance` had no CHECK requiring `observation_ref` for a non-human provenance class,
+  unlike `graph_node` — added, mirroring `graph_node`'s rule.
+- Added `CHECK (confidence BETWEEN 0 AND 100)` on `graph_node`/`graph_edge` (data-model.md's own
+  field description, just not previously a CHECK) and `CHECK (valid_from_version <=
+  valid_to_version)` on both — cheap, unambiguous structural invariants.
+- `prisma/migration.e2e.test.ts`'s reversal check didn't cover the `architecture` schema at all (a
+  hardcoded schema list predating 004), and T002's `down.sql` never dropped it — both fixed; the test
+  was confirmed to go red first when `DROP SCHEMA` was missing, then green after adding it.
+- `graph-node-rename-race.e2e.test.ts`'s inline comment paraphrased 001's `transition()` investigation
+  ("SERIALIZABLE + a guarded UPDATE, either alone, measurably let both writers through") as if it were
+  established for this code — 23 trials with the guard removed (isolation still SERIALIZABLE) and 11
+  with isolation dropped (guard still present) both passed clean for this specific race shape; only
+  removing both reproduced a real lost update. The comment overclaimed what's been verified *here*.
+  Softened the comment to what's actually shown, and added repeated trials to the race test itself —
+  given 001's own history of this exact class of Postgres-serialization-conflict intermittency taking
+  150+ trials to characterize (`QUESTIONS.md` "Residual, investigated, not resolved" era), a single
+  green run is weak evidence, so the test now runs the race several times rather than once.
+
+**Noted, no fix needed now** (explicitly future work, tracked by an existing task):
+- Nothing yet enforces that a `graph_edge`'s founding `strength`/`confidence` (set at the edge's own
+  INSERT) is backed by a corresponding `edge_provenance` row — the T011 trigger only *raises* the
+  value when a provenance row arrives, it doesn't require one to exist. This becomes exploitable only
+  once a real "create graph_edge" command exists (Phase 3+, out of this batch's scope), and
+  `tasks.md`/`quickstart.md` already name the compensating continuous check (`check:edge-strength-max`,
+  task **T040** — not yet implemented). Flagging here so it isn't lost by the time T040's owner looks
+  for what it's supposed to catch.
+
+**Escalated — added to the Pavlo index below, not decided here:**
+- `graph_edge` has no `actor_ref` or `observation_ref` column at all (unlike `graph_node`, which has
+  both), so a directly human-authored or human-confirmed edge — one that doesn't arrive through
+  discovery's `edge_provenance` — has nowhere to record who asserted it or what it's based on. This
+  is tangled with a second gap: `research.md`'s R-04a says `edge_provenance` rows carry their own
+  `valid_from`/`valid_to` range and "surviving provenance is copied forward" when an edge mutates, but
+  `data-model.md`'s literal `edge_provenance` field list has no range columns, and what got built
+  matches `data-model.md` (no versioning on `edge_provenance`). Per AGENTS.md's own rule ("if a
+  document and the code disagree, say which is stale, don't pick the convenient one"), this needs a
+  call: is R-04a aspirational text `data-model.md` correctly simplified away from, or does
+  `edge_provenance` need both a version range and a way to name a human actor, with `data-model.md`
+  the one that's incomplete? Nothing currently in T001–T017's scope needs a human-authored edge with
+  no discovery observation behind it, so this doesn't block the batch — but the checkpoint's "an
+  element without provenance cannot be persisted" is only fully proven for the shapes the schema can
+  currently express, and a human-direct edge currently can't be expressed at all.
+
+## Decisions waiting on Pavlo — 004 (index; detail in the named sections above)
+
+1. **Can a human directly author or confirm a `graph_edge` with no discovery observation behind it?**
+   Today the schema has no column to record that on the edge itself, and `research.md` (R-04a) and
+   `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
+   reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this
+   path yet.
