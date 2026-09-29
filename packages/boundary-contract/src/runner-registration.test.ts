@@ -33,7 +33,7 @@ describe('findStaleRunners (012 T042, FR-020) — the twin of periodic-checks.ts
     expect(findStaleRunners([fresh], NOW)).toEqual([]);
   });
 
-  it('does not return a degraded runner past the threshold either — degraded still accepts read-only work', () => {
+  it('returns a degraded runner past the threshold too — degraded still accepts read-only work, and its own heartbeat can still go stale', () => {
     const stale = runner({
       status: 'degraded',
       lastHeartbeatAt: new Date(NOW.getTime() - HEARTBEAT_STALE_THRESHOLD_MS - 1),

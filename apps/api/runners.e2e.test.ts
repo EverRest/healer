@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { NestFactory } from '@nestjs/core';
@@ -100,7 +101,11 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
     const response = await post(TENANT_A, validHeartbeatBody('primary')).expect(200);
     expect(response.body).toEqual({
       status: 'active',
-      resolvedCapabilities: [],
+      // The intersection with an empty requirement set is the runner's own declared set, not the
+      // empty set (review finding) — runner-protocol.md's own words are "the resolved capability
+      // set — the intersection", and a runner that declared a capability nothing yet requires must
+      // not be told it has zero usable capabilities.
+      resolvedCapabilities: ['read_logs'],
       directives: [],
     });
 
@@ -116,18 +121,17 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
     });
   });
 
-  // A real "refused below the compatibility floor" HTTP scenario cannot be constructed today:
-  // the floor is two minor versions behind `CURRENT_PROTOCOL_VERSION` (currently 1), and the DTO
-  // correctly rejects a negative `protocolVersion` — so there is no valid wire value that is both
-  // schema-legal and two-plus versions behind. `resolveHandshake`'s own unit suite
-  // (`packages/boundary-contract/src/handshake.test.ts`) already exercises the floor exhaustively
-  // against higher `currentProtocolVersion` values; this test proves this endpoint *carries the
-  // refusal through* when `resolveHandshake` produces one, using its `refusedReason` field
-  // directly rather than reconstructing a real floor breach.
-  it('carries a refused handshake result through to the response and the persisted row (FR-018)', async () => {
-    // protocolVersion above CURRENT_PROTOCOL_VERSION is accepted by the DTO and never refused by
-    // resolveHandshake's floor check (only "behind" is refused) — so this instead proves the
-    // negative case: an in-range registration is never refused.
+  // Honest limitation, not a tested guarantee (review finding: an earlier version of this test
+  // was titled as if the refused path itself were exercised — it was not, and the assertions
+  // below still do not exercise it). A real "refused below the compatibility floor" HTTP scenario
+  // cannot be constructed today: the floor is two minor versions behind
+  // `CURRENT_PROTOCOL_VERSION` (currently 1), and the DTO correctly rejects a negative
+  // `protocolVersion` — so no schema-legal wire value is two-plus versions behind. The floor
+  // itself is exhaustively unit-tested against higher `currentProtocolVersion` values in
+  // `packages/boundary-contract/src/handshake.test.ts`; whether this controller correctly carries
+  // a `refused` result (and its `refusedReason`) through to the response and the persisted row is
+  // genuinely untested — flagged in QUESTIONS.md rather than claimed here.
+  it('an in-range registration is never refused', async () => {
     const response = await post(TENANT_A, validHeartbeatBody('in-range')).expect(200);
     expect(response.body.status).not.toBe('refused');
     expect(response.body).not.toHaveProperty('refusedReason');
@@ -184,6 +188,28 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
     await post(TENANT_A, { name: 'bad' }).expect(400);
   });
 
+  it('rejects a heartbeat for a syntactically-valid but unknown tenant, instead of an opaque 500 (review finding)', async () => {
+    const unknownTenant = '00000000-0000-0000-8000-00000000dead';
+    await post(unknownTenant, validHeartbeatBody('orphan')).expect(404);
+  });
+
+  it('never un-revokes a revoked runner — revocation is an admin decision a heartbeat cannot undo (review finding)', async () => {
+    const revokedId = randomUUID();
+    await query(
+      pg,
+      `insert into "runner"."runner_registration"
+         (id, tenant_id, name, protocol_version, capabilities, image_version, status, last_heartbeat_at)
+       values ('${revokedId}', '${TENANT_A}', 'revoked-runner', 1, '{}', '1.0.0', 'revoked', now() - interval '1 day')`,
+    );
+
+    await post(TENANT_A, validHeartbeatBody('revoked-runner')).expect(200);
+
+    const stored = await runnerRegistrations.findByName(
+      scope(TenantContext.forTrustedInternalUse(TENANT_A), { name: 'revoked-runner' }),
+    );
+    expect(stored?.status).toBe('revoked');
+  });
+
   it('rejects a missing X-Tenant-Id header', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/runners/heartbeat')
@@ -210,4 +236,24 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
         },
       }),
   );
+
+  it("tenant B registering the exact same runner name never touches tenant A's row (the actual collision case, not just distinct names)", async () => {
+    await post(TENANT_A, validHeartbeatBody('shared-name', { imageVersion: '1.0.0' })).expect(200);
+    const before = await runnerRegistrations.findByName(
+      scope(TenantContext.forTrustedInternalUse(TENANT_A), { name: 'shared-name' }),
+    );
+
+    await post(TENANT_B, validHeartbeatBody('shared-name', { imageVersion: '2.0.0' })).expect(200);
+
+    const afterA = await runnerRegistrations.findByName(
+      scope(TenantContext.forTrustedInternalUse(TENANT_A), { name: 'shared-name' }),
+    );
+    const afterB = await runnerRegistrations.findByName(
+      scope(TenantContext.forTrustedInternalUse(TENANT_B), { name: 'shared-name' }),
+    );
+    expect(afterA).toEqual(before);
+    expect(afterA?.imageVersion).toBe('1.0.0');
+    expect(afterB?.imageVersion).toBe('2.0.0');
+    expect(afterA?.id).not.toBe(afterB?.id);
+  });
 });

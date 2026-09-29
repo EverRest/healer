@@ -3,9 +3,11 @@ import { z } from 'zod';
 /**
  * `POST /runners/heartbeat` (012 T042, FR-018, FR-020): the same call serves registration and
  * every later heartbeat — `contracts/runner-protocol.md`'s registration table names
- * `protocolVersion`, `imageVersion`, `capabilities` and `resourceLimits`; FR-020 adds the two
- * heartbeat-only fields `resourceState` and `clockOffsetMs` (accepted and validated here, but not
- * persisted — see QUESTIONS.md "012 phase 6, T042").
+ * `protocolVersion`, `imageVersion`, `capabilities` and `resourceLimits`; FR-020's prose adds three
+ * heartbeat-only fields with no schema of their own anywhere — `resourceState`, `clockOffsetMs`
+ * and `lastSuccessfulTask` — accepted and validated here, but not persisted (QUESTIONS.md "012
+ * phase 6, T042"). `resourceLimits` itself is accepted and validated but has no column either —
+ * same treatment, same QUESTIONS.md entry.
  *
  * `name` is **not** in the contract document's own table, but `runner_registration` is unique on
  * `(tenantId, name)` (data-model.md) and nothing else in the payload identifies which registered
@@ -37,6 +39,9 @@ export const runnerHeartbeatRequestSchema = z
     // from its local state, not from a second copy stored here.
     resourceState: z.record(z.string(), z.unknown()).optional(),
     clockOffsetMs: z.number().optional(),
+    // No shape is defined anywhere for this either (spec.md FR-020 names it in prose only) —
+    // accepted as loosely as `resourceState`, for the same reason.
+    lastSuccessfulTask: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 

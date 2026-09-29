@@ -15,11 +15,12 @@ describe('runnerHeartbeatRequestSchema (012 T042, FR-018, FR-020)', () => {
     expect(result.success).toBe(true);
   });
 
-  it('accepts FR-020s extra heartbeat-only fields, resourceState and clockOffsetMs', () => {
+  it('accepts FR-020s extra heartbeat-only fields, resourceState, clockOffsetMs and lastSuccessfulTask', () => {
     const result = runnerHeartbeatRequestSchema.safeParse({
       ...VALID_BODY,
       resourceState: { activeRuns: 1, cpuPercent: 42 },
       clockOffsetMs: -150,
+      lastSuccessfulTask: { taskId: 'abc-123', finishedAt: '2026-01-01T00:00:00.000Z' },
     });
     expect(result.success).toBe(true);
   });

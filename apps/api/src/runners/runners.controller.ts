@@ -5,6 +5,7 @@ import {
   Headers,
   HttpCode,
   Inject,
+  NotFoundException,
   Post,
 } from '@nestjs/common';
 import {
@@ -13,6 +14,7 @@ import {
   type HandshakeStatus,
 } from '@healer/boundary-contract';
 import {
+  NotFoundError,
   TenantContext,
   TenantIsolationError,
   newCorrelationId,
@@ -88,6 +90,7 @@ export class RunnersController {
       // the intent is visible at the call site, not silently dropped by the schema alone.
       void request.resourceState;
       void request.clockOffsetMs;
+      void request.lastSuccessfulTask;
 
       const result = resolveHandshake(
         {
@@ -99,21 +102,39 @@ export class RunnersController {
         NO_CAPABILITY_REQUIREMENTS,
       );
 
-      await this.runners.upsert(
-        scope(context, {
-          name: request.name,
-          protocolVersion: request.protocolVersion,
-          capabilities: request.capabilities,
-          imageVersion: request.imageVersion,
-          status: result.status,
-          lastHeartbeatAt: new Date(),
-          ...(result.refusedReason !== undefined ? { refusedReason: result.refusedReason } : {}),
-        }),
-      );
+      try {
+        await this.runners.upsert(
+          scope(context, {
+            name: request.name,
+            protocolVersion: request.protocolVersion,
+            capabilities: request.capabilities,
+            imageVersion: request.imageVersion,
+            status: result.status,
+            lastHeartbeatAt: new Date(),
+            ...(result.refusedReason !== undefined ? { refusedReason: result.refusedReason } : {}),
+          }),
+        );
+      } catch (error) {
+        if (error instanceof NotFoundError) {
+          throw new NotFoundException(error.message);
+        }
+        throw error;
+      }
 
       return {
         status: result.status,
-        resolvedCapabilities: result.resolvedCapabilities,
+        // The intersection with an empty requirement set is the runner's own declared set, not
+        // the empty set (review finding): `resolveHandshake`'s own `resolvedCapabilities` is
+        // computed from per-requirement resolutions, so it is always `[]` while nothing is
+        // required — `runner-protocol.md`'s own words are "the resolved capability set — the
+        // intersection", and a runner that declared a capability nothing yet requires must not be
+        // told it has zero usable capabilities. Once `NO_CAPABILITY_REQUIREMENTS` gains a real,
+        // non-empty entry, `resolveHandshake`'s own computed set becomes the correct one to use
+        // instead — this fallback exists only because that list is empty today.
+        resolvedCapabilities:
+          NO_CAPABILITY_REQUIREMENTS.length === 0 && result.status !== 'refused'
+            ? request.capabilities
+            : result.resolvedCapabilities,
         ...(result.refusedReason !== undefined ? { refusedReason: result.refusedReason } : {}),
         directives: [],
       };

@@ -30,6 +30,14 @@ export interface UpsertRunnerRegistration {
  * when a scheduled stale-runner sweep needs it there too).
  */
 export interface RunnerRegistrationRepository {
+  /**
+   * A `revoked` row is never touched by this: `revoked` is an admin decision, not a handshake
+   * outcome (review finding — a heartbeat un-revoking a revoked runner would make the revocation
+   * something the revoked party could undo just by staying alive). Throws `NotFoundError('tenant')`
+   * (`@healer/shared`) when `tenantId` does not reference a real tenant — a syntactically valid but
+   * unknown tenant hits `runner_registration`'s own foreign key, the first tenant-scoped table in
+   * this codebase to have one (review finding).
+   */
   upsert(input: TenantScoped<UpsertRunnerRegistration>): Promise<RunnerRegistrationSnapshot>;
   /** Read-back for the tenant-isolation test and any future lookup by name. */
   findByName(

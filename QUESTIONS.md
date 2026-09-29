@@ -96,16 +96,55 @@ regenerated and committed.
   documented wire format identifies which registered instance is calling — a real, small gap in
   the contract document, flagged here rather than guessed at silently; whoever next touches
   `runner-protocol.md`'s registration section should add it there too.
-- **`resourceState`/`clockOffsetMs` are accepted, validated and read at the call site — never
-  persisted or otherwise consumed**, exactly as this section's own earlier entry decided. An e2e
-  test asserts the persisted row carries neither field.
-- **No e2e scenario exercises `resolveHandshake`'s `refused` status.** `CURRENT_PROTOCOL_VERSION`
-  is `1`, the floor is two minor versions behind, and the request DTO correctly rejects a negative
-  `protocolVersion` — so no schema-legal wire value can be two-plus versions behind today. Real
-  coverage of the floor stays where it already exhaustively lives
-  (`packages/boundary-contract/src/handshake.test.ts`); the e2e test instead proves an in-range
-  registration is never refused, and that a refused result (when `resolveHandshake` does produce
-  one) would carry through to both the response and the persisted row unchanged.
+- **`resourceState`/`clockOffsetMs`/`lastSuccessfulTask`/`resourceLimits` are accepted, validated
+  and read at the call site — never persisted or otherwise consumed.** The first two match this
+  section's own earlier decision; `lastSuccessfulTask` (added after independent review, FR-020's
+  prose names it but no document anywhere gives it a shape — accepted as loosely as
+  `resourceState`, for the same reason) and `resourceLimits` (accepted from day one but never
+  flagged here until now — same treatment, not a separate gap) get the identical treatment. An e2e
+  test asserts the persisted row carries none of the four.
+- **No e2e scenario exercises `resolveHandshake`'s `refused` status — corrected after independent
+  review.** `CURRENT_PROTOCOL_VERSION` is `1`, the floor is two minor versions behind, and the
+  request DTO correctly rejects a negative `protocolVersion` — so no schema-legal wire value can be
+  two-plus versions behind today. Real coverage of the floor stays where it already exhaustively
+  lives (`packages/boundary-contract/src/handshake.test.ts`). An earlier version of this note (and
+  of the e2e test's own title) claimed the controller's pass-through of a `refused` result to the
+  response and the persisted row was also proven here — it was not; the test only ever asserted the
+  in-range, non-refused case. Both the test title and this note are now honest about the gap:
+  whether `RunnersController` correctly carries a `refused` result and its `refusedReason` through
+  is untested, not merely untested-and-claimed-otherwise. Closing it for real needs either a
+  legitimate schema-legal way to breach the floor (none exists while
+  `CURRENT_PROTOCOL_VERSION = 1`) or making the capability-requirement list (next bullet)
+  injectable so a unit test can reach `refused` via a missing *write* capability instead of the
+  version floor — not done here to avoid widening this fix's scope further.
+- **`resolvedCapabilities` now resolves to the runner's own declared set when nothing is required
+  — fixed after independent review.** With `NO_CAPABILITY_REQUIREMENTS = []`,
+  `resolveHandshake`'s own `resolvedCapabilities` (computed from per-requirement resolutions) was
+  always `[]`, regardless of what the runner declared — contradicting
+  `contracts/runner-protocol.md`'s own words, "the resolved capability set — the intersection": the
+  intersection with an empty requirement set is the declared set, not the empty set. The controller
+  now returns the runner's declared capabilities when the status is not `refused` and no
+  requirement is configured; `resolveHandshake` itself is untouched (it is correct and heavily
+  relied on elsewhere) — this is a controller-level judgment about what "no requirements yet"
+  should mean for the reply, not a semantic change to the shared function.
+- **Two P2003/revocation findings from independent review, both fixed:**
+  - `PrismaRunnerRegistrationRepository.upsert` had no handling for a syntactically-valid,
+    non-existent `tenantId`. `runner_registration` is the first tenant-scoped table with a real
+    foreign key to `tenant` (`issue` and friends have none yet), so this was new exposure, not an
+    inherited gap — it surfaced as an unhandled `P2003`, an opaque 500 with **zero logging**
+    (`apps/api` boots with `{logger: false}` and has no global exception filter). Now caught,
+    logged via `createLogger()` at `warn` (`tenantId` is not secret) and translated to
+    `NotFoundError('tenant')` (`@healer/shared`), which the controller maps to `404`.
+  - The `update` branch unconditionally wrote `status` from the handshake result
+    (`active`/`degraded`/`refused` only), so a heartbeat from a runner some future admin action had
+    set to `revoked` would silently flip it back to `active` on its very next heartbeat — a
+    revocation the revoked party could undo just by staying alive is not a control. Fixed at the
+    query: `updateMany` now filters `status: { not: 'revoked' }`, so a revoked row is never written
+    by this path at all; a genuinely new `(tenantId, name)` still creates one, and the narrow
+    concurrent-first-heartbeat race (two initial heartbeats for the same brand-new name racing the
+    `create`) is handled the same way `FingerprintAlreadyOpenError` handles the equivalent race for
+    issues (001 T026) — re-read and return whichever one won, rather than surface an error a
+    repeated heartbeat has no useful way to react to.
 - **The stale-runner sweep is not scheduled anywhere.** Same gap as 001 T051/T052: no tenant
   enumerator and no repeatable schedule exist in `apps/worker` yet. `findStaleRunners` is built and
   unit-tested, and an e2e test proves it composes correctly against a real persisted
