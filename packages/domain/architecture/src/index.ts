@@ -1,2 +1,2 @@
-// @healer/domain-architecture — entry surface. Nothing is exported until it exists (012 FR-001).
-export {};
+export * from './domain/provenance.js';
+export * from './domain/discovery-adapter.js';

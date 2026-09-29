@@ -4,5 +4,19 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "references": [
+    {
+      "path": "../../boundary-contract"
+    },
+    {
+      "path": "../../events"
+    },
+    {
+      "path": "../../prisma-client"
+    },
+    {
+      "path": "../../shared"
+    }
+  ]
 }
