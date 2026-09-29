@@ -1324,3 +1324,57 @@ entirely and having the discovery ingest step stamp both from the emitting adapt
 (makes the unsafe state unrepresentable, per this repo's own pattern) over accepting the field on the
 wire and validating it matches at ingest — the latter is a check that can be forgotten at a second call
 site; the former has no second call site to forget it at.
+
+## 004 T002/T005–T011 — schema build-out: judgment calls
+
+Foundational (T002, T005–T011) is done: 5 migrations (`20261003000000`–`20261003040000`), all
+round-trip-verified (forward, `down.sql` reverse, re-apply) against a real disposable Postgres, plus
+the repo's own `prisma/migration.e2e.test.ts` "reverses every migration cleanly" test across full
+history. 48/48 new+existing tests pass, `db-check` clean, no schema/migration drift.
+
+- **Tenant scoping added beyond data-model.md's literal field lists**: all six attr tables
+  (`component_attr`, `deployment_unit_attr`, `repository_attr`, `endpoint_attr`, `feature_attr`,
+  `flow_attr`) and `discovery_source_outcome` got `tenant_id` + a leading index, though the doc keys
+  the attr tables purely by `node_id` and omits `tenant_id` from `discovery_source_outcome`'s field
+  list. **Decided, not deferred**: `.claude/rules/prisma-migrations.md`'s inviolable rule ("every
+  tenant-scoped table has `tenant_id` and a leading index") isn't optional, and the repo's own
+  `db-check` gate caught the omission live. `data-model.md` now has a "T002 implementation notes"
+  section recording this. `discovery_source_outcome`'s sibling tables (`discovery_draft`, `draft_item`)
+  already listed `tenant_id` explicitly, so the omission reads as a doc oversight, not a decision to
+  revisit.
+- **`graph_edge` had two interim plain tenant-leading indexes at T002** (`(tenant_id, from_node_id)`,
+  `(tenant_id, to_node_id)`) to satisfy `db-check` before versioning existed; T008 drops both,
+  replacing them with the version-aware composites data-model.md specifies. No action needed — this
+  is expected T002→T008 churn, not a leftover.
+- **`discovery_draft`'s SC-006a columns are named for the first time**: `proposals_count`,
+  `accepted_unchanged_count` (alongside `review_seconds`) — data-model.md names the concepts, not
+  columns. Naming decided, not escalated.
+- **`proposal_rejection`** uses composite PK `(tenant_id, proposal_digest)` rather than a surrogate
+  `id` — matches how the table is actually looked up (FR-011's dedup check), no surrogate needed.
+- **`edge_provenance` has no `actor_ref` column, so it cannot name a human for a
+  `human_authored`/`human_confirmed` row** — data-model.md's literal field list omits it, unlike
+  `graph_node`/`graph_edge` which both have `actor_ref`. **Decided, not escalated**: `edge_provenance`
+  exists to keep *discovery's* contributing observations inspectable when several sources produce the
+  same edge (FR-008) — it is not where a human confirmation or manual edit is recorded (that's
+  `graph_edge.state`/`.provenance` directly, audited via `audit_entry` per FR-025). In practice
+  `edge_provenance.provenance` will only ever hold a `derived_from_*`/`inferred_from_convention`
+  value; reusing the full `ProvenanceClass` enum on the column is for type consistency, not because a
+  human row is expected there. `observation_ref` stays nullable so this doesn't block anything.
+  Revisit if a later task actually needs to write a human-provenance `edge_provenance` row.
+- **T006's CHECK constraints apply only to `graph_node`**, not `graph_edge` — `graph_edge` has no
+  `observation_ref`/`actor_ref` columns in data-model.md's field list at all, so the two CHECKs
+  (which reference those columns) can't apply there. Only the `NOT NULL`s on
+  `provenance`/`strength`/`confidence`/`layer` apply to both tables.
+- **T011's max-maintenance mechanism**: an `AFTER INSERT` trigger on `edge_provenance` running
+  `UPDATE graph_edge SET strength = GREATEST(strength, NEW.strength), confidence =
+  GREATEST(confidence, NEW.confidence) WHERE id = NEW.edge_id AND tenant_id = NEW.tenant_id` —
+  incremental `GREATEST` against the current column, not a full `MAX()` re-aggregation over every
+  `edge_provenance` row on each insert. Correct because `edge_provenance` is insert-only, so the
+  running value is always already the max of everything inserted so far; cheaper than re-aggregating.
+- **FK policy**: composite tenant-safe FKs only on the "hard" structural relationships data-model.md
+  states explicitly (`graph_edge`→`graph_node` both ends, `edge_provenance`→`graph_edge`, attr
+  tables→`graph_node`, `discovery_draft`/`discovery_source_outcome`→`discovery_run`,
+  `draft_item`→`discovery_draft`). Left as plain scalar columns, no FK: `graph_node.discoveryRunId`,
+  `graph_node.observationRef`, `edge_provenance.observationRef`/`discoveryRunId`,
+  `draft_item.targetNodeId`/`targetEdgeId`, `drift_finding.issueId` — mirrors this repo's existing
+  convention (`Issue.componentId`, `Evidence.producedByStep` also have no FK).
