@@ -999,29 +999,60 @@ enum DriftFindingState {
   @@schema("architecture")
 }
 
+enum GraphVersionMintedBy {
+  confirmation
+  manual_edit
+  drift_resolution
+  rename
+
+  @@map("graph_version_minted_by")
+  @@schema("architecture")
+}
+
+/// An addressable version of the graph (R-04, FR-014). Versions are validity ranges on rows, not
+/// snapshots — this table only records that a version was minted and by what, never a copy of
+/// the graph itself.
+model GraphVersion {
+  id        String               @id @db.Uuid
+  tenantId  String               @map("tenant_id") @db.Uuid
+  version   Int
+  mintedBy  GraphVersionMintedBy @map("minted_by")
+  actorRef  String               @map("actor_ref")
+  draftId   String?              @map("draft_id") @db.Uuid
+  note      String?
+  createdAt DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([tenantId, version])
+  @@map("graph_version")
+  @@schema("architecture")
+}
+
 /// One row per graph participant, whatever its kind (R-01). `provenance`/`strength`/`confidence`
 /// and `layer` are NOT NULL (T006), plus the two CHECK constraints in migration.sql (Prisma
-/// cannot express CHECK); `valid_from_version`/`valid_to_version` are added by T008.
+/// cannot express CHECK). `validFromVersion`/`validToVersion` (R-04, T008): an open row (still
+/// current) uses `2147483647`.
 model GraphNode {
-  id             String             @id @db.Uuid
-  tenantId       String             @map("tenant_id") @db.Uuid
-  nodeKind       GraphNodeKind      @map("node_kind")
-  layer          GraphLayer
-  name           String
-  naturalKey     String             @map("natural_key")
-  provenance     ProvenanceClass
+  id               String             @id @db.Uuid
+  tenantId         String             @map("tenant_id") @db.Uuid
+  nodeKind         GraphNodeKind      @map("node_kind")
+  layer            GraphLayer
+  name             String
+  naturalKey       String             @map("natural_key")
+  provenance       ProvenanceClass
   /// Ordinal from the stored mapping (R-03) — written once at insert (T007), never recomputed.
-  strength       Int                @db.SmallInt
+  strength         Int                @db.SmallInt
   /// 0-100, computed at write time only (R-15) — never recomputed on a schedule.
-  confidence     Int                @db.SmallInt
-  state          GraphElementState
-  lifecycleState NodeLifecycleState @default(active) @map("lifecycle_state")
+  confidence       Int                @db.SmallInt
+  state            GraphElementState
+  lifecycleState   NodeLifecycleState @default(active) @map("lifecycle_state")
   /// `evidence.id` (001 FR-007) of type `graph_fact` — not FK'd across the schema boundary;
   /// checked continuously by `check:graph-fact-coverage` (data-model.md Invariants).
-  observationRef String?            @map("observation_ref") @db.Uuid
-  actorRef       String?            @map("actor_ref")
-  discoveryRunId String?            @map("discovery_run_id") @db.Uuid
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  observationRef   String?            @map("observation_ref") @db.Uuid
+  actorRef         String?            @map("actor_ref")
+  discoveryRunId   String?            @map("discovery_run_id") @db.Uuid
+  validFromVersion Int                @map("valid_from_version")
+  validToVersion   Int                @default(2147483647) @map("valid_to_version")
+  createdAt        DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
 
   edgesFrom          GraphEdge[]         @relation("GraphEdgeFrom")
   edgesTo            GraphEdge[]         @relation("GraphEdgeTo")
@@ -1036,6 +1067,9 @@ model GraphNode {
   // pattern as Issue/WorkflowRun (FR-024).
   @@unique([id, tenantId])
   @@index([tenantId, naturalKey])
+  // The traversal's node-side access path (R-01, R-02): every recursive step's final join against
+  // node attributes filters by kind at a pinned version.
+  @@index([tenantId, nodeKind, validFromVersion, validToVersion])
   // `(tenant_id, lifecycle_state) where lifecycle_state <> 'active'` is partial — Prisma cannot
   // express it, so it is hand-written in migration.sql only (same pattern as Issue's fingerprint
   // index). Declared here as a plain comment marker, not a Prisma index, to avoid Prisma trying
@@ -1047,9 +1081,9 @@ model GraphNode {
 /// A typed relationship (R-01). `provenance`/`strength`/`confidence` are the **maximum** over
 /// `edge_provenance` (FR-008, R-03) once T011 adds the maintaining trigger; NOT NULL since T006
 /// (no CHECK here — unlike `graph_node`, this table has no `observation_ref`/`actor_ref` to
-/// require one of).
-/// The partial unique index (one open row per logical edge) is T009's; `valid_from_version`/
-/// `valid_to_version` and their traversal indexes are T008's.
+/// require one of). `validFromVersion`/`validToVersion` and their two composite indexes are the
+/// traversal's only access paths (R-01, R-02, T008); the partial unique index (one open row per
+/// logical edge) is T009's.
 model GraphEdge {
   id               String            @id @db.Uuid
   tenantId         String            @map("tenant_id") @db.Uuid
@@ -1063,6 +1097,8 @@ model GraphEdge {
   state            GraphElementState
   observationCount BigInt            @default(0) @map("observation_count")
   lastObservedAt   DateTime?         @map("last_observed_at") @db.Timestamptz(6)
+  validFromVersion Int               @map("valid_from_version")
+  validToVersion   Int               @default(2147483647) @map("valid_to_version")
 
   fromNode       GraphNode        @relation("GraphEdgeFrom", fields: [fromNodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
   toNode         GraphNode        @relation("GraphEdgeTo", fields: [toNodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
@@ -1070,13 +1106,11 @@ model GraphEdge {
 
   // Backs EdgeProvenance's composite FK (same pattern as above).
   @@unique([id, tenantId])
-  // Plain tenant_id-leading indexes to satisfy prisma-migrations.md's mandatory-index rule
-  // ahead of T008: T008 drops these two and replaces them with the version-aware composite
-  // indexes data-model.md assigns it — `(tenant_id, from_node_id, valid_from_version,
-  // valid_to_version)` and the `to_node_id` mirror — which are the traversal's real access
-  // paths once versioning exists.
-  @@index([tenantId, fromNodeId])
-  @@index([tenantId, toNodeId])
+  // The traversal's only two access paths (R-01, R-02): the recursive term's seed and its step
+  // both filter by tenant + endpoint + pinned version. Replace T002's interim plain
+  // tenant-leading indexes now that the version columns exist.
+  @@index([tenantId, fromNodeId, validFromVersion, validToVersion])
+  @@index([tenantId, toNodeId, validFromVersion, validToVersion])
   @@map("graph_edge")
   @@schema("architecture")
 }

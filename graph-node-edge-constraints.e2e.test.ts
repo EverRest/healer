@@ -55,6 +55,7 @@ describe('architecture.graph_node / graph_edge provenance constraints (004 T005,
       confidence: '50',
       state: `'proposed'`,
       observation_ref: `'${randomUUID()}'`,
+      valid_from_version: '1',
       ...sqlOverrides,
     };
     const columns = Object.keys(fields);
@@ -79,9 +80,9 @@ describe('architecture.graph_node / graph_edge provenance constraints (004 T005,
         pg,
         `insert into "architecture"."graph_edge"
            (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-            confidence, state)
+            confidence, state, valid_from_version)
          values ('${randomUUID()}', '${TENANT_ID}', '${fromId}', '${toId}', 'depends_on', 'code',
-                 null, 30, 50, 'proposed')`,
+                 null, 30, 50, 'proposed', 1)`,
       ),
     ).rejects.toThrow();
   });
