@@ -10,8 +10,25 @@ import {
 } from './field-access.js';
 import type { Predicate, PredicateConjunction, QuantityValue } from './types.js';
 
+// Throws rather than falling through — matches `field-access.ts`'s `unreachable()` pattern. An
+// out-of-vocabulary `kind` or `operator` can only reach here through a bad deserialization or a
+// bypass of T006's schema (publish-time validation, T019, is meant to catch this before it gets
+// this far); a silent fallback here would misevaluate a predicate instead of surfacing the
+// corruption — for a DENY-outcome rule specifically, that direction of silence is a restrictive
+// rule that quietly stops matching.
+function unreachable(value: never): never {
+  throw new Error(`unreachable predicate shape: ${JSON.stringify(value)}`);
+}
+
 function resolveQuantityValue(value: QuantityValue, input: DecisionInput): number {
-  return value.kind === 'literal' ? value.value : readQuantityField(value.field, input);
+  switch (value.kind) {
+    case 'literal':
+      return value.value;
+    case 'field':
+      return readQuantityField(value.field, input);
+    default:
+      return unreachable(value);
+  }
 }
 
 function matchesEnumerated(
@@ -28,6 +45,8 @@ function matchesEnumerated(
       return predicate.value.includes(actual);
     case 'notIn':
       return !predicate.value.includes(actual);
+    default:
+      return unreachable(predicate);
   }
 }
 
@@ -43,6 +62,8 @@ function matchesIdentifier(
       return predicate.value.includes(actual);
     case 'notIn':
       return !predicate.value.includes(actual);
+    default:
+      return unreachable(predicate);
   }
 }
 
@@ -51,7 +72,14 @@ function matchesBoolean(
   input: DecisionInput,
 ): boolean {
   const actual = readBooleanField(predicate.field, input);
-  return predicate.operator === 'isTrue' ? actual : !actual;
+  switch (predicate.operator) {
+    case 'isTrue':
+      return actual;
+    case 'isFalse':
+      return !actual;
+    default:
+      return unreachable(predicate.operator);
+  }
 }
 
 function matchesOrdinal(
@@ -66,6 +94,8 @@ function matchesOrdinal(
       return actual <= predicate.value;
     case 'equals':
       return actual === predicate.value;
+    default:
+      return unreachable(predicate.operator);
   }
 }
 
@@ -75,7 +105,14 @@ function matchesQuantity(
 ): boolean {
   const actual = readQuantityField(predicate.field, input);
   const target = resolveQuantityValue(predicate.value, input);
-  return predicate.operator === 'atLeast' ? actual >= target : actual <= target;
+  switch (predicate.operator) {
+    case 'atLeast':
+      return actual >= target;
+    case 'atMost':
+      return actual <= target;
+    default:
+      return unreachable(predicate.operator);
+  }
 }
 
 function matchesInstant(
@@ -84,7 +121,14 @@ function matchesInstant(
 ): boolean {
   const actual = readInstantField(predicate.field, input).getTime();
   const literal = new Date(predicate.value).getTime();
-  return predicate.operator === 'before' ? actual < literal : actual > literal;
+  switch (predicate.operator) {
+    case 'before':
+      return actual < literal;
+    case 'after':
+      return actual > literal;
+    default:
+      return unreachable(predicate.operator);
+  }
 }
 
 function matchesClosure(
@@ -101,12 +145,16 @@ function matchesClosure(
       return closure.memberIds.length <= predicate.value;
     case 'maxDepthAtMost':
       return closure.maxDepth <= predicate.value;
+    default:
+      return unreachable(predicate);
   }
 }
 
 /** `(predicate, input) → boolean`. Total: a well-typed predicate over a schema-valid
- *  `DecisionInput` never throws (T010) — a runtime type mismatch is what T006's schema should
- *  already have rejected, not something this layer re-checks. */
+ *  `DecisionInput` never throws for a value the type system permits (T010) — a runtime type
+ *  mismatch that reaches the `default` branches above is what T006's schema (and later T019's
+ *  publish-time validation) should already have rejected; this layer refuses to misevaluate it
+ *  silently instead. */
 export function matchesPredicate(predicate: Predicate, input: DecisionInput): boolean {
   switch (predicate.kind) {
     case 'enumerated':
@@ -123,6 +171,8 @@ export function matchesPredicate(predicate: Predicate, input: DecisionInput): bo
       return matchesInstant(predicate, input);
     case 'closure':
       return matchesClosure(predicate, input);
+    default:
+      return unreachable(predicate);
   }
 }
 

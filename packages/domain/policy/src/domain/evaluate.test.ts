@@ -118,6 +118,33 @@ describe('evaluate — monotone restriction: steps 3-6 never turn DENY back into
     expect(decision.reasonCodes).toContain('CEILING_EXCEEDED');
   });
 
+  it('a ceilingless class (unattested reversible_remediation) with the realistic default autonomy.level: 0 is still denied — the ceiling bars unconditionally, not by comparing against the raw level', () => {
+    // Regression: mapping ceiling.kind === 'none' to the number 0 made `min(rawLevel, 0)` a
+    // no-op whenever rawLevel was *also* 0 (the ordinary "no grant yet" default, not a
+    // hand-written excessive grant), so an ordinary rule that never mentions autonomy.level at
+    // all (C-17 says a rule *may* reference it, never that it must) passed straight through.
+    const input = buildDecisionInput({
+      action: { actionKey: 'deployment.rollback', actionClass: 'reversible_remediation' },
+      reversibility: { reversible: true, hasTestedUndo: false },
+      autonomy: { level: 0 },
+    });
+    const { decision } = evaluate(rulesetOf([allowAnything()]), input);
+    expect(decision.outcome).toBe('deny');
+    expect(decision.ceilingApplied).toBe(true);
+    expect(decision.reasonCodes).toContain('CEILING_EXCEEDED');
+  });
+
+  it('an unconditionally ceilingless class (merge) with autonomy.level: 0 is denied by a rule that never references autonomy.level (quickstart 8)', () => {
+    const input = buildDecisionInput({
+      action: { actionKey: 'change.merge_pull_request', actionClass: 'merge' },
+      autonomy: { level: 0 },
+    });
+    const { decision } = evaluate(rulesetOf([allowAnything()]), input);
+    expect(decision.outcome).toBe('deny');
+    expect(decision.ceilingApplied).toBe(true);
+    expect(decision.reasonCodes).toContain('CEILING_EXCEEDED');
+  });
+
   it('rollback with a tested undo at L5 is permitted (quickstart 10)', () => {
     const input = buildDecisionInput({
       action: { actionKey: 'deployment.rollback', actionClass: 'reversible_remediation' },

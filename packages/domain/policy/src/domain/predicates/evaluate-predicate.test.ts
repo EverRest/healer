@@ -135,3 +135,77 @@ describe('matchesConjunction', () => {
     expect(matchesConjunction([], input)).toBe(true);
   });
 });
+
+describe('matchesPredicate — defense in depth against out-of-vocabulary shapes', () => {
+  // These can only be reached through a bad deserialization or a bypass of T006's schema — the
+  // real type system refuses to construct them, hence the casts. The point is that they throw
+  // rather than silently misevaluate (e.g. an unrecognised boolean operator falling through to
+  // `isFalse`, or an unrecognised `kind` making `.every()` treat `undefined` as falsy and quietly
+  // fail a whole rule's match with no error and no trace signal).
+  const input = buildDecisionInput();
+
+  it('an unrecognised predicate.kind throws', () => {
+    const bogus = { kind: 'nonsense', field: 'x', operator: 'equals', value: 'x' } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised enumerated operator throws, not equals/notEquals/in/notIn', () => {
+    const bogus = { kind: 'enumerated', field: 'target.environment', operator: 'bogus', value: 'x' } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised identifier operator throws', () => {
+    const bogus = { kind: 'identifier', field: 'target.componentId', operator: 'bogus', value: 'x' } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised boolean operator throws rather than falling through to isFalse', () => {
+    const bogus = { kind: 'boolean', field: 'evidence.complete', operator: 'bogus' } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised ordinal operator throws', () => {
+    const bogus = { kind: 'ordinal', field: 'autonomy.level', operator: 'bogus', value: 1 } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised quantity operator throws', () => {
+    const bogus = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'bogus',
+      value: { kind: 'literal', value: 1 },
+    } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised quantity value.kind throws', () => {
+    const bogus = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atLeast',
+      value: { kind: 'bogus', value: 1 },
+    } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised instant operator throws', () => {
+    const bogus = {
+      kind: 'instant',
+      field: 'evaluatedAt',
+      operator: 'bogus',
+      value: '2026-01-01T00:00:00.000Z',
+    } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('an unrecognised closure operator throws', () => {
+    const bogus = { kind: 'closure', field: 'impact.closure', operator: 'bogus', value: ['a'] } as unknown as Predicate;
+    expect(() => matchesPredicate(bogus, input)).toThrow();
+  });
+
+  it('a conjunction containing a bogus predicate throws rather than silently failing the match', () => {
+    const bogus = { kind: 'boolean', field: 'evidence.complete', operator: 'bogus' } as unknown as Predicate;
+    expect(() => matchesConjunction([bogus], input)).toThrow();
+  });
+});

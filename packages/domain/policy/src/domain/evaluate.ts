@@ -51,17 +51,29 @@ function addReasonCode(reasonCodes: readonly ReasonCode[], code: ReasonCode): re
 
 // Step 4: `min(level, ACTION_CEILING(actionClass, hasTestedUndo))` (FR-008). There is no
 // separate autonomy step (C-17) — a rule already used the raw grant level in its own predicate
-// (`autonomy.level atLeast N`) during step 2. This step is the un-exceedable clamp: whatever a
-// rule concluded, a grant above the ceiling for its class can never be honoured.
+// (`autonomy.level atLeast N`) during step 2, but C-17 only says a rule *may* state a level
+// requirement, not that it must: an ordinary rule that never references `autonomy.level` at all
+// is the common case, not an edge case. This step is the un-exceedable clamp regardless — whatever
+// a rule concluded, a grant above the ceiling for its class, or a class with no ceiling at all,
+// can never be honoured.
+//
+// `ceiling.kind === 'none'` ("no level exists for this class, full stop" — merge/forward_deploy/
+// irreversible unconditionally, or reversible_remediation with an unattested undo) is a different
+// fact from "the ceiling level is 0," and must never be collapsed into a numeric comparison
+// against `rawLevel`: mapping `'none'` to the number `0` made the clamp a no-op whenever
+// `rawLevel` was *also* 0 — the ordinary default "no grant yet" state, not an adversarial
+// excessive grant — because `0 <= 0` never trips. A `'none'` ceiling bars the action
+// unconditionally, independent of what `rawLevel` happens to be.
 // `ceilingApplied` is true only when this step actually changes the outcome (not merely when the
 // clamp would mathematically differ from the raw level) — an already-DENY decision reaching here
 // for an unrelated reason is not "the ceiling" applying.
 function applyCeiling(current: StepResult, input: DecisionInput): StepResult {
+  if (current.outcome === 'deny') return current;
   const ceiling = ACTION_CEILING(input.action.actionClass, input.reversibility.hasTestedUndo);
-  const ceilingLevel = ceiling.kind === 'level' ? ceiling.level : 0;
-  const rawLevel = input.autonomy.level;
-  const clamped = Math.min(rawLevel, ceilingLevel);
-  if (clamped >= rawLevel || current.outcome === 'deny') return current;
+  if (ceiling.kind === 'none') {
+    return { outcome: 'deny', reasonCodes: addReasonCode(current.reasonCodes, 'CEILING_EXCEEDED') };
+  }
+  if (input.autonomy.level <= ceiling.level) return current;
   return { outcome: 'deny', reasonCodes: addReasonCode(current.reasonCodes, 'CEILING_EXCEEDED') };
 }
 
@@ -90,6 +102,15 @@ function applyCooldown(current: StepResult, input: DecisionInput, bounds: Cooldo
   if (cooldown.recentAllowCount >= bounds.ratePerWindow) {
     result = { outcome: 'deny', reasonCodes: addReasonCode(result.reasonCodes, 'RATE_LIMITED') };
   }
+  // AMBIGUITY FOR T054 (flagged in the batch-3 report, not resolved here): this reads
+  // `windowSeconds` as "time elapsed since the most recent relevant decision," compared against
+  // `cooldownSeconds`. contracts/evaluation.md's field-group table and data-model.md's
+  // `action_limit.window_seconds` (paired with `rate_per_window`, used above for RATE_LIMITED)
+  // read more naturally as "the aggregation window `recentAllowCount` was counted over" — a
+  // different quantity from "seconds since the last allow." `DecisionInput.windowSeconds` is
+  // already committed as part of the closed schema (T006), so whichever meaning is correct has
+  // to be decided deliberately when T054 builds the real `action_limit` resolution, not inferred
+  // from this placeholder's behaviour.
   if (cooldown.recentAllowCount >= 1 && cooldown.windowSeconds < bounds.cooldownSeconds) {
     result = { outcome: 'deny', reasonCodes: addReasonCode(result.reasonCodes, 'COOLDOWN') };
   }
