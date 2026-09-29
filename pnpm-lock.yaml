@@ -187,9 +187,6 @@ importers:
 
   packages/domain/policy:
     dependencies:
-      '@healer/domain-issues':
-        specifier: workspace:*
-        version: link:../issues
       '@healer/events':
         specifier: workspace:*
         version: link:../../events

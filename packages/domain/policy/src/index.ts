@@ -1,6 +1,7 @@
 // @healer/domain-policy — entry surface. Nothing is exported until it exists (012 FR-001).
 
 export { ACTION_CLASSES, type ActionClass } from './domain/action-class.js';
+export type { AuditActorType, NewAuditEntry } from './domain/audit-entry.js';
 export { ACTION_CEILING, type AutonomyLevel, type Ceiling } from './domain/ceiling.js';
 export { decisionInputSchema, type DecisionInput } from './domain/decision-input.js';
 export { evaluate, type BudgetState, type Decision, type EvaluationTrace, type MatchedRuleTrace } from './domain/evaluate.js';

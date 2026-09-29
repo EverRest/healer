@@ -1,6 +1,6 @@
 import type { Prisma } from '@healer/prisma-client';
 import type { TenantScoped } from '@healer/shared';
-import type { NewAuditEntry } from '@healer/domain-issues';
+import type { NewAuditEntry } from '../domain/audit-entry.js';
 
 /**
  * `audit_entry` written in the *same* transaction as the decision, publish, grant, revoke or
@@ -11,10 +11,11 @@ import type { NewAuditEntry } from '@healer/domain-issues';
  * yet in this batch.
  *
  * Takes the transaction rather than a `PrismaClient` — there is no overload that writes outside
- * one (same shape as `packages/events/src/outbox.ts`'s `OutboxTransaction`). Reuses
- * `NewAuditEntry` from `@healer/domain-issues` — the single authority for the
- * `actorType`/`agentRunId` pairing (audit.ts) — rather than re-declaring that invariant here
- * (AGENTS.md: a closed list has exactly one authority).
+ * one (same shape as `packages/events/src/outbox.ts`'s `OutboxTransaction`). `NewAuditEntry` is
+ * mirrored locally in `../domain/audit-entry.ts`, not imported from `@healer/domain-issues` —
+ * this package's own `issue-enums.ts`/`action-class.ts` convention (review finding: a
+ * cross-domain-package dependency has no precedent in this repo and no ADR, and this package's
+ * own prior code exists specifically to avoid it).
  */
 export async function recordAuditEntry(
   tx: Prisma.TransactionClient,

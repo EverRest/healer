@@ -3,8 +3,7 @@ import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
-import { recordAuditEntry } from '@healer/domain-policy';
-import type { NewAuditEntry } from '@healer/domain-issues';
+import { recordAuditEntry, type NewAuditEntry } from '@healer/domain-policy';
 import { TenantContext, scope } from '@healer/shared';
 import { applySqlFile, startPostgres, type StartedPostgres } from './test/containers.js';
 
