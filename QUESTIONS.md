@@ -41,9 +41,11 @@ Working through them now in `worktree-012-runner`.
 - **Directive delivery is a heartbeat-response field, not a second inbound channel.** Outbound-only
   transport (T045, `contracts/runner-protocol.md`) rules out the control plane pushing a directive
   in; the runner's own heartbeat POST (T042) is the only outbound call it currently makes, so the
-  control plane's heartbeat response carries `directives: ControlPlaneDirective[]` (pending, if
-  any) for T051's dispatcher to execute. No separate poll endpoint added — one outbound call
-  serves both registration and directive collection.
+  control plane's heartbeat response carries `directives: DirectiveEnvelope[]` (pending, if any) —
+  `DirectiveEnvelope` (`@healer/boundary-contract`), not a bare `ControlPlaneDirective[]`, since
+  none of that union's seven variants carries an identifier and T051's dispatcher needs one (detail
+  in "T045/T051 landed" below) — for T051's dispatcher to execute. No separate poll endpoint added
+  — one outbound call serves both registration and directive collection.
 - **T051's idempotency is runner-local, not control-plane-tracked.** The spec text is exactly "a
   directive arrives twice → execution is idempotent by directive identifier" — no requirement that
   the control plane know what was already executed. The dispatcher keeps a seen-set of directive
@@ -151,59 +153,93 @@ regenerated and committed.
   `RunnerRegistrationSnapshot`, but nothing calls it on a schedule. Whoever wires 001 T051/T052's
   scheduler should wire this the same way, and can promote the Prisma repository above into a
   shared package at that point.
-- **T041 (outbound-only transport) and T045 stay deferred.** T042 gave the control plane a
-  receiving endpoint, but nothing in this task builds the runner-side caller — `apps/runner` is
-  still `export {}`. Out of scope here; the endpoint is exercised and tested from the
-  control-plane side only.
 
 ### T045/T051 landed — outbound-only transport and directive idempotency, judgment calls
 
 `apps/runner` has real source now: `heartbeat-client.ts` (the outbound POST), `directive-
-dispatcher.ts` (the idempotency mechanism), `main.ts` (wires both on an interval). `pnpm run
-typecheck`, `lint`, `format-check` and `test-unit` (444 tests, global coverage 94%/89%) all green;
-`runner-contract-test`/`runner-compat-test` unaffected and still green.
+dispatcher.ts` (the idempotency mechanism), `main.ts` (wires both on an interval). Two independent
+reviews of the first version of this work found real bugs, listed below alongside the surviving
+judgment calls; both rounds of fixes are already applied. `pnpm run typecheck`, `lint`,
+`format-check` and `test-unit` all green; `runner-contract-test`/`runner-compat-test` unaffected
+and still green.
 
-- **`ControlPlaneDirective`'s closed union carries no identifier field on any of its seven
-  variants** (`packages/boundary-contract/src/index.ts`), yet `runner-protocol.md`'s own failure-
-  behaviour section and FR-028 require idempotency "by directive identifier" — a real gap between
-  the contract document's prose and its own schema, same shape as T042's undocumented `name` field.
-  Not invented away by adding an `id` to the closed union itself (that union is FR-022's single
-  authority for what crosses the boundary, reviewed like the rest of the document — not a change to
-  make in passing here). Instead, `apps/runner/src/directive-dispatcher.ts` defines its own
-  transport-level `DirectiveEnvelope = { id: string; directive: ControlPlaneDirective }`, and
-  `heartbeat-client.ts`'s response schema validates the heartbeat response's `directives` array
-  against that envelope. Since `RunnersController` still always sends `directives: []` (T042, no
-  producer exists), this envelope shape is exercised only by the dispatcher's own unit tests, not
-  proven against a real control-plane response — honest, per this section's own earlier framing
-  ("the mechanism, not the full pipeline"). Whoever builds the first real directive producer should
-  decide where the identifier actually belongs (this envelope, or a field added to the contract
-  document and every variant) and update `runner-protocol.md`'s own table to say so.
-- **The directive seen-set is a new, dedicated `BoundedSeenSet`, not `OutboundBuffer<string>`.**
-  Both share one policy — evict the oldest entry once bounded — but `OutboundBuffer` has no lookup
-  operation at all, only `push`/`drain` for a queue meant to be emptied wholesale; idempotency
-  needs `hasSeen` (a membership test), which nothing in `OutboundBuffer` provides without draining
-  it just to search it. `BoundedSeenSet` (`directive-dispatcher.ts`) is a ~25-line `Set` + order
-  array, drop-oldest on overflow — and refreshes an id's recency on re-delivery instead of leaving
-  it to be evicted by its own redelivery (a plain-FIFO seen-set would let an id that keeps arriving
-  get evicted purely because it arrived again; tested directly, `BoundedSeenSet (012 T051)` in
-  `directive-dispatcher.test.ts`).
-- **The heartbeat itself is now wired through `OutboundBuffer<HeartbeatRequestBody>`** (FR-021
-  applied to the heartbeat, not only to future evidence submission): `runHeartbeatCycle`
-  (`apps/runner/src/main.ts`) drains anything buffered from a past failed attempt, sends it ahead
-  of the current tick's own heartbeat, and re-buffers everything from the first failure onward,
-  oldest-first, on any POST failure. No new idempotency machinery needed for this path — T042's
-  upsert is keyed by `(tenantId, name)`, so redelivering a stale buffered heartbeat on reconnect is
-  already safe.
-- **Real evidence submission (`RunnerEvidence`) has no receiving endpoint** — grepped
-  `apps/api/src` for one; `/ingest/signals` (001) accepts a different, provider-pushed `Signal`
-  shape, not `RunnerEvidence`. Same gap shape as T042's own "directives have no producer" note:
-  not invented here. T045 is scoped to the transport *mechanism* (the outbound-only POST loop plus
-  buffering, proven end-to-end against the one real endpoint that exists — the heartbeat), not to
-  a feature with nothing to send yet. Whoever builds the first real evidence-producing task (a
-  collector, T047's redaction consumer, or similar) is also the one who needs a `POST
-  /runners/evidence`-shaped endpoint on the control plane — `heartbeat-client.ts`'s `sendHeartbeat`
-  is the pattern to follow for it (native `fetch`, buffered on failure, independently validated at
-  ingress and egress per FR-022).
+- **`DirectiveEnvelope` lives in `@healer/boundary-contract`, not in `apps/runner`.**
+  `ControlPlaneDirective`'s closed union carries no identifier field on any of its seven variants,
+  yet `runner-protocol.md`'s failure-behaviour section and FR-028 require idempotency "by directive
+  identifier" — a real gap between the contract document's prose and its own schema, same shape as
+  T042's undocumented `name` field. Not invented away by adding an `id` into the closed union
+  itself (that union is FR-022's single authority for what crosses the boundary, reviewed like the
+  rest of the document). The first version of this fix defined `DirectiveEnvelope` only inside
+  `apps/runner` — caught by review: `RunnersController`'s own response type was still `directives:
+  readonly never[]`, so nothing forced the two sides to agree, and a future producer following this
+  file's own older wording ("carries `ControlPlaneDirective[]`") instead of the runner's actual code
+  would have made every real heartbeat response fail the runner's independent validation forever.
+  Fixed: `DirectiveEnvelope` (and its zod schema) now live in `@healer/boundary-contract` — the one
+  authority both `RunnersController.directives` (typed `readonly DirectiveEnvelope[]`, still always
+  `[]`) and `apps/runner`'s dispatcher/heartbeat-client import from. Since no real producer exists
+  yet, this is still exercised only at the unit-test level on both sides, not proven end-to-end —
+  honest, per this section's own "the mechanism, not the full pipeline" framing.
+- **Directive execution is idempotent, not directive *attempt*** — a real bug, caught by review.
+  The first version marked a directive's id seen *before* calling its handler, so a handler that
+  threw left the id permanently unretriable, and the throw aborted the rest of that response's
+  directives mid-loop with no `directiveId`/`directiveKind` in the log. `dispatchDirectives`
+  (`directive-dispatcher.ts`) now marks an id seen only after its handler *succeeds*; each
+  directive's handler call is wrapped in its own try/catch, logged with `{directiveId,
+  directiveKind, err}` on failure, and does not stop the rest of the batch. Tested directly: a
+  throwing handler leaves the id unseen and retryable on redelivery, and a later directive in the
+  same batch still runs despite an earlier one throwing.
+- **The seen-set's recency-refresh path was dead code on the real call path** — a second bug, also
+  caught by review. `dispatchDirectives`'s loop did `if (seen.hasSeen(id)) continue;` and never
+  called `markSeen` again on a hit, so `BoundedSeenSet`'s refresh-on-redelivery logic (described
+  below) never actually ran: a still-pending directive redelivered on every heartbeat would be
+  evicted the moment enough *other* distinct ids arrived, and then re-executed — precisely what
+  T051 exists to prevent. Fixed: the hit branch now calls `seen.markSeen(id)` before `continue`,
+  refreshing recency on every redelivery. Tested directly with a scenario that would have caught
+  this: one id redelivered while more than the bound's worth of other distinct ids pass through —
+  it is never re-executed.
+- **The directive seen-set is a dedicated `BoundedSeenSet`, not `OutboundBuffer<string>`.** Both
+  share one policy — evict the oldest entry once bounded — but `OutboundBuffer` has no lookup
+  operation at all, only `push`/`drain` for a queue meant to be emptied wholesale; idempotency needs
+  `hasSeen` (a membership test). `BoundedSeenSet` (`directive-dispatcher.ts`) is a ~25-line `Set` +
+  order array. Its own bound is `RUNNER_DIRECTIVE_SEEN_SET_SIZE`, a constant independent of the
+  heartbeat's own sizing (a first version reused a heartbeat-buffer constant for this — flagged by
+  review as two unrelated things sharing one unrelated number) — a placeholder, same status as
+  every other un-measured bound in this codebase.
+- **`OutboundBuffer` was removed from the heartbeat path entirely** — an architectural finding from
+  review, not just a bug fix. The contract puts buffering on outbound *evidence* (FR-021), not on
+  heartbeats: a heartbeat is a pure liveness signal built fresh from static config every time
+  (`buildHeartbeatPayload` reads only `config`), so replaying a stale one after an outage is a
+  byte-identical duplicate that recovers nothing. Buffering it anyway cost two real things: up to
+  `RUNNER_BUFFER_SIZE` redundant identical POSTs fired back-to-back after an outage, each stamping a
+  fresh `lastHeartbeatAt`; and a genuine bug — directives were only ever dispatched from the *last*
+  drained response (`index === pending.length - 1`), so every buffered response's directives except
+  the final one were silently discarded, and a failing *current* heartbeat discarded that cycle's
+  directives too. Harmless only because the controller always returns `[]` today; would have been
+  silent directive loss the moment a real producer existed. Fixed: a failed heartbeat tick just logs
+  a warning and waits for the next interval; directives are dispatched unconditionally on every
+  successful response. `OutboundBuffer` stays reserved for real evidence submission (below), which
+  is what FR-021 actually describes.
+- **The heartbeat response's `status`/`refusedReason`/`resolvedCapabilities` are now read, not just
+  validated and discarded** — a real bug, caught by review. The control plane can reply
+  `{status: 'refused', ...}` with a plain HTTP 200; nothing about the transport fails, so the first
+  version of `runHeartbeatCycle` kept heartbeating "successfully" forever while doing nothing useful
+  and logging nothing about it — exactly the "debug it blind" failure this user story exists to
+  prevent, and a direct contradiction of the compatibility table's own "never silently degraded"
+  wording (FR-018). Fixed: `runHeartbeatCycle` now logs at `warn` for `degraded` and `error` for
+  `refused`, carrying `{status, refusedReason, resolvedCapabilities}`; `active` logs nothing extra.
+- **`sendHeartbeat` now binds `AbortSignal.timeout(...)`** to its `fetch` call, at half the
+  configured heartbeat interval with a 1s floor — a cheap fix flagged by review: without it, a hung
+  control plane (not a refused/errored response, an actually-stuck connection) would leave ticks
+  piling up with no bound.
+- **Real evidence submission (`RunnerEvidence`) has no receiving endpoint** — grepped `apps/api/src`
+  for one; `/ingest/signals` (001) accepts a different, provider-pushed `Signal` shape, not
+  `RunnerEvidence`. Same gap shape as T042's own "directives have no producer" note: not invented
+  here. T045 is scoped to the transport *mechanism* (the outbound-only heartbeat POST loop), not to
+  a feature with nothing to send yet. Whoever builds the first real evidence-producing task is also
+  the one who needs a `POST /runners/evidence`-shaped endpoint on the control plane, and is the
+  first real user of `OutboundBuffer` on the runner side (kept reserved for exactly this, above) —
+  `heartbeat-client.ts`'s `sendHeartbeat` is the pattern to follow for the transport itself (native
+  `fetch`, independently validated at ingress and egress per FR-022, bounded by an abort signal).
 - **`apps/runner` needed its own config-loading convention, not `loadConfig()`.** The existing
   `loadConfig()` (`packages/shared/src/config/index.ts`) hard-requires `DATABASE_URL`/`REDIS_URL` —
   every other deployable in this repo has both. The runner must not: "no direct database access,
@@ -214,16 +250,12 @@ typecheck`, `lint`, `format-check` and `test-unit` (444 tests, global coverage 9
   `packages/shared/src/config/**` (a directory, not a per-app pattern); two schemas in one
   already-authorized directory is the smaller diff than widening the lint rule's own ignore list
   for a second location.
-- **`RUNNER_BUFFER_SIZE` also bounds the directive seen-set**, not a second, independently-tuned
-  constant — one placeholder number doing two jobs it's unrelated to tuning separately yet, same
-  status as every other un-measured bound in this codebase (`MAX_FINGERPRINT_FRAMES`, the reopen
-  window). Split them if a real fleet ever shows the two need different bounds.
 - **No `build`/`start` script was added to `apps/runner/package.json`.** Checked `apps/worker`'s
   package.json first (the closest precedent, also a plain-process deployable): it has neither
   either — the repo-wide `build`/`typecheck` scripts already build every app via `tsc --build`'s
   project references, and no app in this repo has a `start` script yet (a real gap, same one
-  flagged for release/deployment automation elsewhere in this file). Not invented here to avoid
-  a one-off convention that diverges from `apps/worker`'s own shape.
+  flagged for release/deployment automation elsewhere in this file). Not invented here to avoid a
+  one-off convention that diverges from `apps/worker`'s own shape.
 
 ## 001 data-model.md — fingerprint index exclusion set
 

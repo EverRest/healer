@@ -11,6 +11,7 @@ import {
 import {
   resolveHandshake,
   type CapabilityRequirement,
+  type DirectiveEnvelope,
   type HandshakeStatus,
 } from '@healer/boundary-contract';
 import {
@@ -27,12 +28,13 @@ import type { RunnerRegistrationRepository } from './domain/repository.js';
 export const RUNNER_REGISTRATION_REPOSITORY = Symbol('RUNNER_REGISTRATION_REPOSITORY');
 
 /**
- * No consumer declares a required capability yet — no directive dispatcher (T051, deferred), no
- * collection-plan reader. Resolving against an empty requirement set means today's status is
- * driven only by protocol-version compatibility (FR-018's own headline scenario), which is
- * exactly what T039/T044's handshake matrix already covers. The first real consumer (e.g. T093's
- * `inference` capability) is what defines a real, non-empty list — not invented here ahead of it
- * (QUESTIONS.md "012 phase 6, T042").
+ * No consumer declares a required capability yet — `apps/runner`'s dispatcher (T051) executes
+ * whatever directives arrive, but nothing on this side produces one, no collection-plan reader.
+ * Resolving against an empty requirement set means today's status is driven only by
+ * protocol-version compatibility (FR-018's own headline scenario), which is exactly what
+ * T039/T044's handshake matrix already covers. The first real consumer (e.g. T093's `inference`
+ * capability) is what defines a real, non-empty list — not invented here ahead of it (QUESTIONS.md
+ * "012 phase 6, T042").
  */
 const NO_CAPABILITY_REQUIREMENTS: readonly CapabilityRequirement[] = [];
 
@@ -40,8 +42,14 @@ export interface RunnerHeartbeatResponse {
   readonly status: HandshakeStatus;
   readonly resolvedCapabilities: readonly string[];
   readonly refusedReason?: string;
-  /** Always empty — a directive producer is T051's territory, out of scope here (QUESTIONS.md). */
-  readonly directives: readonly never[];
+  /**
+   * Typed as `DirectiveEnvelope[]` — `@healer/boundary-contract`'s own shape for the id
+   * `apps/runner`'s dispatcher keys idempotency on (T051) — even though this always sends `[]`
+   * today (no producer exists yet, QUESTIONS.md "012 phase 6"). Typing it `never[]` would let this
+   * side and the runner's independently-validated parsing of the same field silently diverge the
+   * moment a real producer is added on whichever side gets written first (review finding).
+   */
+  readonly directives: readonly DirectiveEnvelope[];
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { ControlPlaneDirective } from '@healer/boundary-contract';
+import type { ControlPlaneDirective, DirectiveEnvelope } from '@healer/boundary-contract';
 
 /**
  * Directive idempotency (012 T051, FR-028): "a directive arrives twice → execution is idempotent
@@ -7,18 +7,21 @@ import type { ControlPlaneDirective } from '@healer/boundary-contract';
  * a runner already executed, so the runner keeps a bounded seen-set of directive ids and refuses
  * to execute one twice.
  *
- * `ControlPlaneDirective`'s closed union (`@healer/boundary-contract`) carries no identifier field
- * on any of its seven variants — a real gap between the contract document's prose ("idempotent by
- * directive identifier") and its own schema, recorded in QUESTIONS.md rather than invented away.
- * `DirectiveEnvelope` is the runner's own transport-level wrapper for the id the contract assumes
- * exists; it is not a change to the closed schema itself.
+ * `DirectiveEnvelope` (`@healer/boundary-contract`) is the one shape both sides of the boundary
+ * agree the heartbeat response's `directives` array carries — `ControlPlaneDirective`'s own seven
+ * variants have no identifier field, a real gap this envelope exists to close (see that package's
+ * doc comment; recorded in QUESTIONS.md, not invented away by widening the closed union).
  */
-export interface DirectiveEnvelope {
-  readonly id: string;
-  readonly directive: ControlPlaneDirective;
-}
+export type { DirectiveEnvelope };
 
 export type DirectiveHandler = (directive: ControlPlaneDirective) => void | Promise<void>;
+
+/** The minimum a logger needs to support here — not the full Pino `Logger`, so this module stays
+ *  free of a `@healer/shared` dependency it otherwise has no use for. Any real Pino logger (or a
+ *  test double) satisfies this structurally. */
+export interface DirectiveDispatchLogger {
+  error(obj: Record<string, unknown>, msg: string): void;
+}
 
 /**
  * A bounded, drop-oldest membership set — deliberately not `OutboundBuffer<string>`. The two share
@@ -39,11 +42,12 @@ export class BoundedSeenSet {
     return this.seen.has(id);
   }
 
+  /** Refreshes recency instead of no-op-ing on a re-mark, so a directive that keeps arriving
+   *  (redelivered while still pending, or already executed) is the last one evicted — not evicted
+   *  by the very redelivery that should keep it alive in the set. A plain FIFO seen-set, marked
+   *  only the first time an id is observed, would let a bound's worth of *other* distinct ids
+   *  push out an id still actively bouncing off this seen-set, and re-execute it (review finding). */
   markSeen(id: string): void {
-    // Already seen: refresh its recency instead of no-op-ing, so a directive that keeps arriving
-    // (redelivered while still in flight) is the last one evicted, not evicted by its own
-    // re-delivery — plain FIFO would let a stale id it never learned about outlive one still
-    // actively bouncing off this seen-set.
     const existingIndex = this.order.indexOf(id);
     if (existingIndex !== -1) {
       this.order.splice(existingIndex, 1);
@@ -60,19 +64,43 @@ export class BoundedSeenSet {
 }
 
 /**
- * Runs each new directive's handler exactly once, in order, skipping any id already seen. Awaited
- * sequentially rather than in parallel: a real handler (T093 and beyond) will call out to the
- * runner-side agent path, and nothing about directive execution order is declared safe to
- * parallelize yet.
+ * Runs each new directive's handler, in order, skipping any id already seen (refreshing its
+ * recency on the skip, so a still-pending redelivered directive is not evicted and re-executed —
+ * `BoundedSeenSet.markSeen`'s own doc comment). Awaited sequentially rather than in parallel: a
+ * real handler (T093 and beyond) will call out to the runner-side agent path, and nothing about
+ * directive execution order is declared safe to parallelize yet.
+ *
+ * A directive is marked seen only *after* its handler succeeds (FR-028 requires idempotent
+ * *execution*, not idempotent *attempt* — review finding): a handler that throws leaves the id
+ * eligible for retry on the next redelivery, exactly the "genuinely failed, must be retryable"
+ * case idempotency-by-attempt would silently foreclose forever. Each directive's handler call is
+ * wrapped in its own try/catch so one failure is logged with its id and kind and does not abort
+ * the rest of the batch — a real earlier bug here let one bad directive stop every directive behind
+ * it in the same heartbeat response.
  */
 export async function dispatchDirectives(
   directives: readonly DirectiveEnvelope[],
   seen: BoundedSeenSet,
   handle: DirectiveHandler,
+  logger: DirectiveDispatchLogger,
 ): Promise<void> {
   for (const { id, directive } of directives) {
-    if (seen.hasSeen(id)) continue;
-    seen.markSeen(id);
-    await handle(directive);
+    if (seen.hasSeen(id)) {
+      seen.markSeen(id);
+      continue;
+    }
+    try {
+      await handle(directive);
+      seen.markSeen(id);
+    } catch (error) {
+      logger.error(
+        {
+          directiveId: id,
+          directiveKind: directive.kind,
+          err: error instanceof Error ? error.message : String(error),
+        },
+        'directive handler failed — not marked seen, eligible for retry on redelivery',
+      );
+    }
   }
 }

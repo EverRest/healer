@@ -5,11 +5,11 @@ import {
   withCorrelation,
   type RunnerConfig,
 } from '@healer/shared';
-import { OutboundBuffer, type ControlPlaneDirective } from '@healer/boundary-contract';
+import type { ControlPlaneDirective } from '@healer/boundary-contract';
 import {
   buildHeartbeatPayload,
   sendHeartbeat,
-  type HeartbeatRequestBody,
+  type HeartbeatResponse,
 } from './heartbeat-client.js';
 import {
   BoundedSeenSet,
@@ -43,54 +43,59 @@ export function createLoggingDirectiveHandler(logger: Logger): DirectiveHandler 
 
 export interface HeartbeatCycleDeps {
   readonly config: RunnerConfig;
-  readonly buffer: OutboundBuffer<HeartbeatRequestBody>;
   readonly seen: BoundedSeenSet;
   readonly handle: DirectiveHandler;
   readonly logger: Logger;
   readonly fetchImpl?: typeof fetch;
 }
 
-function describeHeartbeat(item: HeartbeatRequestBody): string {
-  return `heartbeat (${item.name}, protocol ${item.protocolVersion})`;
+/**
+ * Logs a non-`active` handshake status (FR-018, FR-020, "the runner is a product we debug it
+ * blind" — this US's own headline). The control plane can reply `degraded`/`refused` with a plain
+ * HTTP 200; nothing about the transport itself fails, so nothing would otherwise ever say so
+ * (review finding: the runner was heartbeating "successfully" forever while doing nothing useful).
+ */
+function logNonActiveStatus(response: HeartbeatResponse, logger: Logger): void {
+  if (response.status === 'active') return;
+  const fields = {
+    status: response.status,
+    refusedReason: response.refusedReason,
+    resolvedCapabilities: response.resolvedCapabilities,
+  };
+  if (response.status === 'refused') {
+    logger.error(fields, 'control plane refused this runner');
+  } else {
+    logger.warn(fields, 'control plane degraded this runner');
+  }
 }
 
 /**
- * One heartbeat tick (FR-021 applied to the heartbeat itself, per QUESTIONS.md "012 phase 6"):
- * flush anything buffered from a past failed attempt first, then send this cycle's own heartbeat —
- * both in order, on the same connection attempt. The first POST that fails re-buffers itself and
- * every payload still waiting behind it, oldest-first, exactly `OutboundBuffer`'s own drop-oldest
- * policy. Heartbeats are naturally idempotent (T042's upsert is keyed by `(tenantId, name)`), so
- * redelivering a stale buffered one on reconnect is safe — no new idempotency machinery needed
- * here, unlike directive execution below.
+ * One heartbeat tick. A heartbeat is a pure liveness signal built fresh from static config on
+ * every call (`buildHeartbeatPayload` reads nothing but `config`) — replaying a stale one after an
+ * outage would just be a byte-identical duplicate stamping a new `lastHeartbeatAt`, not a recovered
+ * delivery of anything. So, unlike evidence submission (FR-021's actual subject —
+ * `OutboundBuffer` stays reserved for that, once a receiving endpoint exists), a failed heartbeat
+ * is not buffered: this tick logs and gives up, and the next interval tries again with a fresh
+ * heartbeat of its own (review finding: the buffer bought nothing here but up to 50 redundant
+ * identical POSTs after an outage, and a real bug — only the *last* drained response's directives
+ * were ever dispatched, silently losing every directive from every other buffered response).
+ *
+ * Directives are dispatched unconditionally on every successful response, not just some of them.
  */
 export async function runHeartbeatCycle(deps: HeartbeatCycleDeps): Promise<void> {
-  const { config, buffer, seen, handle, logger, fetchImpl } = deps;
-  const pending = [...buffer.drain(), buildHeartbeatPayload(config)];
-
-  for (let index = 0; index < pending.length; index++) {
-    const item = pending[index];
-    if (item === undefined) continue;
-    let response;
-    try {
-      response = await sendHeartbeat(config, item, fetchImpl);
-    } catch (error) {
-      for (const remaining of pending.slice(index)) buffer.push(remaining, describeHeartbeat);
-      logger.warn(
-        {
-          err: error instanceof Error ? error.message : String(error),
-          buffered: buffer.size,
-        },
-        'heartbeat POST failed — buffered for retry on reconnect',
-      );
-      for (const gap of buffer.drainGaps()) {
-        logger.warn({ gap }, 'outbound heartbeat buffer overflow — oldest heartbeat dropped');
-      }
-      return;
-    }
-    if (index === pending.length - 1) {
-      await dispatchDirectives(response.directives, seen, handle);
-    }
+  const { config, seen, handle, logger, fetchImpl } = deps;
+  let response: HeartbeatResponse;
+  try {
+    response = await sendHeartbeat(config, buildHeartbeatPayload(config), fetchImpl);
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      'heartbeat POST failed — will retry on the next interval',
+    );
+    return;
   }
+  logNonActiveStatus(response, logger);
+  await dispatchDirectives(response.directives, seen, handle, logger);
 }
 
 export interface RunnerHandle {
@@ -100,13 +105,12 @@ export interface RunnerHandle {
 export function start(): RunnerHandle {
   const config = loadRunnerConfig();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-runner' });
-  const buffer = new OutboundBuffer<HeartbeatRequestBody>(config.RUNNER_BUFFER_SIZE);
-  const seen = new BoundedSeenSet(config.RUNNER_BUFFER_SIZE);
+  const seen = new BoundedSeenSet(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE);
   const handle = createLoggingDirectiveHandler(logger);
 
   const tick = (): void => {
     void withCorrelation(newCorrelationId(), () =>
-      runHeartbeatCycle({ config, buffer, seen, handle, logger }),
+      runHeartbeatCycle({ config, seen, handle, logger }),
     ).catch((error: unknown) => {
       logger.error(
         { err: error instanceof Error ? error.message : String(error) },

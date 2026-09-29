@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createLogger } from '@healer/shared';
 import type { RunnerConfig } from '@healer/shared';
-import { OutboundBuffer } from '@healer/boundary-contract';
 import { BoundedSeenSet } from './directive-dispatcher.js';
 import { createLoggingDirectiveHandler, runHeartbeatCycle } from './main.js';
-import type { HeartbeatRequestBody } from './heartbeat-client.js';
 
 const config: RunnerConfig = Object.freeze({
   LOG_LEVEL: 'info',
@@ -18,7 +16,7 @@ const config: RunnerConfig = Object.freeze({
   RUNNER_MEMORY_MB_LIMIT: 512,
   RUNNER_MAX_CONCURRENT_RUNS: 1,
   RUNNER_HEARTBEAT_INTERVAL_MS: 30_000,
-  RUNNER_BUFFER_SIZE: 5,
+  RUNNER_DIRECTIVE_SEEN_SET_SIZE: 5,
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -45,85 +43,136 @@ describe('createLoggingDirectiveHandler (012 T051 — trivial handler, no real d
   });
 });
 
-describe('runHeartbeatCycle (012 T045 — buffer and retry the heartbeat itself on failure)', () => {
-  it('sends the current heartbeat and dispatches any directives on success', async () => {
+describe('runHeartbeatCycle (012 T045 — a failed heartbeat just waits for the next interval)', () => {
+  it('sends the current heartbeat and does not touch the seen-set or handler when there are no directives', async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
         jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [] }),
       );
-    const buffer = new OutboundBuffer<HeartbeatRequestBody>(5);
     const seen = new BoundedSeenSet(5);
     const handle = vi.fn();
-    await runHeartbeatCycle({ config, buffer, seen, handle, logger: silentLogger(), fetchImpl });
+    await runHeartbeatCycle({ config, seen, handle, logger: silentLogger(), fetchImpl });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(buffer.size).toBe(0);
     expect(handle).not.toHaveBeenCalled();
   });
 
-  it('buffers the heartbeat instead of losing it when the control plane is unreachable', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
-    const buffer = new OutboundBuffer<HeartbeatRequestBody>(5);
+  it('dispatches a real directive from a successful response', async () => {
+    const directive = { id: 'd1', directive: { kind: 'capability_query' as const, requested: [] } };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [directive] }),
+      );
     const seen = new BoundedSeenSet(5);
-    await runHeartbeatCycle({
-      config,
-      buffer,
-      seen,
-      handle: vi.fn(),
-      logger: silentLogger(),
-      fetchImpl,
-    });
+    const handle = vi.fn();
+    await runHeartbeatCycle({ config, seen, handle, logger: silentLogger(), fetchImpl });
 
-    expect(buffer.size).toBe(1);
+    expect(handle).toHaveBeenCalledTimes(1);
+    expect(handle).toHaveBeenCalledWith(directive.directive);
   });
 
-  it('retries a buffered heartbeat on the next successful cycle, in order, before the new one', async () => {
-    const buffer = new OutboundBuffer<HeartbeatRequestBody>(5);
-    const seen = new BoundedSeenSet(5);
-    const failing = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
-    await runHeartbeatCycle({
-      config,
-      buffer,
-      seen,
-      handle: vi.fn(),
-      logger: silentLogger(),
-      fetchImpl: failing,
-    });
-    expect(buffer.size).toBe(1); // the first tick's heartbeat, buffered
+  it('does nothing but log a warning when the POST fails — no buffering, no throw', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const logger = silentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const handle = vi.fn();
+    await expect(
+      runHeartbeatCycle({ config, seen: new BoundedSeenSet(5), handle, logger, fetchImpl }),
+    ).resolves.toBeUndefined();
 
-    const sent: unknown[] = [];
-    const succeeding = vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
-      sent.push(JSON.parse(init.body as string));
-      return jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [] });
-    });
-    await runHeartbeatCycle({
-      config,
-      buffer,
-      seen,
-      handle: vi.fn(),
-      logger: silentLogger(),
-      fetchImpl: succeeding,
-    });
-
-    expect(buffer.size).toBe(0); // fully drained once delivery succeeds
-    expect(sent).toHaveLength(2); // the buffered one, then the current tick's own
+    expect(handle).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.stringContaining('ECONNREFUSED') }),
+      expect.any(String),
+    );
   });
 
   it('a directive redelivered across two separate heartbeat response cycles still executes once', async () => {
-    const buffer = new OutboundBuffer<HeartbeatRequestBody>(5);
     const seen = new BoundedSeenSet(5);
     const handle = vi.fn();
-    const directive = { id: 'd1', directive: { kind: 'capability_query', requested: [] } };
+    const directive = { id: 'd1', directive: { kind: 'capability_query' as const, requested: [] } };
     const fetchImpl = vi
       .fn()
       .mockResolvedValue(
         jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [directive] }),
       );
 
-    await runHeartbeatCycle({ config, buffer, seen, handle, logger: silentLogger(), fetchImpl }); // cycle 1
-    await runHeartbeatCycle({ config, buffer, seen, handle, logger: silentLogger(), fetchImpl }); // cycle 2, redelivered
+    await runHeartbeatCycle({ config, seen, handle, logger: silentLogger(), fetchImpl }); // cycle 1
+    await runHeartbeatCycle({ config, seen, handle, logger: silentLogger(), fetchImpl }); // cycle 2, redelivered
 
     expect(handle).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs at warn when the control plane reports this runner degraded', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: 'degraded',
+        resolvedCapabilities: [],
+        refusedReason: undefined,
+        directives: [],
+      }),
+    );
+    const logger = silentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    await runHeartbeatCycle({
+      config,
+      seen: new BoundedSeenSet(5),
+      handle: vi.fn(),
+      logger,
+      fetchImpl,
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'degraded' }),
+      expect.any(String),
+    );
+  });
+
+  it('logs at error when the control plane refuses this runner', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: 'refused',
+        resolvedCapabilities: [],
+        refusedReason: 'protocol version too old',
+        directives: [],
+      }),
+    );
+    const logger = silentLogger();
+    const errorSpy = vi.spyOn(logger, 'error');
+    await runHeartbeatCycle({
+      config,
+      seen: new BoundedSeenSet(5),
+      handle: vi.fn(),
+      logger,
+      fetchImpl,
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'refused', refusedReason: 'protocol version too old' }),
+      expect.any(String),
+    );
+  });
+
+  it('never logs the non-active status handlers when the status is active', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [] }),
+      );
+    const logger = silentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const errorSpy = vi.spyOn(logger, 'error');
+    await runHeartbeatCycle({
+      config,
+      seen: new BoundedSeenSet(5),
+      handle: vi.fn(),
+      logger,
+      fetchImpl,
+    });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

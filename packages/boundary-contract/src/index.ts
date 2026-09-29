@@ -392,6 +392,22 @@ export const ControlPlaneDirective = z.discriminatedUnion('kind', [
 
 export type ControlPlaneDirective = z.infer<typeof ControlPlaneDirective>;
 
+// The wire shape a heartbeat response carries a pending directive in (012 T045, T051, FR-028).
+// `ControlPlaneDirective`'s own seven variants carry no identifier field — a real gap between
+// runner-protocol.md's prose ("idempotent by directive identifier") and this schema, recorded in
+// QUESTIONS.md rather than widened into the closed union itself. This envelope is the one
+// authority for the id both sides of the boundary need to agree on (FR-022, AGENTS.md "a closed
+// list has exactly one authority") — the control plane's heartbeat response and the runner's
+// dispatcher must type against this same schema, not two independently-guessed shapes.
+export const DirectiveEnvelope = z
+  .object({
+    id: z.string().min(1),
+    directive: ControlPlaneDirective,
+  })
+  .strict();
+
+export type DirectiveEnvelope = z.infer<typeof DirectiveEnvelope>;
+
 // A session opened for a simulation run (011, C-10): no `remediation_directive`, and
 // `agent_directive` only for `change`/`verifier` kinds, all scoped to a sandbox workspace that
 // is destroyed when the run ends and holds no repository-write capability (ADR 0008).

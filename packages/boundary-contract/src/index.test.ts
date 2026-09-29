@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ControlPlaneDirective, RunnerEvidence, isPermittedInSimulationSession } from './index.js';
+import {
+  ControlPlaneDirective,
+  DirectiveEnvelope,
+  RunnerEvidence,
+  isPermittedInSimulationSession,
+} from './index.js';
 
 const VALID_ERROR_SIGNATURE = {
   kind: 'error_signature',
@@ -237,6 +242,29 @@ describe('ControlPlaneDirective', () => {
         anchorRef: 'eb1',
         limits: { wallClockMs: 1000 },
       }),
+    ).toThrow();
+  });
+});
+
+describe('DirectiveEnvelope (012 T051 — the wire shape a heartbeat response carries directives in)', () => {
+  it('accepts an id paired with a valid directive', () => {
+    const parsed = DirectiveEnvelope.parse({
+      id: 'd1',
+      directive: { kind: 'capability_query', requested: ['inference'] },
+    });
+    expect(parsed.id).toBe('d1');
+    expect(parsed.directive.kind).toBe('capability_query');
+  });
+
+  it('rejects an envelope with no id — the identifier the contract assumes exists', () => {
+    expect(() =>
+      DirectiveEnvelope.parse({ directive: { kind: 'capability_query', requested: [] } }),
+    ).toThrow();
+  });
+
+  it('rejects an envelope whose directive is not one of the closed seven shapes', () => {
+    expect(() =>
+      DirectiveEnvelope.parse({ id: 'd1', directive: { kind: 'shell_command' } }),
     ).toThrow();
   });
 });

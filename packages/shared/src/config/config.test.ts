@@ -46,7 +46,7 @@ describe('loadRunnerConfig (012 T045 — apps/runner has no DATABASE_URL/REDIS_U
     const config = loadRunnerConfig(validRunner);
     expect(config.RUNNER_PROTOCOL_VERSION).toBe(1);
     expect(config.RUNNER_HEARTBEAT_INTERVAL_MS).toBe(30_000);
-    expect(config.RUNNER_BUFFER_SIZE).toBe(50);
+    expect(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE).toBe(200);
     expect(config.RUNNER_CAPABILITIES).toEqual([]);
   });
 

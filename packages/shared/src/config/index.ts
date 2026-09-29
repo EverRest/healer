@@ -68,9 +68,12 @@ const runnerSchema = z.object({
   RUNNER_MEMORY_MB_LIMIT: z.coerce.number().positive().default(512),
   RUNNER_MAX_CONCURRENT_RUNS: z.coerce.number().int().positive().default(1),
   RUNNER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
-  /** Bound for the outbound heartbeat buffer (FR-021) — same placeholder status as every other
-   *  un-measured bound in this codebase (e.g. 001's `MAX_FINGERPRINT_FRAMES`). */
-  RUNNER_BUFFER_SIZE: z.coerce.number().int().positive().default(50),
+  /** Bound for the directive idempotency seen-set (FR-028) — independent of heartbeat sizing on
+   *  purpose: directive volume and heartbeat-retry volume are unrelated quantities, so one number
+   *  must not do both jobs (review finding). 200 is a placeholder, same status as every other
+   *  un-measured bound in this codebase (e.g. 001's `MAX_FINGERPRINT_FRAMES`) — no real fleet
+   *  exists yet to measure in-flight directive concurrency against. */
+  RUNNER_DIRECTIVE_SEEN_SET_SIZE: z.coerce.number().int().positive().default(200),
 });
 
 export type RunnerConfig = Readonly<z.infer<typeof runnerSchema>>;

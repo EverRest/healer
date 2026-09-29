@@ -18,7 +18,7 @@ const config: RunnerConfig = Object.freeze({
   RUNNER_MEMORY_MB_LIMIT: 1024,
   RUNNER_MAX_CONCURRENT_RUNS: 3,
   RUNNER_HEARTBEAT_INTERVAL_MS: 30_000,
-  RUNNER_BUFFER_SIZE: 50,
+  RUNNER_DIRECTIVE_SEEN_SET_SIZE: 200,
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -60,6 +60,40 @@ describe('sendHeartbeat (012 T045 — the runner initiates, outbound only)', () 
     expect(JSON.parse(init.body as string)).toEqual(payload);
     expect(result.status).toBe('active');
     expect(result.directives).toEqual([]);
+  });
+
+  it('binds an abort signal so a hung control plane cannot pile up ticks indefinitely', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(okBody));
+    await sendHeartbeat(config, buildHeartbeatPayload(config), fetchImpl);
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('accepts a response whose directives carry a real DirectiveEnvelope', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: 'active',
+        resolvedCapabilities: [],
+        directives: [{ id: 'd1', directive: { kind: 'capability_query', requested: [] } }],
+      }),
+    );
+    const result = await sendHeartbeat(config, buildHeartbeatPayload(config), fetchImpl);
+    expect(result.directives).toEqual([
+      { id: 'd1', directive: { kind: 'capability_query', requested: [] } },
+    ]);
+  });
+
+  it('rejects a response whose directives array carries no id — the shape both sides must agree on', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: 'active',
+        resolvedCapabilities: [],
+        directives: [{ directive: { kind: 'capability_query', requested: [] } }],
+      }),
+    );
+    await expect(sendHeartbeat(config, buildHeartbeatPayload(config), fetchImpl)).rejects.toThrow(
+      HeartbeatTransportError,
+    );
   });
 
   it('throws HeartbeatTransportError when the network call itself fails', async () => {
