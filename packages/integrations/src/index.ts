@@ -1,2 +1,3 @@
-// @healer/integrations — entry surface. Nothing is exported until it exists (012 FR-001).
-export {};
+export { gitlabAdapter } from './gitlab/gitlab-adapter.js';
+export { kubernetesAdapter } from './kubernetes/kubernetes-adapter.js';
+export { otelAdapter } from './otel/otel-adapter.js';

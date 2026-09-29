@@ -3,6 +3,10 @@ import type { GraphLayer, ProvenanceClass } from './provenance.js';
 export interface DiscoveryScope {
   readonly tenantId: string;
   readonly runnerId: string;
+  // Added by T003: `collect` is contracted as read-only, bounded and cancellable
+  // (graph-contract.md §3) — the shape had no way to signal cancellation until an adapter
+  // needed one. Optional so every existing caller is unaffected.
+  readonly signal?: AbortSignal;
 }
 
 // T017 replaces these four shapes with the types inferred from the closed Zod schemas

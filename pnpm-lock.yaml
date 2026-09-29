@@ -140,7 +140,20 @@ importers:
 
   packages/code-intelligence: {}
 
-  packages/domain/architecture: {}
+  packages/domain/architecture:
+    dependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../../boundary-contract
+      '@healer/events':
+        specifier: workspace:*
+        version: link:../../events
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../../prisma-client
+      '@healer/shared':
+        specifier: workspace:*
+        version: link:../../shared
 
   packages/domain/change: {}
 
@@ -199,7 +212,11 @@ importers:
         specifier: workspace:*
         version: link:../shared
 
-  packages/integrations: {}
+  packages/integrations:
+    dependencies:
+      '@healer/domain-architecture':
+        specifier: workspace:*
+        version: link:../domain/architecture
 
   packages/llm: {}
 
