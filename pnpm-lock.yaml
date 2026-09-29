@@ -24,6 +24,9 @@ importers:
       '@healer/domain-issues':
         specifier: workspace:*
         version: link:packages/domain/issues
+      '@healer/domain-policy':
+        specifier: workspace:*
+        version: link:packages/domain/policy
       '@healer/events':
         specifier: workspace:*
         version: link:packages/events
@@ -184,6 +187,18 @@ importers:
 
   packages/domain/policy:
     dependencies:
+      '@healer/domain-issues':
+        specifier: workspace:*
+        version: link:../issues
+      '@healer/events':
+        specifier: workspace:*
+        version: link:../../events
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../../prisma-client
+      '@healer/shared':
+        specifier: workspace:*
+        version: link:../../shared
       zod:
         specifier: ^3.24.1
         version: 3.25.76

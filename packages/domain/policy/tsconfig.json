@@ -4,5 +4,11 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../issues" },
+    { "path": "../../events" },
+    { "path": "../../prisma-client" },
+    { "path": "../../shared" }
+  ]
 }
