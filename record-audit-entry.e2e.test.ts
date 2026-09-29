@@ -44,12 +44,14 @@ function newEntry(overrides: Partial<NewAuditEntry> = {}): NewAuditEntry {
   };
 }
 
-/** A throwaway co-located write standing in for the state change a real command would make. */
-function newRulesetRow(id: string) {
+/** A throwaway co-located write standing in for the state change a real command would make.
+ * `version` must be distinct per call — `(tenant_id, version)` is unique — so each test picks
+ * its own, distinguishable in a failure by its digest. */
+function newRulesetRow(id: string, version: number) {
   return {
     id,
     tenantId: TENANT_ID,
-    version: 1,
+    version,
     digest: `digest-${id}`,
     publishedAt: new Date('2026-01-01T00:00:00Z'),
     publishedBy: 'test-seed',
@@ -84,7 +86,7 @@ describe('recordAuditEntry (002 T017)', () => {
     const entry = newEntry({ targetId: rulesetId });
 
     await prisma.$transaction(async (tx) => {
-      await tx.policyRuleset.create({ data: newRulesetRow(rulesetId) });
+      await tx.policyRuleset.create({ data: newRulesetRow(rulesetId, 1) });
       await recordAuditEntry(tx, scope(CONTEXT, entry));
     });
 
@@ -100,7 +102,7 @@ describe('recordAuditEntry (002 T017)', () => {
 
     await expect(
       prisma.$transaction(async (tx) => {
-        await tx.policyRuleset.create({ data: newRulesetRow(rulesetId) });
+        await tx.policyRuleset.create({ data: newRulesetRow(rulesetId, 2) });
         await recordAuditEntry(tx, scope(CONTEXT, entry));
         throw new ForcedRollback('simulated failure after both writes');
       }),
