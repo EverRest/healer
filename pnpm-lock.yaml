@@ -182,7 +182,11 @@ importers:
 
   packages/domain/knowledge: {}
 
-  packages/domain/policy: {}
+  packages/domain/policy:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/domain/remediation: {}
 
