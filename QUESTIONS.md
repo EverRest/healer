@@ -58,6 +58,65 @@ Working through them now in `worktree-012-runner`.
   control-plane-side consumer needs to query it, and none exists yet. If that turns out wrong,
   it's an additive migration, not a redesign.
 
+### T042 landed — registration and heartbeat, judgment calls
+
+`POST /runners/heartbeat` (`apps/api/src/runners/`), built in `worktree-012-runner`. `make ci`
+green throughout (unit, e2e including a new testcontainers suite, all gates), `contracts-check`
+regenerated and committed.
+
+- **`RunnerRegistrationRepository` (interface + Prisma infra) lives in `apps/api/src/runners/`,
+  not a shared package.** FR-001's closed package list has no domain package for the runner's own
+  control-plane state (`packages/domain/*` maps 1:1 to numbered specs 001–011), and no second
+  caller exists yet — `apps/worker` doesn't schedule anything against it (see below). The pure
+  decision function, `findStaleRunners`, **does** live in a shared package
+  (`packages/boundary-contract`, already the runner-protocol home) since it has no Prisma
+  dependency and is genuinely reusable the moment a scheduler needs it. Deliberately did **not**
+  put the Prisma-backed repository in `packages/boundary-contract` itself: that package is meant
+  to be imported by `apps/runner` too (egress validation, T041, still unbuilt), and adding
+  `@healer/prisma-client` there would be the first real leak of Prisma-adjacent code into what
+  ships to the customer's execution plane. Promote this repository into a shared package (the same
+  way `packages/domain/issues` is shared between `apps/api` and `apps/worker`) if and when a
+  scheduled stale-runner sweep needs it there too.
+- **`RunnerCapabilityResolution` is not written by registration or heartbeat.** Its `run_id`
+  column is `NOT NULL` and the data-model doc describes the table as "why a given run behaved as
+  it did" — a specific investigation run requesting a specific capability, not the periodic
+  handshake. A heartbeat has no run to attach one to. T042 only upserts `runner_registration`; the
+  resolution-row write is real work for whoever builds the first actual capability consumer
+  (T093's `inference` capability is the likely first caller) — updated T043's own task line to say
+  so plainly instead of leaving it pointing at T042 as the place that write would happen.
+- **The handshake resolves against an empty `CapabilityRequirement[]` today.** No consumer
+  declares a required capability yet (no directive dispatcher — T051, deferred; no collection-plan
+  reader), so every heartbeat's status is driven purely by protocol-version compatibility
+  (FR-018's own headline scenario, already covered exhaustively by T039/T044's handshake matrix) —
+  never by a missing capability, since nothing is required yet. A real, non-empty list is real
+  work for whichever task first needs one.
+- **`name` was added to the heartbeat request body**, even though `contracts/runner-protocol.md`'s
+  registration table only lists `protocolVersion`, `imageVersion`, `capabilities` and
+  `resourceLimits`. `runner_registration` is unique on `(tenantId, name)` and nothing else in the
+  documented wire format identifies which registered instance is calling — a real, small gap in
+  the contract document, flagged here rather than guessed at silently; whoever next touches
+  `runner-protocol.md`'s registration section should add it there too.
+- **`resourceState`/`clockOffsetMs` are accepted, validated and read at the call site — never
+  persisted or otherwise consumed**, exactly as this section's own earlier entry decided. An e2e
+  test asserts the persisted row carries neither field.
+- **No e2e scenario exercises `resolveHandshake`'s `refused` status.** `CURRENT_PROTOCOL_VERSION`
+  is `1`, the floor is two minor versions behind, and the request DTO correctly rejects a negative
+  `protocolVersion` — so no schema-legal wire value can be two-plus versions behind today. Real
+  coverage of the floor stays where it already exhaustively lives
+  (`packages/boundary-contract/src/handshake.test.ts`); the e2e test instead proves an in-range
+  registration is never refused, and that a refused result (when `resolveHandshake` does produce
+  one) would carry through to both the response and the persisted row unchanged.
+- **The stale-runner sweep is not scheduled anywhere.** Same gap as 001 T051/T052: no tenant
+  enumerator and no repeatable schedule exist in `apps/worker` yet. `findStaleRunners` is built and
+  unit-tested, and an e2e test proves it composes correctly against a real persisted
+  `RunnerRegistrationSnapshot`, but nothing calls it on a schedule. Whoever wires 001 T051/T052's
+  scheduler should wire this the same way, and can promote the Prisma repository above into a
+  shared package at that point.
+- **T041 (outbound-only transport) and T045 stay deferred.** T042 gave the control plane a
+  receiving endpoint, but nothing in this task builds the runner-side caller — `apps/runner` is
+  still `export {}`. Out of scope here; the endpoint is exercised and tested from the
+  control-plane side only.
+
 ## 001 data-model.md — fingerprint index exclusion set
 
 **Resolved and confirmed**: `where state not in ('merged', 'removed')`, already applied in
