@@ -207,6 +207,14 @@ ALTER TABLE "policy"."autonomy_grant" ADD CONSTRAINT "autonomy_grant_action_key_
 -- AddForeignKey
 ALTER TABLE "policy"."approval_request" ADD CONSTRAINT "approval_request_decision_id_tenant_id_fkey" FOREIGN KEY ("decision_id", "tenant_id") REFERENCES "policy"."policy_decision"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- policy_decision: consumed and invalidated are mutually exclusive terminal branches
+-- (data-model.md "State transitions" — no edge between them; SC-001's reconciliation invariant
+-- needs a decision to be unambiguously "executed" or not). A CHECK constraint covers INSERT as
+-- well as UPDATE, which the append-only trigger below (added for T003) does not: the trigger only
+-- fires on UPDATE/DELETE, so a single INSERT setting both columns non-null would otherwise slip
+-- through untouched.
+ALTER TABLE "policy"."policy_decision" ADD CONSTRAINT "policy_decision_terminal_xor" CHECK ("consumed_at" IS NULL OR "invalidated_reason" IS NULL);
+
 -- autonomy_grant: partial index over live grants only (data-model.md — "Index (tenant_id,
 -- action_key, environment) where revoked_at is null"). Prisma cannot express a partial index
 -- (same limitation as workflow.workflow_run's deadline index, 001), so it is created directly

@@ -945,7 +945,10 @@ model AutonomyEpoch {
 }
 
 /// Append-only except `consumed_at` and `invalidated_reason` transitioning from null — enforced
-/// by database trigger (T003), not application discipline.
+/// by database trigger (T003), not application discipline. `consumed` and `invalidated` are
+/// mutually exclusive terminal branches (data-model.md "State transitions" — no edge between
+/// them): a `CHECK` constraint enforces this on both INSERT and UPDATE (the trigger alone only
+/// covers UPDATE/DELETE), declared only in the migration SQL — Prisma has no `@@check` here yet.
 model PolicyDecision {
   id                String        @id @db.Uuid
   tenantId          String        @map("tenant_id") @db.Uuid
@@ -988,6 +991,9 @@ model PolicyDecision {
   // Also the index the rate, cooldown and attempt-cap predicates read (R-13, C-11).
   @@index([tenantId, actionKey, targetRef, fingerprint, evaluatedAt])
   @@index([workflowRunId])
+  // CHECK (consumed_at IS NULL OR invalidated_reason IS NULL) — Prisma cannot express a table
+  // CHECK constraint (same limitation as the partial index on autonomy_grant above); created
+  // directly in the migration and deliberately not declared here.
   @@map("policy_decision")
   @@schema("policy")
 }

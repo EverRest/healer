@@ -218,7 +218,9 @@ budget scope:     within ──soft threshold crossed──▶ degraded(step n),
   `threshold_derivation` artifact cited in the diff — the ceiling is data-enforced by `gate-ceiling`, and
   the edit to the ceiling is diff-enforced by the same gate (FR-008a, R-15, 011 FR-021c).
 - No `autonomy_grant` exists with `level > ACTION_CEILING(action_class, has_tested_undo)`, and no
-  evaluation returns an outcome above that clamp even if such a row were written (FR-008, SC-004).
+  evaluation returns an outcome above that clamp even if such a row were written (FR-008, SC-004)
+  — DB constraint not yet implemented, see implementation note under `policy.autonomy_grant`
+  (batch 1, deferred to T035).
 - No `autonomy_grant` of class `reversible_remediation` exists for an action whose catalogue undo is
   unattested, and no evaluation grants such an action a level — the ceiling has none (C-18).
 - No grant exists for an action of class `merge`, `forward_deploy` or `irreversible` in this

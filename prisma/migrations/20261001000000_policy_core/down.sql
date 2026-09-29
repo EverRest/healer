@@ -23,6 +23,9 @@ ALTER TABLE "policy"."autonomy_grant" DROP CONSTRAINT "autonomy_grant_action_key
 -- DropForeignKey
 ALTER TABLE "policy"."policy_rule" DROP CONSTRAINT "policy_rule_ruleset_id_fkey";
 
+-- DropCheckConstraint
+ALTER TABLE "policy"."policy_decision" DROP CONSTRAINT "policy_decision_terminal_xor";
+
 -- DropTable
 DROP TABLE "policy"."budget_degradation_mark";
 
