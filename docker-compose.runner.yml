@@ -1,0 +1,50 @@
+# The runner's single v1 deployment wrapper (C-39, C-01; ADR 0014). Deliberately separate from
+# `docker/docker-compose.yml`, which is local-dev-only (Postgres + Redis for the control plane) —
+# this file is what a customer's execution plane runs. One service, no port mappings (the runner
+# is outbound-only by construction, apps/runner/src/main.ts's own doc comment), image tag taken
+# from an environment variable so upgrade and rollback (FR-019) are both "change the tag,
+# `docker compose up`" — no orchestrator, no second wrapper format.
+#
+# Placed at the repo root, not under apps/runner/ or docker/: ADR 0014 names it
+# `docker-compose.runner.yml` (not `docker/docker-compose.runner.yml`) precisely because the
+# `.runner` suffix is what distinguishes it from the dev-only compose file — nesting it again
+# under a directory would duplicate that distinction for no reason, and a repo-root compose file
+# is what `docker compose -f docker-compose.runner.yml up` expects by convention.
+#
+# RUNNER_IMAGE_TAG defaults to the version `make runner-build` last stamped into
+# apps/runner/dist/runner-release.json at the time this file was written — bump the default (or
+# just export RUNNER_IMAGE_TAG) after a new `make runner-build`. Rollback is the same mechanism in
+# reverse: point RUNNER_IMAGE_TAG at an older locally-tagged image and run `docker compose up`
+# again — there is no registry to pull an older tag back from once it is gone locally (ADR 0014's
+# accepted v1 limitation).
+#
+# List form for `environment`, not map form: a bare `- NAME` entry passes a variable through from
+# the host shell only when it is actually set there, and omits it entirely otherwise — letting
+# `loadRunnerConfig` (packages/shared/src/config/index.ts) apply its own defaults inside the
+# container. The map form's `${VAR:-}` would instead set every unset variable to an *empty
+# string*, which is not the same thing: `RUNNER_PROTOCOL_VERSION=""` fails that field's own
+# `z.coerce.number().min(1)` validation instead of falling through to its default of `1`.
+services:
+  runner:
+    image: healer-runner:${RUNNER_IMAGE_TAG:-0.5.0}
+    restart: unless-stopped
+    environment:
+      # Required — loadRunnerConfig has no default for these; `docker compose up` refuses to
+      # start with a clear message naming whichever one is missing.
+      - RUNNER_CONTROL_PLANE_URL=${RUNNER_CONTROL_PLANE_URL:?set RUNNER_CONTROL_PLANE_URL}
+      - RUNNER_TENANT_ID=${RUNNER_TENANT_ID:?set RUNNER_TENANT_ID}
+      - RUNNER_NAME=${RUNNER_NAME:?set RUNNER_NAME}
+      # The version this runner process reports of itself — same value as the image tag by
+      # default, since a build's tag and the version it reports should agree.
+      - RUNNER_IMAGE_VERSION=${RUNNER_IMAGE_TAG:-0.5.0}
+      # Optional passthrough — omitted from the container entirely when unset on the host, so
+      # loadRunnerConfig's own defaults apply (see the file-level comment above).
+      - LOG_LEVEL
+      - RUNNER_PROTOCOL_VERSION
+      - RUNNER_CAPABILITIES
+      - RUNNER_CPU_LIMIT
+      - RUNNER_MEMORY_MB_LIMIT
+      - RUNNER_MAX_CONCURRENT_RUNS
+      - RUNNER_HEARTBEAT_INTERVAL_MS
+      - RUNNER_DIRECTIVE_SEEN_SET_SIZE
+    # No `ports:` — outbound-only, nothing for the customer's network to expose or connect into.

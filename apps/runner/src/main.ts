@@ -99,8 +99,15 @@ export async function runHeartbeatCycle(deps: HeartbeatCycleDeps): Promise<void>
 }
 
 export interface RunnerHandle {
-  readonly close: () => void;
+  /** Stops scheduling new heartbeat ticks and resolves once any tick already in flight has
+   *  settled (FR-019 "drain current tasks" — see the doc comment above `start`). */
+  readonly close: () => Promise<void>;
 }
+
+/** Bounds how long `close()` waits for an in-flight tick before giving up and returning anyway —
+ *  an upgrade must still complete even if a single heartbeat cycle is unexpectedly hung, since
+ *  `sendHeartbeat` already has its own timeout (`HEARTBEAT_TIMEOUT_FRACTION`) shorter than this. */
+const DRAIN_TIMEOUT_MS = 10_000;
 
 export function start(): RunnerHandle {
   const config = loadRunnerConfig();
@@ -108,8 +115,15 @@ export function start(): RunnerHandle {
   const seen = new BoundedSeenSet(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE);
   const handle = createLoggingDirectiveHandler(logger);
 
+  // Tracks the currently in-flight tick (if any) so `close()` can await it instead of cutting it
+  // off mid-request — a heartbeat cycle is a single outbound POST (sub-second in practice), but
+  // "drain in-flight work" (FR-019) means finishing it, not abandoning it because the process is
+  // about to exit (review-flagged gap: the previous `close()` was an immediate `clearInterval`
+  // with no drain at all, same shape as the earlier `OutboundBuffer`-silently-losing-directives bug).
+  let inFlight: Promise<void> = Promise.resolve();
+
   const tick = (): void => {
-    void withCorrelation(newCorrelationId(), () =>
+    inFlight = withCorrelation(newCorrelationId(), () =>
       runHeartbeatCycle({ config, seen, handle, logger }),
     ).catch((error: unknown) => {
       logger.error(
@@ -122,15 +136,18 @@ export function start(): RunnerHandle {
   tick();
   const interval = setInterval(tick, config.RUNNER_HEARTBEAT_INTERVAL_MS);
 
-  return { close: () => clearInterval(interval) };
+  return {
+    close: async () => {
+      clearInterval(interval); // no new tick starts after this
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS));
+      await Promise.race([inFlight, timeout]);
+    },
+  };
 }
 
 if (process.argv[1]?.endsWith('main.js')) {
   const handle = start();
-  const stop = (): void => {
-    handle.close();
-    process.exit(0);
-  };
+  const stop = (): void => void handle.close().then(() => process.exit(0));
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }

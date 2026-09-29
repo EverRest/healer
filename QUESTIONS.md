@@ -264,6 +264,85 @@ and still green.
   successfully), not a defect in what T051 was scoped to build. Worth an ADR if/when a real directive
   producer (T093+) makes this a live operational concern; not decided here.
 
+### T049/T050 landed — runner image, `make runner-build`, Docker Compose wrapper
+
+`apps/runner/Dockerfile`, `docker-compose.runner.yml`, `scripts/runner-build.mjs` (ADR 0014).
+`typecheck`/`lint`/`format-check`/`test-unit` green; the two new Docker-backed e2e tests (gated
+into `vitest.config.ts`'s `HEAVY_E2E`, same mechanism the four existing heavy e2e files use) pass
+against real Docker. `make runner-build` run for real, refusal and stamp-file behaviour verified
+manually (see the commit/PR description for pasted output).
+
+- **Scoped `pnpm --filter`, not the whole monorepo, for the Dockerfile's build stage — a real
+  reason, not just a leaner-image preference.** `apps/runner` depends on exactly two workspace
+  packages (`@healer/boundary-contract`, `@healer/shared`; its own `tsconfig.json` already
+  declares this as its full `references` graph). The root `pnpm run build` script
+  (`tsc --build tsconfig.json`) builds *every* referenced project, including
+  `packages/prisma-client`, which requires a generated Prisma client
+  (`link:../../prisma/generated/client`, produced by `pnpm run db-generate`) before it will even
+  typecheck — confirmed empirically: a fresh worktree's `pnpm run typecheck` fails outright with
+  `Cannot find module '@healer/prisma-generated'` until `db-generate` runs once. That's a
+  network-and-schema-dependent step with nothing to do with the runner, and pulling it into the
+  runner's own image build is exactly the kind of accidental coupling scoping avoids. The build
+  stage instead runs `pnpm install --frozen-lockfile --filter "@healer/runner..." --filter "{.}"`
+  (root, for `tsc` itself) then `tsc --build apps/runner/tsconfig.json` directly — the same
+  `tsc --build` mechanism the root script uses, just pointed at the project-reference subgraph
+  TypeScript's own build system already knows is correct, not a hand-rolled second build.
+- **`pnpm install --filter "<pkg>..."` still installs the workspace ROOT project's own
+  `dependencies`, even without the root selected — confirmed empirically, not documented pnpm
+  behaviour I could find.** `pnpm list --filter "@healer/runner..."` excludes the root project as
+  expected, but the equivalent `pnpm install` does not: the root package.json's own
+  `dependencies` (`@prisma/client`, `supertest`, `@types/supertest` — nothing to do with the
+  runner) land in `/repo/node_modules` regardless. Tried `--filter "!{.}"` as an explicit
+  exclusion; it made no observable difference. Worked around it rather than fighting pnpm further:
+  the runtime image copies only `node_modules/.pnpm` (pnpm's content-addressed virtual store, the
+  thing every package's own local `node_modules` symlinks actually resolve into) from the
+  `prod-deps` stage, never the top-level `/repo/node_modules` — so root's unrelated direct
+  dependencies are simply never copied, whatever pnpm installed alongside them. Confirmed by
+  inspecting the built image: `apps/runner/node_modules` and `packages/{shared,boundary-contract}
+  /node_modules` contain exactly their own declared deps (`zod`, `pino`, `@opentelemetry/*`),
+  nothing from root.
+- **`docker-compose.runner.yml` lives at the repo root**, not `apps/runner/` or `docker/`. ADR
+  0014 names the file exactly this way (not `docker/docker-compose.runner.yml`) — the `.runner`
+  suffix is already the distinguishing mark from the dev-only `docker/docker-compose.yml`, and a
+  repo-root compose file is what `docker compose -f docker-compose.runner.yml up` expects by
+  convention without an extra `-f docker/...` path for whoever runs it.
+- **The compose file's `environment:` is list form, not map form — a correctness fix, not a style
+  choice.** A map-form `RUNNER_PROTOCOL_VERSION: ${RUNNER_PROTOCOL_VERSION:-}` sets the container's
+  env var to an *empty string* when the host doesn't set it, and `loadRunnerConfig`'s
+  `z.coerce.number().min(1)` for that field rejects an empty string outright instead of falling
+  through to its documented default of `1` — every optional field would have broken the same way.
+  List-form bare entries (`- RUNNER_PROTOCOL_VERSION`) pass a variable through only when the host
+  actually sets it and omit it entirely otherwise, letting `loadRunnerConfig`'s own defaults apply
+  inside the container. Verified directly: built the image, ran it via `docker compose run` with
+  only the three required variables set, confirmed via `env` inside the container that none of the
+  optional ones were present (not even as empty strings).
+- **Found and fixed a real gap in `apps/runner/src/main.ts`'s SIGTERM handling — not just
+  confirmed adequate.** `RunnerHandle.close()` was a synchronous `clearInterval(interval)`, and the
+  process-level `stop()` called it then `process.exit(0)` immediately — no await, nothing waiting
+  for a heartbeat cycle already in flight to finish. That directly contradicts FR-019's "upgrade
+  without losing in-flight work: draining current tasks." Fixed by tracking the in-flight tick's
+  promise and making `close()` async, racing it against a bounded `DRAIN_TIMEOUT_MS` (10s) so a
+  genuinely hung request can't block shutdown forever. Covered by a new unit test in
+  `apps/runner/src/main.test.ts` (delays a mocked `fetch`, asserts `close()` does not resolve until
+  it settles) and proven end to end by `apps/runner/runner-image.e2e.test.ts`: real container, real
+  `docker stop -t 15`, exits cleanly in ~2s, `ExitCode=0`.
+- **The refuse-rebuild-in-place mechanism builds to a throwaway candidate tag first
+  (`healer-runner:<version>--candidate-<pid>-<ts>`), and only moves the real
+  `healer-runner:<version>` tag onto it once the comparison passes.** Building straight to the
+  final tag and comparing after would mean the violation already happened on disk (the tag would
+  already point at the new, rejected content) before the script could refuse anything. The
+  candidate approach means a refused rebuild leaves the existing tagged image completely
+  untouched — verified in `scripts/runner-build.e2e.test.ts` by re-inspecting the original tag's
+  digest after a refusal and asserting it is unchanged.
+- **`runnerBuild(version, { repoRoot, stampPath })` takes both as optional, injectable
+  parameters** rather than reading `apps/runner/package.json` and writing the real
+  `apps/runner/dist/runner-release.json` unconditionally. The CLI entrypoint (`isMainModule` guard)
+  always uses the real paths; `scripts/runner-build.e2e.test.ts` passes synthetic versions and a
+  scratch-directory stamp path so the automated test suite never touches the real stamp file or
+  risks colliding with a version a developer might have manually tagged locally.
+- **Publishing (pushing to a registry) is still out of scope, unchanged from ADR 0014** — this
+  task only builds and tags locally, per the existing QUESTIONS.md item 14 (No registry exists).
+
 ## 001 data-model.md — fingerprint index exclusion set
 
 **Resolved and confirmed**: `where state not in ('merged', 'removed')`, already applied in

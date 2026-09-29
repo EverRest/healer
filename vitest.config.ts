@@ -52,6 +52,11 @@ const HEAVY_E2E = [
   'apps/api/load.e2e.test.ts',
   'issue-repository.e2e.test.ts',
   'issue-merge.e2e.test.ts',
+  // Real `docker build` calls against apps/runner/Dockerfile (012 T049/T050) — slower than a
+  // testcontainers-backed test even on a warm layer cache, and genuinely slow cold. Same
+  // mechanism as the four above: its own sequential group, not run concurrently with the rest.
+  'apps/runner/runner-image.e2e.test.ts',
+  'scripts/runner-build.e2e.test.ts',
 ];
 
 function e2eProject(name: string, include: string[], exclude: string[], groupOrder: number) {

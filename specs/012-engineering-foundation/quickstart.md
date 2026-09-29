@@ -67,4 +67,5 @@ make lint typecheck test-unit    # fast loop
 make test-e2e                    # disposable Postgres + Redis
 make runner-contract-test        # evidence schema is closed
 make runner-compat-test          # handshake across the version window and below the floor
+make runner-build                # build and tag the image, refuse a rebuild in place (FR-017)
 ```

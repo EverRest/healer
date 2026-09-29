@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createLogger } from '@healer/shared';
 import type { RunnerConfig } from '@healer/shared';
 import { BoundedSeenSet } from './directive-dispatcher.js';
-import { createLoggingDirectiveHandler, runHeartbeatCycle } from './main.js';
+import { createLoggingDirectiveHandler, runHeartbeatCycle, start } from './main.js';
 
 const config: RunnerConfig = Object.freeze({
   LOG_LEVEL: 'info',
@@ -174,5 +174,54 @@ describe('runHeartbeatCycle (012 T045 — a failed heartbeat just waits for the 
 
     expect(warnSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('start/close — drain the in-flight heartbeat before the process exits (FR-019, review finding)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it('close() does not resolve until the heartbeat POST already in flight settles', async () => {
+    vi.stubEnv('LOG_LEVEL', 'fatal');
+    vi.stubEnv('RUNNER_CONTROL_PLANE_URL', 'https://control-plane.example.com');
+    vi.stubEnv('RUNNER_TENANT_ID', 'tenant-1');
+    vi.stubEnv('RUNNER_NAME', 'runner-1');
+    vi.stubEnv('RUNNER_IMAGE_VERSION', '0.5.0');
+    // Long enough that the test's own close() call, not a second tick, is what's being raced.
+    vi.stubEnv('RUNNER_HEARTBEAT_INTERVAL_MS', '60000');
+
+    let resolveFetch: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementation(() =>
+          pending.then(() =>
+            jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [] }),
+          ),
+        ),
+    );
+
+    const handle = start();
+    let closed = false;
+    const closePromise = handle.close().then(() => {
+      closed = true;
+    });
+
+    // Let the microtask queue turn over a few times — close() must still be waiting on the
+    // in-flight fetch, not the immediate `clearInterval`-only behaviour this replaces.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(false);
+
+    resolveFetch?.();
+    await closePromise;
+    expect(closed).toBe(true);
   });
 });
