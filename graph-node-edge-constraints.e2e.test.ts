@@ -168,8 +168,6 @@ describe('architecture.graph_node / graph_edge provenance constraints (004 T005,
   });
 
   it('rejects an edge whose valid_from_version is after its valid_to_version', async () => {
-    await expect(
-      insertEdge({ valid_from_version: '5', valid_to_version: '4' }),
-    ).rejects.toThrow();
+    await expect(insertEdge({ valid_from_version: '5', valid_to_version: '4' })).rejects.toThrow();
   });
 });

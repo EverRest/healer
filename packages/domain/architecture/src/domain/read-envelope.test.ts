@@ -1,9 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import {
-  ReadEnvelopeInvariantError,
-  toReadEnvelope,
-  type ReadEnvelope,
-} from './read-envelope.js';
+import { ReadEnvelopeInvariantError, toReadEnvelope, type ReadEnvelope } from './read-envelope.js';
 
 interface Item {
   readonly id: string;
@@ -35,13 +31,23 @@ describe('toReadEnvelope (004 T013, R-13)', () => {
 
   it('rejects coverage claiming more confirmed nodes than exist', () => {
     expect(() =>
-      toReadEnvelope(1, true, { nodesConfirmed: 6, nodesTotal: 5, edgesConfirmed: 0, edgesTotal: 0 }, []),
+      toReadEnvelope(
+        1,
+        true,
+        { nodesConfirmed: 6, nodesTotal: 5, edgesConfirmed: 0, edgesTotal: 0 },
+        [],
+      ),
     ).toThrow(ReadEnvelopeInvariantError);
   });
 
   it('rejects coverage claiming more confirmed edges than exist', () => {
     expect(() =>
-      toReadEnvelope(1, true, { nodesConfirmed: 0, nodesTotal: 0, edgesConfirmed: 4, edgesTotal: 3 }, []),
+      toReadEnvelope(
+        1,
+        true,
+        { nodesConfirmed: 0, nodesTotal: 0, edgesConfirmed: 4, edgesTotal: 3 },
+        [],
+      ),
     ).toThrow(ReadEnvelopeInvariantError);
   });
 
@@ -124,7 +130,8 @@ function typeProofNeverCalled(): void {
 
   expectTypeOf<ReadEnvelope<readonly Item[]>>().not.toEqualTypeOf<readonly Item[]>();
 
+  const coverage = { nodesConfirmed: 1, nodesTotal: 1, edgesConfirmed: 1, edgesTotal: 1 };
   // @ts-expect-error confirmationState is derived, not an accepted argument, since 004 T013's review fix
-  toReadEnvelope(1, 'confirmed', { nodesConfirmed: 1, nodesTotal: 1, edgesConfirmed: 1, edgesTotal: 1 }, []);
+  toReadEnvelope(1, 'confirmed', coverage, []);
 }
 void typeProofNeverCalled;

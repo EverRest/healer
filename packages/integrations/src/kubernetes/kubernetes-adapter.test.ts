@@ -24,7 +24,11 @@ describe('kubernetesAdapter (T003, FR-020, contracts/graph-contract.md §3)', ()
     const controller = new AbortController();
     controller.abort();
     await expect(
-      kubernetesAdapter.collect({ tenantId: 'tenant-1', runnerId: 'runner-1', signal: controller.signal }),
+      kubernetesAdapter.collect({
+        tenantId: 'tenant-1',
+        runnerId: 'runner-1',
+        signal: controller.signal,
+      }),
     ).rejects.toThrow();
   });
 });

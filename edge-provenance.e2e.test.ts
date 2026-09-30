@@ -225,8 +225,8 @@ describe('architecture.edge_provenance: append-only + graph_edge max-maintenance
   });
 
   it('rejects a TRUNCATE of edge_provenance', async () => {
-    await expect(
-      query(pg, `truncate "architecture"."edge_provenance"`),
-    ).rejects.toThrow(/append-only/);
+    await expect(query(pg, `truncate "architecture"."edge_provenance"`)).rejects.toThrow(
+      /append-only/,
+    );
   });
 });

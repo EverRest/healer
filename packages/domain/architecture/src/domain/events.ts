@@ -28,7 +28,9 @@ export interface DiscoveryDraftProposedPayload {
   readonly draftId: string;
   readonly runId: string;
   readonly baseVersion: number;
-  readonly countsByOp: Readonly<Record<'add_node' | 'add_edge' | 'modify_attributes' | 'mark_removed', number>>;
+  readonly countsByOp: Readonly<
+    Record<'add_node' | 'add_edge' | 'modify_attributes' | 'mark_removed', number>
+  >;
 }
 
 /** `DiscoveryDraftProposed` (graph-contract.md §4): a run produces a draft. */

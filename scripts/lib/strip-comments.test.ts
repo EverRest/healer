@@ -67,9 +67,7 @@ describe('stripComments (shared by every textual gate)', () => {
     const source =
       'const a = `${x} and ${y}`; const b = `${({ z }).z}`; // trailing\nconst c = 1;\n';
     const stripped = stripComments(source);
-    expect(stripped).toBe(
-      'const a = `${x} and ${y}`; const b = `${({ z }).z}`; \nconst c = 1;\n',
-    );
+    expect(stripped).toBe('const a = `${x} and ${y}`; const b = `${({ z }).z}`; \nconst c = 1;\n');
   });
 
   it('still strips a real comment that follows a string on the same line', () => {

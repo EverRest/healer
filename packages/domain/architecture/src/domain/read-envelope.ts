@@ -10,10 +10,7 @@
  * (docs/patterns.md — make the unsafe state unrepresentable).
  */
 export type ConfirmationState =
-  | 'never_discovered'
-  | 'unconfirmed'
-  | 'partially_confirmed'
-  | 'confirmed';
+  'never_discovered' | 'unconfirmed' | 'partially_confirmed' | 'confirmed';
 
 export interface Coverage {
   readonly nodesConfirmed: number;
@@ -68,10 +65,19 @@ export function toReadEnvelope<T>(
   items: T,
 ): ReadEnvelope<T> {
   if (coverage.nodesConfirmed > coverage.nodesTotal) {
-    throw new ReadEnvelopeInvariantError('coverage.nodesConfirmed cannot exceed coverage.nodesTotal');
+    throw new ReadEnvelopeInvariantError(
+      'coverage.nodesConfirmed cannot exceed coverage.nodesTotal',
+    );
   }
   if (coverage.edgesConfirmed > coverage.edgesTotal) {
-    throw new ReadEnvelopeInvariantError('coverage.edgesConfirmed cannot exceed coverage.edgesTotal');
+    throw new ReadEnvelopeInvariantError(
+      'coverage.edgesConfirmed cannot exceed coverage.edgesTotal',
+    );
   }
-  return { graphVersion, confirmationState: deriveConfirmationState(discovered, coverage), coverage, items };
+  return {
+    graphVersion,
+    confirmationState: deriveConfirmationState(discovered, coverage),
+    coverage,
+    items,
+  };
 }

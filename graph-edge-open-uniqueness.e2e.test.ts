@@ -162,7 +162,12 @@ describe('architecture.graph_edge: at most one open row per logical edge (004 T0
 
     await expect(racer).rejects.toThrow();
     const openCount = await prisma.graphEdge.count({
-      where: { tenantId: TENANT_ID, fromNodeId: fromId, toNodeId: toId, validToVersion: 2147483647 },
+      where: {
+        tenantId: TENANT_ID,
+        fromNodeId: fromId,
+        toNodeId: toId,
+        validToVersion: 2147483647,
+      },
     });
     expect(openCount).toBe(1);
   });

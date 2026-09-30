@@ -51,7 +51,10 @@ describe('findStrictConfirmExposures — apps/mcp-server, apps/worker, apps/api 
 
   it('catches a job handler processing a graph:confirm job type', () => {
     const issues = findStrictConfirmExposures([
-      { path: 'apps/worker/src/handlers/graph-confirm.ts', content: "export const JOB_TYPE = 'graph:confirm';" },
+      {
+        path: 'apps/worker/src/handlers/graph-confirm.ts',
+        content: "export const JOB_TYPE = 'graph:confirm';",
+      },
     ]);
     expect(issues).toHaveLength(1);
   });
@@ -84,11 +87,12 @@ describe('findStrictConfirmExposures — apps/mcp-server, apps/worker, apps/api 
     expect(issues).toEqual([]);
   });
 
-  it('does not false-positive on the read envelope\'s own confirmationState field', () => {
+  it("does not false-positive on the read envelope's own confirmationState field", () => {
     const issues = findStrictConfirmExposures([
       {
         path: 'apps/api/src/graph/graph.controller.ts',
-        content: 'export function toDto(graphVersion: number, confirmationState: string) { return { graphVersion, confirmationState }; }',
+        content:
+          'export function toDto(graphVersion: number, confirmationState: string) { return { graphVersion, confirmationState }; }',
       },
     ]);
     expect(issues).toEqual([]);
@@ -108,7 +112,8 @@ describe('findStrictConfirmExposures — apps/mcp-server, apps/worker, apps/api 
     const issues = findStrictConfirmExposures([
       {
         path: 'apps/mcp-server/src/tools/graph.ts',
-        content: "registerTool({ name: ['graph', 'confirm', 'draft'].join('_'), handler: async () => {} });",
+        content:
+          "registerTool({ name: ['graph', 'confirm', 'draft'].join('_'), handler: async () => {} });",
       },
     ]);
     expect(issues).toEqual([]); // acknowledged limit, see file header — not a passing guarantee
