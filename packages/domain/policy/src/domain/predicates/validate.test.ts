@@ -21,7 +21,12 @@ describe('validatePredicateShape (batch 9 I2, review finding)', () => {
         operator: 'atMost',
         value: { kind: 'field', field: 'budget.limit' },
       },
-      { kind: 'instant', field: 'evaluatedAt', operator: 'before', value: '2026-01-01T00:00:00.000Z' },
+      {
+        kind: 'instant',
+        field: 'evaluatedAt',
+        operator: 'before',
+        value: '2026-01-01T00:00:00.000Z',
+      },
       { kind: 'closure', field: 'impact.closure', operator: 'sizeAtMost', value: 3 },
     ];
     for (const predicate of predicates) {
@@ -30,7 +35,12 @@ describe('validatePredicateShape (batch 9 I2, review finding)', () => {
   });
 
   it('rejects an unknown field', () => {
-    const predicate = { kind: 'enumerated', field: 'not.a.real.field', operator: 'equals', value: 'x' } as unknown as Predicate;
+    const predicate = {
+      kind: 'enumerated',
+      field: 'not.a.real.field',
+      operator: 'equals',
+      value: 'x',
+    } as unknown as Predicate;
     expect(validatePredicateShape(predicate)).toMatch(/unknown predicate field/);
   });
 
@@ -44,7 +54,7 @@ describe('validatePredicateShape (batch 9 I2, review finding)', () => {
     expect(validatePredicateShape(predicate)).toMatch(/is a "enumerated" field/);
   });
 
-  it('rejects an operator outside its kind\'s domain', () => {
+  it("rejects an operator outside its kind's domain", () => {
     const predicate = {
       kind: 'boolean',
       field: 'evidence.complete',

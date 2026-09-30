@@ -6,7 +6,11 @@ import {
   type PolicyRulesetRepository,
   type PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
-import { DuplicateRuleKeyError, RulesetPredicateInvalidError, type RuleBody } from '../../domain/policy-ruleset.js';
+import {
+  DuplicateRuleKeyError,
+  RulesetPredicateInvalidError,
+  type RuleBody,
+} from '../../domain/policy-ruleset.js';
 import type { ResolvedRuleset, Rule } from '../../domain/rule.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import { publishRuleset } from './publish-ruleset.js';

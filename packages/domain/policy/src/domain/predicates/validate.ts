@@ -108,11 +108,7 @@ function validateQuantityValue(field: string, operator: string, value: unknown):
   return `quantity value for field "${field}" has an unrecognized kind "${String(kind)}"`;
 }
 
-function validateSetOrScalarValue(
-  field: string,
-  operator: string,
-  value: unknown,
-): string | null {
+function validateSetOrScalarValue(field: string, operator: string, value: unknown): string | null {
   const isSet = operator === 'in' || operator === 'notIn';
   const valid = isSet ? isStringArray(value) : typeof value === 'string';
   return valid ? null : wrongTypeMessage(field, operator);

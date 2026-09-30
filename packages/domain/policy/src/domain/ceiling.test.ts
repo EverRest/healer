@@ -35,6 +35,8 @@ describe('ACTION_CEILING', () => {
   it('hasTestedUndo has no effect outside reversible_remediation', () => {
     expect(ACTION_CEILING('read_only', true)).toEqual(ACTION_CEILING('read_only', false));
     expect(ACTION_CEILING('code_change', true)).toEqual(ACTION_CEILING('code_change', false));
-    expect(ACTION_CEILING('repository_write', true)).toEqual(ACTION_CEILING('repository_write', false));
+    expect(ACTION_CEILING('repository_write', true)).toEqual(
+      ACTION_CEILING('repository_write', false),
+    );
   });
 });

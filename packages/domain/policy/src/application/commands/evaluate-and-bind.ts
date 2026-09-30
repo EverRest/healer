@@ -3,7 +3,11 @@ import { scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
-import type { DecisionBinding, PolicyDecisionRepository, RecordedDecision } from '../../domain/policy-decision-repository.js';
+import type {
+  DecisionBinding,
+  PolicyDecisionRepository,
+  RecordedDecision,
+} from '../../domain/policy-decision-repository.js';
 import type { PolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
 import {

@@ -177,6 +177,9 @@ export function matchesPredicate(predicate: Predicate, input: DecisionInput): bo
 }
 
 /** A rule's predicate conjunction — every predicate must hold (contracts/evaluation.md step 2). */
-export function matchesConjunction(predicates: PredicateConjunction, input: DecisionInput): boolean {
+export function matchesConjunction(
+  predicates: PredicateConjunction,
+  input: DecisionInput,
+): boolean {
   return predicates.every((predicate) => matchesPredicate(predicate, input));
 }

@@ -73,7 +73,10 @@ interface StoredDecisionRow extends DecisionRow {
  *  likely once Phase 4+ adds fields to `DecisionInput`) turns `GET /policy/decisions` into a 500
  *  with no way to tell which row is bad. Wraps and rethrows with the id included, so a caller (or
  *  whoever reads the log) at least knows which row to look at. */
-function parseStoredDecisionInput(row: { readonly id: string; readonly decisionInput: unknown }): DecisionInput {
+function parseStoredDecisionInput(row: {
+  readonly id: string;
+  readonly decisionInput: unknown;
+}): DecisionInput {
   try {
     return decisionInputSchema.parse(row.decisionInput);
   } catch (error) {

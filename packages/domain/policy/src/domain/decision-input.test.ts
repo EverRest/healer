@@ -20,7 +20,10 @@ describe('decisionInputSchema', () => {
 
   it('rejects a confidence key nested inside a field group, not only at the top level', () => {
     const input = buildDecisionInput();
-    const withNestedConfidence = { ...input, eligibility: { ...input.eligibility, confidence: 0.99 } };
+    const withNestedConfidence = {
+      ...input,
+      eligibility: { ...input.eligibility, confidence: 0.99 },
+    };
     const result = decisionInputSchema.safeParse(withNestedConfidence);
     expect(result.success).toBe(false);
   });
@@ -44,7 +47,10 @@ describe('decisionInputSchema', () => {
   });
 
   it('still rejects an evaluatedAt that does not parse as a date at all', () => {
-    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: 'not-a-date' });
+    const result = decisionInputSchema.safeParse({
+      ...buildDecisionInput(),
+      evaluatedAt: 'not-a-date',
+    });
     expect(result.success).toBe(false);
   });
 
@@ -52,15 +58,21 @@ describe('decisionInputSchema', () => {
   // `new Date(x)` on *any* input, so `null` -> 1970-01-01 and a number/boolean silently become
   // dates too — a caller mistake `z.date()` used to reject outright before this schema coerced at
   // all. The fix restricts coercion to an actual `Date` or a proper ISO datetime string.
-  it.each([null, true, 12345, {}, []])('rejects a non-date, non-ISO-string evaluatedAt: %j', (bad) => {
-    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: bad });
-    expect(result.success).toBe(false);
-  });
+  it.each([null, true, 12345, {}, []])(
+    'rejects a non-date, non-ISO-string evaluatedAt: %j',
+    (bad) => {
+      const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: bad });
+      expect(result.success).toBe(false);
+    },
+  );
 
   it('rejects a non-ISO date-like string that a bare `new Date(...)` would have silently accepted', () => {
     // `new Date('2026/01/01')` parses successfully (locale-dependent, non-ISO) — the old
     // `dry-run.dto.ts` preprocessing plus a bare `z.coerce.date()` would have accepted it.
-    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: '2026/01/01' });
+    const result = decisionInputSchema.safeParse({
+      ...buildDecisionInput(),
+      evaluatedAt: '2026/01/01',
+    });
     expect(result.success).toBe(false);
   });
 

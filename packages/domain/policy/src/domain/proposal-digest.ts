@@ -8,5 +8,7 @@ import type { DecisionInput } from './decision-input.js';
 // identical `DecisionInput`s hash identically regardless of the key order a caller happened to
 // build the object literal in.
 export function computeProposalDigest(input: DecisionInput): string {
-  return createHash('sha256').update(JSON.stringify(canonicalize(input))).digest('hex');
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(input)))
+    .digest('hex');
 }

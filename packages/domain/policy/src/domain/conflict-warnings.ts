@@ -39,7 +39,9 @@ type OrdinalFieldPredicate = Extract<Predicate, { kind: 'ordinal' }>;
  *  `equals`/`in` predicate pins it to a finite set (minus any exclusions), `open` when only
  *  exclusions are present — in which case the "allowed" set is every value outside `excluded`,
  *  which cannot be enumerated without knowing the field's domain. */
-type ValueSet = { readonly closed: true; readonly values: ReadonlySet<string> } | { readonly closed: false; readonly excluded: ReadonlySet<string> };
+type ValueSet =
+  | { readonly closed: true; readonly values: ReadonlySet<string> }
+  | { readonly closed: false; readonly excluded: ReadonlySet<string> };
 
 function intersectMaybe(a: ReadonlySet<string> | undefined, b: ReadonlySet<string>): Set<string> {
   if (!a) return new Set(b);
@@ -55,7 +57,8 @@ function resolveValueSet(preds: readonly SetField[]): ValueSet {
     else if (p.operator === 'notEquals') excluded.add(p.value);
     else if (p.operator === 'notIn') for (const v of p.value) excluded.add(v);
   }
-  if (positive) return { closed: true, values: new Set([...positive].filter((v) => !excluded.has(v))) };
+  if (positive)
+    return { closed: true, values: new Set([...positive].filter((v) => !excluded.has(v))) };
   return { closed: false, excluded };
 }
 
@@ -66,7 +69,10 @@ function disjointSets(a: ValueSet, b: ValueSet): boolean {
   return false; // both open-ended: cannot prove disjoint from exclusions alone (documented gap).
 }
 
-function disjointBoolean(aPreds: readonly BooleanFieldPredicate[], bPreds: readonly BooleanFieldPredicate[]): boolean {
+function disjointBoolean(
+  aPreds: readonly BooleanFieldPredicate[],
+  bPreds: readonly BooleanFieldPredicate[],
+): boolean {
   const requires = (preds: readonly BooleanFieldPredicate[]) => ({
     true: preds.some((p) => p.operator === 'isTrue'),
     false: preds.some((p) => p.operator === 'isFalse'),
@@ -92,7 +98,10 @@ function ordinalRange(preds: readonly OrdinalFieldPredicate[]): readonly [number
   return [min, max];
 }
 
-function disjointOrdinal(aPreds: readonly OrdinalFieldPredicate[], bPreds: readonly OrdinalFieldPredicate[]): boolean {
+function disjointOrdinal(
+  aPreds: readonly OrdinalFieldPredicate[],
+  bPreds: readonly OrdinalFieldPredicate[],
+): boolean {
   const [aMin, aMax] = ordinalRange(aPreds);
   const [bMin, bMax] = ordinalRange(bPreds);
   return aMax < bMin || bMax < aMin;
@@ -111,9 +120,15 @@ function fieldsDisjoint(aPreds: PredicateConjunction, bPreds: PredicateConjuncti
         resolveValueSet(bPreds as readonly SetField[]),
       );
     case 'boolean':
-      return disjointBoolean(aPreds as readonly BooleanFieldPredicate[], bPreds as readonly BooleanFieldPredicate[]);
+      return disjointBoolean(
+        aPreds as readonly BooleanFieldPredicate[],
+        bPreds as readonly BooleanFieldPredicate[],
+      );
     case 'ordinal':
-      return disjointOrdinal(aPreds as readonly OrdinalFieldPredicate[], bPreds as readonly OrdinalFieldPredicate[]);
+      return disjointOrdinal(
+        aPreds as readonly OrdinalFieldPredicate[],
+        bPreds as readonly OrdinalFieldPredicate[],
+      );
     default:
       return false;
   }

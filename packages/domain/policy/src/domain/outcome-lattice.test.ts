@@ -49,7 +49,14 @@ describe('foldOutcomes', () => {
 
   it('is order-independent across many random shuffles of a larger multiset', () => {
     const multiset: Outcome[] = [
-      'allow', 'allow', 'allow', 'allow', 'allow', 'allow', 'allow', 'allow',
+      'allow',
+      'allow',
+      'allow',
+      'allow',
+      'allow',
+      'allow',
+      'allow',
+      'allow',
       'require_approval',
     ];
     const first = foldOutcomes(multiset);

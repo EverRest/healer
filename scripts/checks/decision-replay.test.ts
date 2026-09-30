@@ -116,7 +116,12 @@ describe('replayOne (002 T030, FR-002, SC-002; batch 9 C2)', () => {
         {
           ruleKey: 'deny-before-2027',
           predicates: [
-            { kind: 'instant', field: 'evaluatedAt', operator: 'before', value: '2027-01-01T00:00:00.000Z' },
+            {
+              kind: 'instant',
+              field: 'evaluatedAt',
+              operator: 'before',
+              value: '2027-01-01T00:00:00.000Z',
+            },
           ],
           outcome: 'deny',
           reasonCode: 'TARGET_BLOCKED',
@@ -141,7 +146,7 @@ describe('replayOne (002 T030, FR-002, SC-002; batch 9 C2)', () => {
   // outside replayOne's try, so one non-conforming stored row crashed the whole gate instead of
   // being reported as that row's own violation — exactly the "crashes instead of reporting the
   // row" failure C2 was about, recurring one layer up.
-  it('reports a row whose stored decision_input fails schema validation as that row\'s own violation, naming its id, instead of throwing', async () => {
+  it("reports a row whose stored decision_input fails schema validation as that row's own violation, naming its id, instead of throwing", async () => {
     const row = { ...ROW_BASE, id: 'd6', decisionInput: { not: 'a valid DecisionInput' } };
     const violation = await replayOne(new FakeRulesetRepo(RULESET), row);
     expect(violation).toContain('d6');

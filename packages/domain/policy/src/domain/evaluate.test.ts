@@ -8,7 +8,9 @@ import { buildDecisionInput } from './test-support/fixtures.js';
 
 const allowRule: Rule = {
   ruleKey: 'allow-code-change',
-  predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+  predicates: [
+    { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
+  ],
   outcome: 'allow',
   reasonCode: 'NO_ADOPTED_EXPECTATION',
 };
@@ -38,7 +40,9 @@ describe('evaluate — determinism (quickstart 1)', () => {
       buildDecisionInput(),
       buildDecisionInput({ action: { actionKey: 'x', actionClass: 'read_only' } }),
       buildDecisionInput({ autonomy: { level: 0 } }),
-      buildDecisionInput({ budget: { consumed: 100, limit: 100, declaredMaxCost: 1, degradationStep: 3 } }),
+      buildDecisionInput({
+        budget: { consumed: 100, limit: 100, declaredMaxCost: 1, degradationStep: 3 },
+      }),
     ];
     for (const input of corpus) {
       const results = Array.from({ length: 200 }, () => evaluate(ruleset, input).decision.outcome);
@@ -60,7 +64,14 @@ describe('evaluate — conflict resolves down (quickstart 6)', () => {
   it('one rule allows, another denies, both match → DENY', () => {
     const denyRule: Rule = {
       ruleKey: 'deny-code-change',
-      predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+      predicates: [
+        {
+          kind: 'enumerated',
+          field: 'action.actionClass',
+          operator: 'equals',
+          value: 'code_change',
+        },
+      ],
       outcome: 'deny',
       reasonCode: 'TARGET_BLOCKED',
     };
@@ -163,45 +174,63 @@ describe('evaluate — monotone restriction: steps 3-6 never turn DENY back into
   });
 
   it('budget exhausted downgrades ALLOW to DENY(BUDGET_EXHAUSTED)', () => {
-    const input = buildDecisionInput({ budget: { consumed: 100, limit: 100, declaredMaxCost: 1, degradationStep: 0 } });
+    const input = buildDecisionInput({
+      budget: { consumed: 100, limit: 100, declaredMaxCost: 1, degradationStep: 0 },
+    });
     const { decision } = evaluate(rulesetOf([allowRule]), input);
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('BUDGET_EXHAUSTED');
   });
 
   it('budget degraded (below limit) does not deny by itself', () => {
-    const input = buildDecisionInput({ budget: { consumed: 80, limit: 100, declaredMaxCost: 1, degradationStep: 2 } });
+    const input = buildDecisionInput({
+      budget: { consumed: 80, limit: 100, declaredMaxCost: 1, degradationStep: 2 },
+    });
     const { decision } = evaluate(rulesetOf([allowRule]), input);
     expect(decision.outcome).toBe('allow');
     expect(decision.reasonCodes).not.toContain('BUDGET_EXHAUSTED');
   });
 
   it('cooldown: attempt cap reached downgrades ALLOW to DENY(ATTEMPT_CAP_REACHED)', () => {
-    const input = buildDecisionInput({ cooldown: { recentAllowCount: 0, windowSeconds: 60, attemptCount: 5 } });
-    const ruleset = rulesetOf([allowRule], { cooldownBounds: { ratePerWindow: 100, cooldownSeconds: 0, attemptCap: 5 } });
+    const input = buildDecisionInput({
+      cooldown: { recentAllowCount: 0, windowSeconds: 60, attemptCount: 5 },
+    });
+    const ruleset = rulesetOf([allowRule], {
+      cooldownBounds: { ratePerWindow: 100, cooldownSeconds: 0, attemptCap: 5 },
+    });
     const { decision } = evaluate(ruleset, input);
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
   });
 
   it('cooldown: rate limited downgrades ALLOW to DENY(RATE_LIMITED)', () => {
-    const input = buildDecisionInput({ cooldown: { recentAllowCount: 10, windowSeconds: 60, attemptCount: 0 } });
-    const ruleset = rulesetOf([allowRule], { cooldownBounds: { ratePerWindow: 10, cooldownSeconds: 0, attemptCap: 999 } });
+    const input = buildDecisionInput({
+      cooldown: { recentAllowCount: 10, windowSeconds: 60, attemptCount: 0 },
+    });
+    const ruleset = rulesetOf([allowRule], {
+      cooldownBounds: { ratePerWindow: 10, cooldownSeconds: 0, attemptCap: 999 },
+    });
     const { decision } = evaluate(ruleset, input);
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('RATE_LIMITED');
   });
 
   it('cooldown: not enough time since the last allow downgrades ALLOW to DENY(COOLDOWN)', () => {
-    const input = buildDecisionInput({ cooldown: { recentAllowCount: 1, windowSeconds: 5, attemptCount: 0 } });
-    const ruleset = rulesetOf([allowRule], { cooldownBounds: { ratePerWindow: 999, cooldownSeconds: 30, attemptCap: 999 } });
+    const input = buildDecisionInput({
+      cooldown: { recentAllowCount: 1, windowSeconds: 5, attemptCount: 0 },
+    });
+    const ruleset = rulesetOf([allowRule], {
+      cooldownBounds: { ratePerWindow: 999, cooldownSeconds: 30, attemptCap: 999 },
+    });
     const { decision } = evaluate(ruleset, input);
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('COOLDOWN');
   });
 
   it('cooldown step is a no-op when the ruleset has no configured bounds', () => {
-    const input = buildDecisionInput({ cooldown: { recentAllowCount: 999, windowSeconds: 0, attemptCount: 999 } });
+    const input = buildDecisionInput({
+      cooldown: { recentAllowCount: 999, windowSeconds: 0, attemptCount: 999 },
+    });
     const { decision } = evaluate(rulesetOf([allowRule]), input);
     expect(decision.outcome).toBe('allow');
   });
@@ -227,7 +256,12 @@ describe('evaluate — trace', () => {
     expect(trace.foldResult).toBe('allow');
     expect(trace.ceilingApplied).toBe(false);
     expect(trace.resolvedAutonomyLevel).toBe(2);
-    expect(trace.budgetState).toEqual({ consumed: 0, limit: 100, declaredMaxCost: 1, degradationStep: 0 });
+    expect(trace.budgetState).toEqual({
+      consumed: 0,
+      limit: 100,
+      declaredMaxCost: 1,
+      degradationStep: 0,
+    });
     expect(trace.reasonCodes).toEqual(['NO_ADOPTED_EXPECTATION']);
   });
 });

@@ -9,7 +9,12 @@ import { ISSUE_KINDS, ISSUE_STATES } from './issue-enums.js';
 // **No confidence field exists anywhere in this schema.** Not optional, not stripped — absent.
 // T007 proves an extra `confidence` key is rejected, not merely ignored.
 
-const codeProblemVerdictSchema = z.enum(['code_problem', 'not_a_code_problem', 'undetermined', 'absent']);
+const codeProblemVerdictSchema = z.enum([
+  'code_problem',
+  'not_a_code_problem',
+  'undetermined',
+  'absent',
+]);
 
 const reproductionOutcomeSchema = z.enum(['pass', 'fail', 'inconclusive', 'absent']);
 

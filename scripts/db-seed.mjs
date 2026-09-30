@@ -60,7 +60,9 @@ if (isMainModule(import.meta.url)) {
         create: { ...action, introducedAt: POLICY_ACTIONS_INTRODUCED_AT },
       });
     }
-    process.stdout.write(`db-seed: policy_action registry (${SEED_POLICY_ACTIONS.length} rows) ready\n`);
+    process.stdout.write(
+      `db-seed: policy_action registry (${SEED_POLICY_ACTIONS.length} rows) ready\n`,
+    );
   } finally {
     await prisma.$disconnect();
   }

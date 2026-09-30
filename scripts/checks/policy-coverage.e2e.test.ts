@@ -101,9 +101,7 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
     expect(uncovered).toContain(TARGET_UNCOVERED);
     expect(uncovered).toContain('no consumed ALLOW decision linked');
 
-    const unregistered = violations.find((v) =>
-      v.includes('00000000-0000-0000-8000-0000000000fa'),
-    );
+    const unregistered = violations.find((v) => v.includes('00000000-0000-0000-8000-0000000000fa'));
     expect(unregistered).toBeDefined();
     expect(unregistered).toContain('issue.close');
     expect(unregistered).toContain(TARGET_UNREGISTERED);

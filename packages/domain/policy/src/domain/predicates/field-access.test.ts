@@ -9,7 +9,14 @@ import {
   readOrdinalField,
   readQuantityField,
 } from './field-access.js';
-import { BOOLEAN_FIELDS, ENUMERATED_FIELDS, IDENTIFIER_FIELDS, INSTANT_FIELDS, ORDINAL_FIELDS, QUANTITY_FIELDS } from './fields.js';
+import {
+  BOOLEAN_FIELDS,
+  ENUMERATED_FIELDS,
+  IDENTIFIER_FIELDS,
+  INSTANT_FIELDS,
+  ORDINAL_FIELDS,
+  QUANTITY_FIELDS,
+} from './fields.js';
 
 // Exhaustive per-field coverage: every field in the closed vocabulary (fields.ts) resolves
 // against a real DecisionInput without throwing — one case per field, not only per field-kind

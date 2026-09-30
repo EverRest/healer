@@ -112,7 +112,12 @@ describe('policy outbox event builders (T016, contracts/evaluation.md)', () => {
       expect(autonomyGrantedEvent(TENANT_ID, params)).toMatchObject({
         name: 'AutonomyGranted',
         subjectId: 'grant-1',
-        payload: { scope: { environment: 'prod' }, actionKey: params.actionKey, level: 2, epoch: '7' },
+        payload: {
+          scope: { environment: 'prod' },
+          actionKey: params.actionKey,
+          level: 2,
+          epoch: '7',
+        },
       });
       expect(autonomyRevokedEvent(TENANT_ID, params)).toMatchObject({ name: 'AutonomyRevoked' });
     }));

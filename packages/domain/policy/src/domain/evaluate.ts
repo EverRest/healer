@@ -45,7 +45,10 @@ interface StepResult {
   readonly reasonCodes: readonly ReasonCode[];
 }
 
-function addReasonCode(reasonCodes: readonly ReasonCode[], code: ReasonCode): readonly ReasonCode[] {
+function addReasonCode(
+  reasonCodes: readonly ReasonCode[],
+  code: ReasonCode,
+): readonly ReasonCode[] {
   return reasonCodes.includes(code) ? reasonCodes : [...reasonCodes, code];
 }
 
@@ -92,12 +95,19 @@ function applyBudget(current: StepResult, input: DecisionInput): StepResult {
 // `(actionKey, targetRef, fingerprint)` (FR-014, R-13, C-11). Bounds are resolved alongside the
 // rule set (`ResolvedRuleset.cooldownBounds`) — absent when the tenant has none configured for
 // this action, in which case there is nothing to enforce.
-function applyCooldown(current: StepResult, input: DecisionInput, bounds: CooldownBounds | undefined): StepResult {
+function applyCooldown(
+  current: StepResult,
+  input: DecisionInput,
+  bounds: CooldownBounds | undefined,
+): StepResult {
   if (!bounds) return current;
   const { cooldown } = input;
   let result = current;
   if (cooldown.attemptCount >= bounds.attemptCap) {
-    result = { outcome: 'deny', reasonCodes: addReasonCode(result.reasonCodes, 'ATTEMPT_CAP_REACHED') };
+    result = {
+      outcome: 'deny',
+      reasonCodes: addReasonCode(result.reasonCodes, 'ATTEMPT_CAP_REACHED'),
+    };
   }
   if (cooldown.recentAllowCount >= bounds.ratePerWindow) {
     result = { outcome: 'deny', reasonCodes: addReasonCode(result.reasonCodes, 'RATE_LIMITED') };
@@ -131,14 +141,18 @@ export function evaluate(
   input: DecisionInput,
 ): { readonly decision: Decision; readonly trace: EvaluationTrace } {
   // Step 2: match — every rule whose predicate conjunction holds, no ordering, no priority.
-  const matched: readonly Rule[] = ruleset.rules.filter((rule) => matchesConjunction(rule.predicates, input));
+  const matched: readonly Rule[] = ruleset.rules.filter((rule) =>
+    matchesConjunction(rule.predicates, input),
+  );
 
   // Step 3: fold — max over ALLOW < REQUIRE_APPROVAL < DENY, seeded DENY for the empty set.
   const foldResult = foldOutcomes(matched.map((rule) => rule.outcome));
   const baseReasonCodes: readonly ReasonCode[] =
     matched.length === 0
       ? ['NO_MATCHING_RULE']
-      : dedupeReasonCodes(matched.filter((rule) => rule.outcome === foldResult).map((rule) => rule.reasonCode));
+      : dedupeReasonCodes(
+          matched.filter((rule) => rule.outcome === foldResult).map((rule) => rule.reasonCode),
+        );
 
   let step: StepResult = { outcome: foldResult, reasonCodes: baseReasonCodes };
   step = applyCeiling(step, input);

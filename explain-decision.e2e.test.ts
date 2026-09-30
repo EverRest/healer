@@ -65,7 +65,14 @@ function rule(overrides: Partial<RuleBody> = {}): RuleBody {
 }
 
 function componentIs(componentId: string) {
-  return [{ kind: 'identifier' as const, field: 'target.componentId' as const, operator: 'equals' as const, value: componentId }];
+  return [
+    {
+      kind: 'identifier' as const,
+      field: 'target.componentId' as const,
+      operator: 'equals' as const,
+      value: componentId,
+    },
+  ];
 }
 
 /** Every table in the `policy` schema (data-model.md) — T025's "diff the database before/after,
@@ -127,22 +134,37 @@ const CONTEXT = TenantContext.forTrustedInternalUse(TENANT_ID);
 // meant to interact.
 const RULES: RuleBody[] = [
   rule({ ruleKey: 'allow-comp-allow', predicates: componentIs('comp-allow'), outcome: 'allow' }),
-  rule({ ruleKey: 'allow-comp-conflict', predicates: componentIs('comp-conflict'), outcome: 'allow' }),
+  rule({
+    ruleKey: 'allow-comp-conflict',
+    predicates: componentIs('comp-conflict'),
+    outcome: 'allow',
+  }),
   rule({
     ruleKey: 'deny-comp-conflict',
     predicates: componentIs('comp-conflict'),
     outcome: 'deny',
     reasonCode: 'TARGET_BLOCKED',
   }),
-  rule({ ruleKey: 'allow-comp-ceiling', predicates: componentIs('comp-ceiling'), outcome: 'allow' }),
+  rule({
+    ruleKey: 'allow-comp-ceiling',
+    predicates: componentIs('comp-ceiling'),
+    outcome: 'allow',
+  }),
   rule({ ruleKey: 'allow-comp-budget', predicates: componentIs('comp-budget'), outcome: 'allow' }),
 ];
 
 const MATRIX: { readonly name: string; readonly input: DecisionInput }[] = [
-  { name: 'allow', input: buildDecisionInput({ target: { ...buildDecisionInput().target, componentId: 'comp-allow' } }) },
+  {
+    name: 'allow',
+    input: buildDecisionInput({
+      target: { ...buildDecisionInput().target, componentId: 'comp-allow' },
+    }),
+  },
   {
     name: 'conflict resolves to deny (quickstart 6)',
-    input: buildDecisionInput({ target: { ...buildDecisionInput().target, componentId: 'comp-conflict' } }),
+    input: buildDecisionInput({
+      target: { ...buildDecisionInput().target, componentId: 'comp-conflict' },
+    }),
   },
   {
     name: 'ceiling exceeded (quickstart 7)',
@@ -160,7 +182,9 @@ const MATRIX: { readonly name: string; readonly input: DecisionInput }[] = [
   },
   {
     name: 'no matching rule (quickstart 4)',
-    input: buildDecisionInput({ target: { ...buildDecisionInput().target, componentId: 'comp-none' } }),
+    input: buildDecisionInput({
+      target: { ...buildDecisionInput().target, componentId: 'comp-none' },
+    }),
   },
 ];
 
@@ -191,7 +215,9 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
       });
     }
 
-    await withCorrelation('corr-seed-ruleset', () => publishRuleset(rulesets, CONTEXT, { rules: RULES, publishedBy: 'pavlo' }));
+    await withCorrelation('corr-seed-ruleset', () =>
+      publishRuleset(rulesets, CONTEXT, { rules: RULES, publishedBy: 'pavlo' }),
+    );
   }, 180_000);
 
   afterAll(async () => {
@@ -219,7 +245,9 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
         explainDecision({ rulesets, actions }, CONTEXT, { decisionInput: input }),
       );
       const bound = await withCorrelation('corr-bind-cmp', () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, { decisionInput: input }),
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
+          decisionInput: input,
+        }),
       );
 
       expect(explained.decision.outcome).toBe(bound.decision.outcome);

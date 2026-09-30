@@ -181,9 +181,13 @@ describe('/policy (002 T027-T030, T032)', () => {
     withCorrelation(newCorrelationId(), async () => {
       const tenant = TenantContext.forTrustedInternalUse(tenantId);
       await publishUnder(tenantId);
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, tenant, {
-        decisionInput: buildDecisionInput(overrides),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        tenant,
+        {
+          decisionInput: buildDecisionInput(overrides),
+        },
+      );
       return decision;
     });
 
@@ -259,7 +263,11 @@ describe('/policy (002 T027-T030, T032)', () => {
               // — contracts/evaluation.md: "against a literal or against another field in the
               // same group."
               predicates: [
-                { field: 'budget.consumed', operator: 'atLeast', value: { kind: 'field', field: 'cooldown.attemptCount' } },
+                {
+                  field: 'budget.consumed',
+                  operator: 'atLeast',
+                  value: { kind: 'field', field: 'cooldown.attemptCount' },
+                },
               ],
               outcome: 'allow',
               reasonCode: 'NO_ADOPTED_EXPECTATION',
@@ -404,7 +412,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       });
     });
 
-    it('replay binds to the decision\'s own recorded version — a since-published, materially different version does not change the result', async () => {
+    it("replay binds to the decision's own recorded version — a since-published, materially different version does not change the result", async () => {
       const tenantId = randomUUID();
       const decision = await decideUnder(tenantId); // publishes v1 (allow), records against it
       expect(decision.rulesetVersion).toBe(1);
@@ -412,7 +420,9 @@ describe('/policy (002 T027-T030, T032)', () => {
       // v2 for the same tenant: what v1 said ALLOW, v2 says DENY for the identical input. If
       // replay ever resolved "latest" instead of the decision's own rulesetVersion, this would
       // flip the outcome and falsely report identical: false.
-      await publishUnder(tenantId, [allowRule({ ruleKey: `deny-${randomUUID()}`, outcome: 'deny' })]);
+      await publishUnder(tenantId, [
+        allowRule({ ruleKey: `deny-${randomUUID()}`, outcome: 'deny' }),
+      ]);
 
       const response = await request(app.getHttpServer())
         .post(path(`/policy/decisions/${decision.id}/replay`))
@@ -453,14 +463,23 @@ describe('/policy (002 T027-T030, T032)', () => {
         allowRule({
           ruleKey: `instant-${randomUUID()}`,
           predicates: [
-            { kind: 'instant', field: 'evaluatedAt', operator: 'after', value: '2020-01-01T00:00:00.000Z' },
+            {
+              kind: 'instant',
+              field: 'evaluatedAt',
+              operator: 'after',
+              value: '2020-01-01T00:00:00.000Z',
+            },
           ],
         }),
       ]);
       const decision = await withCorrelation(newCorrelationId(), async () => {
-        const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, TenantContext.forTrustedInternalUse(tenantId), {
-          decisionInput: buildDecisionInput(),
-        });
+        const { decision } = await evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions },
+          TenantContext.forTrustedInternalUse(tenantId),
+          {
+            decisionInput: buildDecisionInput(),
+          },
+        );
         return decision;
       });
       expect(decision.outcome).toBe('allow');

@@ -10,7 +10,8 @@ import type { ActionClass } from './action-class.js';
 // in a way a diff against a table entry is not.
 export type AutonomyLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
-export type Ceiling = { readonly kind: 'level'; readonly level: AutonomyLevel } | { readonly kind: 'none' };
+export type Ceiling =
+  { readonly kind: 'level'; readonly level: AutonomyLevel } | { readonly kind: 'none' };
 
 const READ_ONLY_CEILING: AutonomyLevel = 1;
 const CODE_CHANGE_CEILING: AutonomyLevel = 2;

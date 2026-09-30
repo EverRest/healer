@@ -101,7 +101,14 @@ describe('replayDecision (T028, FR-002)', () => {
       supersedesVersion: 1,
       rules: [{ ...v1.rules[0]!, outcome: 'deny' }],
     });
-    const repos = { rulesets: new FakeRulesetRepo(new Map([[1, v1], [2, v2]])) };
+    const repos = {
+      rulesets: new FakeRulesetRepo(
+        new Map([
+          [1, v1],
+          [2, v2],
+        ]),
+      ),
+    };
 
     const result = await replayDecision(repos, CONTEXT, {
       decisionInput: buildDecisionInput(),

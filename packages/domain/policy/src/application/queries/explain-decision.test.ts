@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { TenantContext } from '@healer/shared';
 import type { ActionClass } from '../../domain/action-class.js';
-import type { PolicyAction, PolicyActionRepository } from '../../domain/policy-action-repository.js';
+import type {
+  PolicyAction,
+  PolicyActionRepository,
+} from '../../domain/policy-action-repository.js';
 import type {
   ReadOnlyPolicyRulesetRepository,
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
-import { NoPublishedRulesetError, UnregisteredActionError } from '../resolve-ruleset-and-evaluate.js';
+import {
+  NoPublishedRulesetError,
+  UnregisteredActionError,
+} from '../resolve-ruleset-and-evaluate.js';
 import { explainDecision, type ExplainDecisionRepos } from './explain-decision.js';
 
 const CONTEXT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000d2');
@@ -181,7 +187,10 @@ describe('explainDecision (T024)', () => {
   it('refuses an unregistered action key rather than evaluating against whatever the caller claims', async () => {
     await expect(
       explainDecision(
-        { rulesets: new ReadOnlyFakeRulesetRepo(published()), actions: new FakeActionRepo(new Map()) },
+        {
+          rulesets: new ReadOnlyFakeRulesetRepo(published()),
+          actions: new FakeActionRepo(new Map()),
+        },
         CONTEXT,
         {
           decisionInput: buildDecisionInput({

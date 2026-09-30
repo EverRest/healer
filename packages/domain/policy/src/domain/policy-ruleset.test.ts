@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { assertUniqueRuleKeys, computeRulesetDigest, DuplicateRuleKeyError, type RuleBody } from './policy-ruleset.js';
+import {
+  assertUniqueRuleKeys,
+  computeRulesetDigest,
+  DuplicateRuleKeyError,
+  type RuleBody,
+} from './policy-ruleset.js';
 
 // Review finding: the original digest only canonicalized each rule body's own top-level fields,
 // not the objects nested inside `predicates` — so two predicates differing only in the order
@@ -10,7 +15,9 @@ describe('computeRulesetDigest — canonicalization reaches nested predicate obj
   it('two rule bodies with byte-identical content but different predicate key order hash identically', () => {
     const a: RuleBody = {
       ruleKey: 'allow-prod',
-      predicates: [{ kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'prod' }],
+      predicates: [
+        { kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'prod' },
+      ],
       outcome: 'allow',
       reasonCode: 'NO_ADOPTED_EXPECTATION',
       note: '',
@@ -20,7 +27,9 @@ describe('computeRulesetDigest — canonicalization reaches nested predicate obj
       // Same predicate, different literal key-write order — this is exactly what a `jsonb`
       // round trip through Postgres can also produce, since jsonb does not preserve insertion
       // order.
-      predicates: [{ field: 'target.environment', kind: 'enumerated', value: 'prod', operator: 'equals' }],
+      predicates: [
+        { field: 'target.environment', kind: 'enumerated', value: 'prod', operator: 'equals' },
+      ],
       outcome: 'allow',
       reasonCode: 'NO_ADOPTED_EXPECTATION',
       note: '',
@@ -52,14 +61,18 @@ describe('computeRulesetDigest — canonicalization reaches nested predicate obj
   it('genuinely different predicate content still hashes differently', () => {
     const a: RuleBody = {
       ruleKey: 'allow-prod',
-      predicates: [{ kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'prod' }],
+      predicates: [
+        { kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'prod' },
+      ],
       outcome: 'allow',
       reasonCode: 'NO_ADOPTED_EXPECTATION',
       note: '',
     };
     const b: RuleBody = {
       ruleKey: 'allow-prod',
-      predicates: [{ kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'staging' }],
+      predicates: [
+        { kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'staging' },
+      ],
       outcome: 'allow',
       reasonCode: 'NO_ADOPTED_EXPECTATION',
       note: '',
@@ -74,7 +87,13 @@ describe('computeRulesetDigest — canonicalization reaches nested predicate obj
 // and misdiagnosed by the repository's P2002 handling as a version race.
 describe('assertUniqueRuleKeys (review finding)', () => {
   function rule(ruleKey: string): RuleBody {
-    return { ruleKey, predicates: [], outcome: 'allow', reasonCode: 'NO_ADOPTED_EXPECTATION', note: '' };
+    return {
+      ruleKey,
+      predicates: [],
+      outcome: 'allow',
+      reasonCode: 'NO_ADOPTED_EXPECTATION',
+      note: '',
+    };
   }
 
   it('accepts a rule set with no duplicate ruleKeys', () => {
@@ -86,7 +105,9 @@ describe('assertUniqueRuleKeys (review finding)', () => {
   });
 
   it('rejects two rules sharing a ruleKey, naming the duplicate', () => {
-    expect(() => assertUniqueRuleKeys([rule('a'), rule('b'), rule('a')])).toThrow(DuplicateRuleKeyError);
+    expect(() => assertUniqueRuleKeys([rule('a'), rule('b'), rule('a')])).toThrow(
+      DuplicateRuleKeyError,
+    );
     try {
       assertUniqueRuleKeys([rule('a'), rule('b'), rule('a')]);
       expect.unreachable();
@@ -98,6 +119,8 @@ describe('assertUniqueRuleKeys (review finding)', () => {
   });
 
   it('rejects three-or-more-way duplication, not only exact pairs', () => {
-    expect(() => assertUniqueRuleKeys([rule('a'), rule('a'), rule('a')])).toThrow(DuplicateRuleKeyError);
+    expect(() => assertUniqueRuleKeys([rule('a'), rule('a'), rule('a')])).toThrow(
+      DuplicateRuleKeyError,
+    );
   });
 });

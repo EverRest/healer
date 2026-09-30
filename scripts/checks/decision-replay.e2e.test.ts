@@ -137,7 +137,12 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
           {
             ruleKey: 'allow-code-change',
             predicates: [
-              { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
+              {
+                kind: 'enumerated',
+                field: 'action.actionClass',
+                operator: 'equals',
+                value: 'code_change',
+              },
             ],
             outcome: 'allow',
             reasonCode: 'NO_ADOPTED_EXPECTATION',
@@ -146,9 +151,13 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
         ],
         publishedBy: 'pavlo',
       });
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, tenant, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        tenant,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
       expect(decision.outcome).toBe('allow');
       expect(decision.rulesetVersion).toBe(1);
 
@@ -160,7 +169,12 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
           {
             ruleKey: 'deny-code-change',
             predicates: [
-              { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
+              {
+                kind: 'enumerated',
+                field: 'action.actionClass',
+                operator: 'equals',
+                value: 'code_change',
+              },
             ],
             outcome: 'deny',
             reasonCode: 'NO_ADOPTED_EXPECTATION',

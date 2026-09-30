@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { TenantContext, type TenantScoped } from '@healer/shared';
 import type { ActionClass } from '../../domain/action-class.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
-import type { PolicyAction, PolicyActionRepository } from '../../domain/policy-action-repository.js';
+import type {
+  PolicyAction,
+  PolicyActionRepository,
+} from '../../domain/policy-action-repository.js';
 import type {
   NewRecordedDecision,
   PolicyDecisionRepository,

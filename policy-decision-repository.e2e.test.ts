@@ -132,10 +132,14 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('records a decision bound to a workflow run/state and publishes PolicyDecisionRecorded', async () =>
     withCorrelation('corr-bind-1', async () => {
       const input = buildDecisionInput();
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: input,
-        binding: { workflowRunId: randomUUID(), workflowState: 'awaiting_execution' },
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: input,
+          binding: { workflowRunId: randomUUID(), workflowState: 'awaiting_execution' },
+        },
+      );
 
       expect(decision.outcome).toBe('allow');
       const row = await prisma.policyDecision.findUnique({ where: { id: decision.id } });
@@ -156,9 +160,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
 
   it('an unconsumed decision consumes cleanly once, setting consumed_at', async () =>
     withCorrelation('corr-consume-1', async () => {
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
 
       await consumeDecision(decisions, CONTEXT, {
         decisionId: decision.id,
@@ -171,9 +179,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
 
   it('a second execution against the same decision is DECISION_ALREADY_CONSUMED (quickstart 35)', async () =>
     withCorrelation('corr-consume-2', async () => {
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
       await consumeDecision(decisions, CONTEXT, {
         decisionId: decision.id,
         presentedDigest: decision.proposalDigest,
@@ -189,9 +201,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
 
   it('altering the proposal after evaluation and presenting the new digest is DIGEST_MISMATCH (quickstart 36)', async () =>
     withCorrelation('corr-consume-3', async () => {
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
 
       await expect(
         consumeDecision(decisions, CONTEXT, {
@@ -210,11 +226,15 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
       // `deployment.rollback` registers as `reversible_remediation` (SEED_POLICY_ACTIONS), which
       // this tenant's only rule (`allowRule()`, `action.actionClass equals code_change`) never
       // matches — NO_MATCHING_RULE folds to the default DENY.
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput({
-          action: { actionKey: 'deployment.rollback', actionClass: 'reversible_remediation' },
-        }),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput({
+            action: { actionKey: 'deployment.rollback', actionClass: 'reversible_remediation' },
+          }),
+        },
+      );
       expect(decision.outcome).toBe('deny');
 
       await expect(
@@ -232,9 +252,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
 
   it('an invalidated decision refuses to consume even if its outcome was allow (batch 9 C1(a), review finding)', async () =>
     withCorrelation('corr-consume-invalidated', async () => {
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
       expect(decision.outcome).toBe('allow');
 
       // No application command sets `invalidated_reason` yet (Phase 4's `IssueStateChanged`
@@ -262,9 +286,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
 
   it('concurrent consumption of the same decision: exactly one attempt succeeds, the other sees ALREADY_CONSUMED', async () =>
     withCorrelation('corr-consume-4', async () => {
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
 
       const attempt = () =>
         consumeDecision(decisions, CONTEXT, {
@@ -284,9 +312,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
 
   it('a decision id under another tenant is not found, never leaking whether it exists', async () =>
     withCorrelation('corr-consume-5', async () => {
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      });
+      const { decision } = await evaluateAndBind(
+        { rulesets, decisions, autonomyEpochs, actions },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput(),
+        },
+      );
       const otherTenant = TenantContext.forTrustedInternalUse(
         '00000000-0000-0000-8000-0000000000f7',
       );
