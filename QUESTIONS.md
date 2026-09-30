@@ -1448,11 +1448,10 @@ rather than reading the code alone. Results:
    `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
    reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this
    path yet.
-2. **`dependency_observation`'s `layer`/`provenance` enums are duplicated, not shared, between
-   `packages/boundary-contract` and `packages/domain/architecture`** — see "004 T016/T017" below. A
-   deliberate choice under a real constraint (boundary-contract has zero workspace deps by design),
-   not an oversight, but flagged since "closed list, one authority" is a named rule this both does and
-   doesn't follow (each copy is individually closed; there are two of them). Not blocking.
+2. ~~`dependency_observation`'s `layer`/`provenance` enums duplicated between `boundary-contract` and
+   `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
+   found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
+   instead of duplicating, since the dependency already runs that direction). No longer open.
 
 ## 004 T012–T015 — judgment calls
 
@@ -1593,3 +1592,36 @@ adapters' `collect()` still can't cross-check that a `dependency_observation`'s 
 `layer`/`provenance` doesn't exceed the emitting adapter's own fixed constant — there's no ingestion
 code path to attach that check to yet (Phase 3/US1 isn't built, `collect()` only returns empty arrays).
 Comments updated to attribute this to Phase 3 rather than pointing at T017, which is now done.
+
+## Review of T016/T017 — the enum duplication resolved, everything else checked out clean
+
+Both reviews mutation-tested the actual guarantees rather than reading the diff (removed `.strict()`
+and confirmed T016's test goes red; stripped required fields from each of the four T017 sample
+payloads one at a time and confirmed each failure) and independently converged on the same single
+real finding: the `layer`/`provenance` duplication flagged as a judgment call above had a real fix,
+not just a documented tradeoff. `packages/domain/architecture` already depends on
+`@healer/boundary-contract` (the dependency direction I'd initially assumed only ran the other way
+when weighing the tradeoff) — so `ProvenanceClass`/`GraphLayer` now derive from
+`DependencyObservation['provenance']`/`['layer']` instead of being hand-copied, closing the gap to
+exactly one authority. Fixed directly (small, well-specified, no need for another agent round-trip);
+also fixed a wrong comment claiming a circular import that doesn't exist (only `index.ts` imports
+`discovery-shapes.ts`, never the reverse).
+
+**Noted, not fixed** (both reviews agree these are fine to leave):
+- Field-by-field accuracy, `.strict()` closure, the type re-exports into `discovery-adapter.ts`, and
+  the `runner-protocol.md` row updates were all independently verified correct by both reviews — no
+  further changes needed there.
+- The four types now carry a required `kind: '<shape>'` literal discriminant (needed because they're
+  `z.infer` members of `RunnerEvidence`'s discriminated union) that the old placeholder interfaces
+  didn't have — couples `DiscoveryFacts` (a domain-internal shape) to the wire-evidence tag. Not a bug
+  today (nothing constructs these objects yet, every adapter returns `EMPTY_FACTS`), but the Phase 3
+  implementer building real collection will need to stamp `kind` even before serializing as evidence —
+  flagged so it isn't a surprise, not something to pre-fix against an interface nobody's implemented
+  yet.
+- No protocol version bump for what is, in the abstract, a breaking wire-shape rename — correctly
+  harmless since nothing emits these shapes for real yet (every `collect()` returns empty arrays), so
+  bumping now would be premature.
+- graph-contract.md §3 itself says two things that pull against each other (an adapter's provenance is
+  fixed "with no field to say otherwise" vs. the same section's own table putting a free `provenance`
+  field on every `dependency_observation`) — already tracked above as the reason the three adapters'
+  comments defer the adapter-vs-observation cross-check to Phase 3. Not new, not re-litigated here.
