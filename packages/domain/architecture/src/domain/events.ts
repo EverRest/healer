@@ -50,14 +50,24 @@ export function discoveryDraftProposedEvent(
   };
 }
 
-export interface GraphVersionPublishedPayload {
+/**
+ * `actorRef` is required exactly when FR-010/FR-025 require one to have been recorded: a
+ * confirmation is a human action by construction, and a drift resolution is always a human
+ * adjudication (spec assumption — drift "terminates at human adjudication"). `manual_edit` and
+ * `rename` do not carry that same guarantee yet in this batch's scope (no command mints either one
+ * today), so their `actorRef` stays optional rather than falsely promising one. A discriminated
+ * union on `mintedBy` makes "confirmed with no actor" unrepresentable instead of merely unchecked
+ * (docs/patterns.md), which a single optional field could not do.
+ */
+export type GraphVersionPublishedPayload = {
   /** `graph_version.id` — the aggregate this event is about (outbox's `subjectId`). */
   readonly versionId: string;
   readonly version: number;
-  readonly mintedBy: 'confirmation' | 'manual_edit' | 'drift_resolution' | 'rename';
-  readonly actorRef?: string;
   readonly changedElementCounts: Readonly<Record<string, number>>;
-}
+} & (
+  | { readonly mintedBy: 'confirmation' | 'drift_resolution'; readonly actorRef: string }
+  | { readonly mintedBy: 'manual_edit' | 'rename'; readonly actorRef?: string }
+);
 
 /**
  * `GraphVersionPublished` (graph-contract.md §4): a confirmation, edit or drift resolution mints a
@@ -119,7 +129,9 @@ export interface GraphElementStalePayload {
 
 /**
  * `GraphElementStale` (graph-contract.md §4): an element passes its staleness window (FR-019).
- * Surfaced, never a deletion.
+ * Surfaced, never a deletion. The contract names `nodeId` as a payload field in its own right, not
+ * only as the outbox envelope's `subjectId` — a consumer reading `payload.nodeId` (review finding)
+ * must not get `undefined` because the id was only carried one level up.
  */
 export function graphElementStaleEvent(
   tenantId: string,
@@ -130,6 +142,6 @@ export function graphElementStaleEvent(
     tenantId,
     subjectId: payload.nodeId,
     correlationId: requireCorrelationId(),
-    payload: { lastObservedAt: payload.lastObservedAt.toISOString() },
+    payload: { nodeId: payload.nodeId, lastObservedAt: payload.lastObservedAt.toISOString() },
   };
 }

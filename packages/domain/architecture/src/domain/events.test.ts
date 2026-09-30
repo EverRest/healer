@@ -7,6 +7,25 @@ import {
   graphVersionPublishedEvent,
 } from './events.js';
 
+/** Type-checked by `tsc --build`, never invoked — calling it would need a correlated scope for no reason. */
+function typeProofNeverCalled(): void {
+  // @ts-expect-error 'confirmation' requires actorRef (FR-010) — mintedBy alone is not enough
+  graphVersionPublishedEvent('tenant-1', {
+    versionId: 'v1',
+    version: 1,
+    mintedBy: 'confirmation',
+    changedElementCounts: {},
+  });
+  // @ts-expect-error 'drift_resolution' requires actorRef too — a human adjudication always has one
+  graphVersionPublishedEvent('tenant-1', {
+    versionId: 'v1',
+    version: 1,
+    mintedBy: 'drift_resolution',
+    changedElementCounts: {},
+  });
+}
+void typeProofNeverCalled;
+
 describe('discoveryDraftProposedEvent (004 T014, graph-contract.md §4)', () => {
   it('carries draftId, runId, baseVersion and counts by op', () => {
     const event = withCorrelation('corr-1', () =>
@@ -68,16 +87,29 @@ describe('graphVersionPublishedEvent (004 T014, FR-014, SC-005)', () => {
     });
   });
 
-  it('omits actorRef when absent rather than publishing an empty string', () => {
+  it('omits actorRef when absent for a mintedBy that does not require one (manual_edit)', () => {
     const event = withCorrelation('corr-3', () =>
       graphVersionPublishedEvent('tenant-1', {
         versionId: 'version-row-2',
         version: 9,
-        mintedBy: 'drift_resolution',
+        mintedBy: 'manual_edit',
         changedElementCounts: { nodes: 1, edges: 0 },
       }),
     );
     expect('actorRef' in event.payload).toBe(false);
+  });
+
+  it('carries actorRef for a drift_resolution, which always names a human adjudication', () => {
+    const event = withCorrelation('corr-3b', () =>
+      graphVersionPublishedEvent('tenant-1', {
+        versionId: 'version-row-3',
+        version: 10,
+        mintedBy: 'drift_resolution',
+        actorRef: 'bob',
+        changedElementCounts: { nodes: 0, edges: 1 },
+      }),
+    );
+    expect(event.payload).toMatchObject({ mintedBy: 'drift_resolution', actorRef: 'bob' });
   });
 });
 
@@ -107,7 +139,7 @@ describe('graphDriftDetectedEvent (004 T014, FR-017, FR-018)', () => {
 });
 
 describe('graphElementStaleEvent (004 T014, FR-019)', () => {
-  it('carries nodeId and lastObservedAt as an ISO string', () => {
+  it('carries nodeId and lastObservedAt as an ISO string, in the payload itself (review fix — not only subjectId)', () => {
     const event = withCorrelation('corr-5', () =>
       graphElementStaleEvent('tenant-1', {
         nodeId: 'node-1',
@@ -119,7 +151,7 @@ describe('graphElementStaleEvent (004 T014, FR-019)', () => {
       tenantId: 'tenant-1',
       subjectId: 'node-1',
       correlationId: 'corr-5',
-      payload: { lastObservedAt: '2026-01-01T00:00:00.000Z' },
+      payload: { nodeId: 'node-1', lastObservedAt: '2026-01-01T00:00:00.000Z' },
     });
   });
 
