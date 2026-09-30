@@ -29,7 +29,8 @@
     "deps-check": "node scripts/gates/deps-check.mjs",
     "check:evidence-coverage": "node --env-file=.env scripts/checks/evidence-coverage.mjs",
     "check:append-only": "node --env-file=.env scripts/checks/append-only.mjs",
-    "check:expired-evidence": "node --env-file=.env scripts/checks/expired-evidence.mjs"
+    "check:expired-evidence": "node --env-file=.env scripts/checks/expired-evidence.mjs",
+    "check:decision-replay": "node --env-file=.env scripts/checks/decision-replay.mjs"
   },
   "devDependencies": {
     "@healer/domain-evidence": "workspace:*",
