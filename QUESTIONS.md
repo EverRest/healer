@@ -1473,3 +1473,76 @@ rather than reading the code alone. Results:
   explicitly normative and owned by 012, out of this session's scope to edit unilaterally. Whoever
   owns 012's contract (or picks up 004's next phase) should add the one-line wiring once they've
   looked at it.
+
+**Superseded by review** (see next entry): the gate is now wired into `make ci` and has a row in
+`specs/012-engineering-foundation/contracts/make-targets.md`, following the precedent that
+`gate-architecture-agnostic` — also 004-owned — already has one there. The caution above turned out
+to be more conservative than necessary once that precedent was checked.
+
+## Review of T012–T015 — the T015 gate was genuinely too weak, now substantially hardened
+
+Two independent reviews found the initial `gate-graph-confirm-capability` had real, reproduced
+bypasses, not just style nits — worth recording in detail since this is a security-relevant gate
+(R-09's "withheld by default" guarantee) and the failure mode (a check that *looks* like enforcement
+but isn't) is exactly what this repo's own patterns warn against.
+
+**Fixed**:
+- The pass condition was backwards for `apps/mcp-server`/`apps/worker`/`apps/api`: mentioning
+  `GRAPH_CONFIRM_CAPABILITY` passed the gate even when that mention *granted* the capability (e.g. a
+  tool declaring `requires: [GRAPH_CONFIRM_CAPABILITY]`). Now those three app roots fail on any
+  confirm-shaped match, no escape hatch; "must reference the constant" is scoped to
+  `**/application/commands/**` and `packages/domain/architecture/src/infrastructure/**` only, where
+  a real capability check is a legitimate thing to see.
+- `apps/runner/src` and `packages/agents` — exactly where the Change Agent/Verifier execute per ADR
+  0010 — weren't scanned at all. Now scanned, and `GRAPH_CONFIRM_CAPABILITY`/`'graph:confirm'` must
+  not appear there at all (that surface should never reference the capability — only a future
+  credential-issuing layer decides what a credential carries, and it isn't this).
+- The shared `scripts/lib/strip-comments.mjs` (also used by `gate-architecture-agnostic`,
+  `gate-isolation`, `gate-coverage-completeness`) did a naive `.replace(/\/\/.*$/gm, '')` — reproduced:
+  a line building a `"https://..."` string and registering a confirm-shaped tool in the same statement
+  made the tool registration invisible, with zero capability check, and this is common style, not a
+  contrived edge case. Rewritten on `ts.createScanner` (TypeScript's already a dependency, nothing new
+  added). **While rewriting it, a second, independent bug was found and fixed in the same pass**: the
+  scanner didn't know how to resume a template literal after a `${...}` interpolation closes, which
+  silently corrupted every token afterward — this actually broke `gate-architecture-agnostic` against
+  a real file (`packages/domain/evidence/src/domain/evidence-required.ts`, a "Prisma" mention inside a
+  doc comment after an earlier interpolated template) the moment the rewrite first landed. Fixed by
+  tracking template brace-depth and calling `reScanTemplateToken()`. All four affected gates re-verified
+  passing after both fixes.
+- Pattern was simultaneously too loose (missed `RejectDraftItems`/`approveDraftItems`/`acceptDraft` —
+  the spec's own language uses "accepted") and too narrow (only scanned `application/commands/**`,
+  missed `infrastructure/**`) and prone to false positives (would have flagged this same batch's own
+  `confirmationState` field). Fixed: word-bounded `reject|approve|accept` added, `confirmationState`
+  masked out, `infrastructure/**` now scanned, every issue reports `path:line` matching
+  `gate-architecture-agnostic`'s convention.
+- Not wired into the Makefile (`.PHONY`/target/`ci:` recipe) despite having its own CLI entry point —
+  fixed, matching `gate-architecture-agnostic`'s exact shape, plus the make-targets.md row noted above.
+
+**Accepted, not fixed — a documented, honest limit, not a gap someone missed**: a factory/loop tool
+registration pattern with a dynamically-constructed name (`'graph_' + 'confirm' + '_draft'`, or
+`[...].join('_')`) defeats the gate entirely — no glob or regex catches it, short of real static
+analysis this gate deliberately isn't. The gate's own header comment now says this plainly, and a test
+documents the gap as `KNOWN GAP` rather than pretending to catch it. **This is why the gate is framed
+as a best-effort structural drift detector, not the actual security boundary** — the real guarantee
+R-09 needs (no agent/automation credential ever carries `graph:confirm`) has to come from whatever
+eventually mints those credentials (002-policy's territory, not built yet) simply never including it
+in a closed capability list, the same "closed list, one authority" principle this repo already applies
+elsewhere. Nothing to escalate here — this is an engineering limitation everyone would agree on, not
+a decision.
+
+**Also fixed**: `ReadEnvelope.confirmationState` was a free parameter that could contradict its own
+`coverage` counts and, being a plain interface, was constructible without going through
+`toReadEnvelope`'s checks at all — now derived inside the constructor from `coverage` plus a
+`discovered: boolean` input, making the contradiction unrepresentable rather than merely unchecked.
+`graph-event-publisher.ts` (T014's four `publishX` wrappers) was deleted — no precedent anywhere in
+the repo (every existing emitter calls `enqueue(...)` directly at the mutation site) and zero real
+callers. `GraphElementStale`'s payload now carries `nodeId` (was only on the envelope's `subjectId`,
+so `payload.nodeId` would have been `undefined` against a consumer reading the contract literally).
+`GraphVersionPublishedPayload` is now a discriminated union on `mintedBy`: `'confirmation'`/
+`'drift_resolution'` require `actorRef` (FR-010), the other two leave it optional.
+
+**Deferred, noted, not fixed** (explicitly lower-value / expands blast radius for little gain):
+`changedElementCounts: Record<string, number>` stays loosely typed until a real consumer (006/008/011)
+exists to type it against; `requireCorrelationId()` remains duplicated a third time across
+`domain/architecture`/`domain/evidence`/`domain/issues` — pre-existing pattern, not introduced by this
+diff, and consolidating it means touching two already-shipped 001 packages for a nit.
