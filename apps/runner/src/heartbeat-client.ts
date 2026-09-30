@@ -53,6 +53,30 @@ export type HeartbeatResponse = z.infer<typeof heartbeatResponseSchema>;
 
 export class HeartbeatTransportError extends Error {}
 
+/**
+ * Categorises a heartbeat failure into one of a small, bounded set of signatures for the
+ * diagnostics bundle's error tally (012 T048, FR-024, `contracts/runner-protocol.md`'s Diagnostics
+ * (R-06) section: "the runner's own error signatures"). Never returns the original message: this
+ * function's three `HeartbeatTransportError` message shapes are all built by `sendHeartbeat` below
+ * from data this runner does not control — a network error's own text, a raw HTTP status, a zod
+ * validation message that can quote the control plane's response body verbatim — so passing any of
+ * them through unmodified would be exactly the "raw log/response body crosses into a support
+ * bundle" leak FR-023/FR-024 exist to prevent (the planted-marker test in main.test.ts covers this
+ * end to end). An unrecognised shape — this function's own three patterns changing without this
+ * function changing to match, or a thrown value that is not even an `Error` — still returns a
+ * fixed, bounded string rather than the value itself; there is no fallback path that echoes input.
+ */
+export function normalizeHeartbeatErrorSignature(error: unknown): string {
+  if (!(error instanceof HeartbeatTransportError)) return 'unexpected error';
+  if (error.message.startsWith('heartbeat POST failed:')) return 'network error';
+  const statusMatch = /^heartbeat POST returned (\d+)$/.exec(error.message);
+  if (statusMatch) return `non-2xx: ${statusMatch[1]}`;
+  if (error.message.startsWith('heartbeat response failed validation:')) {
+    return 'response validation failed';
+  }
+  return 'unexpected error';
+}
+
 /** A hung control plane must not pile up ticks indefinitely — bounded to a fraction of the
  *  heartbeat interval so a stuck request is abandoned well before the next tick would fire anyway,
  *  with a floor so a very short configured interval still leaves the request a fair chance. */

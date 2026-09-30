@@ -9,7 +9,7 @@
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-coverage-completeness runner-contract-test runner-compat-test runner-build
+	gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -115,3 +115,6 @@ runner-compat-test: ## Capability handshake across the version window and below 
 
 runner-build: ## Build apps/runner's image, tag healer-runner:<version>, refuse to rebuild in place (FR-017)
 	pnpm run runner-build
+
+runner-diagnostics: ## Signal a running runner (SIGUSR2) and print its support diagnostic bundle (FR-024)
+	pnpm run runner-diagnostics

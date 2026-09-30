@@ -1,11 +1,19 @@
+import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   createLogger,
+  getRunnerConfigPresence,
   loadRunnerConfig,
   newCorrelationId,
   withCorrelation,
   type RunnerConfig,
 } from '@healer/shared';
-import type { ControlPlaneDirective } from '@healer/boundary-contract';
+import {
+  buildDiagnosticsBundle,
+  type ControlPlaneDirective,
+  type DiagnosticsBundle,
+  type DiagnosticsConfigPresence,
+} from '@healer/boundary-contract';
 import {
   buildHeartbeatPayload,
   computeHeartbeatTimeoutMs,
@@ -17,6 +25,7 @@ import {
   dispatchDirectives,
   type DirectiveHandler,
 } from './directive-dispatcher.js';
+import { DiagnosticsState } from './diagnostics-state.js';
 
 type Logger = ReturnType<typeof createLogger>;
 
@@ -47,6 +56,9 @@ export interface HeartbeatCycleDeps {
   readonly seen: BoundedSeenSet;
   readonly handle: DirectiveHandler;
   readonly logger: Logger;
+  /** Accumulates latency, exchange sizes and error signatures for `make runner-diagnostics`
+   *  (012 T048, FR-024) — never anything from the payload itself, see `diagnostics-state.ts`. */
+  readonly diagnostics: DiagnosticsState;
   readonly fetchImpl?: typeof fetch;
 }
 
@@ -84,19 +96,102 @@ function logNonActiveStatus(response: HeartbeatResponse, logger: Logger): void {
  * Directives are dispatched unconditionally on every successful response, not just some of them.
  */
 export async function runHeartbeatCycle(deps: HeartbeatCycleDeps): Promise<void> {
-  const { config, seen, handle, logger, fetchImpl } = deps;
+  const { config, seen, handle, logger, diagnostics, fetchImpl } = deps;
+  const payload = buildHeartbeatPayload(config);
+  // Byte counts only, for the diagnostics bundle's exchange log (R-06: "schema identifier and
+  // size") — `JSON.stringify` output is measured for its length, never retained (main.test.ts's
+  // planted-marker test proves this end to end, not just at the type level).
+  const requestBytes = Buffer.byteLength(JSON.stringify(payload));
+  const startedAt = Date.now();
   let response: HeartbeatResponse;
   try {
-    response = await sendHeartbeat(config, buildHeartbeatPayload(config), fetchImpl);
+    response = await sendHeartbeat(config, payload, fetchImpl);
   } catch (error) {
+    diagnostics.recordHeartbeatFailure(Date.now() - startedAt, requestBytes, error);
     logger.warn(
       { err: error instanceof Error ? error.message : String(error) },
       'heartbeat POST failed — will retry on the next interval',
     );
     return;
   }
+  diagnostics.recordHeartbeatSuccess(
+    Date.now() - startedAt,
+    requestBytes,
+    Buffer.byteLength(JSON.stringify(response)),
+  );
   logNonActiveStatus(response, logger);
   await dispatchDirectives(response.directives, seen, handle, logger);
+}
+
+/**
+ * Assembles the support diagnostic bundle from this process's current state (012 T048, FR-024).
+ * Pure given its four inputs — no I/O — so it is unit-testable (including the planted-marker test)
+ * without a real file or signal; `start()`'s `SIGUSR2` handler is the only caller that also writes
+ * the result to disk.
+ */
+export function buildRunnerDiagnosticsBundle(
+  config: RunnerConfig,
+  presence: DiagnosticsConfigPresence,
+  seen: BoundedSeenSet,
+  diagnostics: DiagnosticsState,
+): DiagnosticsBundle {
+  const state = diagnostics.snapshot();
+  return buildDiagnosticsBundle({
+    imageVersion: config.RUNNER_IMAGE_VERSION,
+    protocolVersion: config.RUNNER_PROTOCOL_VERSION,
+    capabilities: config.RUNNER_CAPABILITIES,
+    configuration: presence,
+    queueDepths: { directiveSeenSet: seen.size },
+    heartbeatLatencyHistogramMs: state.heartbeatLatencyHistogramMs,
+    errorSignatures: state.errorSignatures,
+    recentExchanges: state.recentExchanges,
+  });
+}
+
+/** Temp-file-then-rename so a reader (`scripts/runner-diagnostics.mjs`) can never observe a
+ *  half-written file — same atomicity pattern as `scripts/runner-build.mjs`'s stamp-file write. */
+export function writeDiagnosticsFile(bundle: DiagnosticsBundle, filePath: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmpPath, `${JSON.stringify(bundle, null, 2)}\n`);
+  renameSync(tmpPath, filePath);
+}
+
+function pidFilePath(config: RunnerConfig): string {
+  return join(config.RUNNER_DIAGNOSTICS_DIR, 'healer-runner.pid');
+}
+
+function diagnosticsFilePath(config: RunnerConfig): string {
+  return join(config.RUNNER_DIAGNOSTICS_DIR, 'healer-runner-diagnostics.json');
+}
+
+/** Best-effort: a pidfile failure must never take down the runner's actual job (heartbeating) —
+ *  this is a support convenience, not the liveness signal itself. */
+function writePidFileBestEffort(config: RunnerConfig, logger: Logger): void {
+  try {
+    mkdirSync(config.RUNNER_DIAGNOSTICS_DIR, { recursive: true });
+    writeFileSync(pidFilePath(config), `${process.pid}\n`);
+  } catch (error) {
+    logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      'failed to write runner pidfile — make runner-diagnostics will not find this process at its default path',
+    );
+  }
+}
+
+function removePidFileBestEffort(config: RunnerConfig, logger: Logger): void {
+  try {
+    unlinkSync(pidFilePath(config));
+  } catch (error) {
+    // A stale pidfile is a tolerable, known failure mode — scripts/runner-diagnostics.mjs checks
+    // liveness before trusting a pid it reads from one, so this is cleanup, not a guarantee.
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'failed to remove runner pidfile',
+      );
+    }
+  }
 }
 
 export interface RunnerHandle {
@@ -111,9 +206,11 @@ const DRAIN_SAFETY_MARGIN_MS = 2_000;
 
 export function start(): RunnerHandle {
   const config = loadRunnerConfig();
+  const presence = getRunnerConfigPresence();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-runner' });
   const seen = new BoundedSeenSet(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE);
   const handle = createLoggingDirectiveHandler(logger);
+  const diagnostics = new DiagnosticsState();
 
   // Derived from `sendHeartbeat`'s own abort timeout for *this* config, not a fixed constant
   // (012 T050 review): a fixed 10s bound was actually *shorter* than the default heartbeat
@@ -134,7 +231,7 @@ export function start(): RunnerHandle {
 
   const tick = (): void => {
     inFlight = withCorrelation(newCorrelationId(), () =>
-      runHeartbeatCycle({ config, seen, handle, logger }),
+      runHeartbeatCycle({ config, seen, handle, logger, diagnostics }),
     ).catch((error: unknown) => {
       logger.error(
         { err: error instanceof Error ? error.message : String(error) },
@@ -146,11 +243,33 @@ export function start(): RunnerHandle {
   tick();
   const interval = setInterval(tick, config.RUNNER_HEARTBEAT_INTERVAL_MS);
 
+  // 012 T048, FR-024: a support diagnostic bundle, written to a local file on SIGUSR2 — never a
+  // listening socket, even for this. `apps/runner` cannot expose an admin/diagnostics endpoint
+  // without breaking the one guarantee T045 exists for (this file's own top-of-file doc comment);
+  // a POSIX signal plus a file on disk is the outbound-only-compatible equivalent, following the
+  // exact precedent already set below for SIGTERM/SIGINT. `scripts/runner-diagnostics.mjs`
+  // (`make runner-diagnostics`) is what sends this signal and reads the file back.
+  writePidFileBestEffort(config, logger);
+  const onDiagnosticsSignal = (): void => {
+    try {
+      const bundle = buildRunnerDiagnosticsBundle(config, presence, seen, diagnostics);
+      writeDiagnosticsFile(bundle, diagnosticsFilePath(config));
+    } catch (error) {
+      logger.error(
+        { err: error instanceof Error ? error.message : String(error) },
+        'failed to write diagnostics bundle on SIGUSR2',
+      );
+    }
+  };
+  process.on('SIGUSR2', onDiagnosticsSignal);
+
   return {
     close: async () => {
+      process.off('SIGUSR2', onDiagnosticsSignal);
       clearInterval(interval); // no new tick starts after this
       const timeout = new Promise<void>((resolve) => setTimeout(resolve, drainTimeoutMs));
       await Promise.race([inFlight, timeout]);
+      removePidFileBestEffort(config, logger);
     },
   };
 }

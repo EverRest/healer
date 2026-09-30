@@ -30,6 +30,16 @@ describe('BoundedSeenSet (012 T051, FR-028)', () => {
     expect(seen.hasSeen('a')).toBe(true);
   });
 
+  it("reports its current occupancy via .size — 012 T048, the diagnostics bundle's queue depth", () => {
+    const seen = new BoundedSeenSet(2);
+    expect(seen.size).toBe(0);
+    seen.markSeen('a');
+    expect(seen.size).toBe(1);
+    seen.markSeen('b');
+    seen.markSeen('c'); // overflow: 'a' evicted, size stays at the bound
+    expect(seen.size).toBe(2);
+  });
+
   it('drops the oldest id on overflow, same drop-oldest policy as OutboundBuffer', () => {
     const seen = new BoundedSeenSet(2);
     seen.markSeen('a');

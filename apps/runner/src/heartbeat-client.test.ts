@@ -3,6 +3,7 @@ import type { RunnerConfig } from '@healer/shared';
 import {
   buildHeartbeatPayload,
   HeartbeatTransportError,
+  normalizeHeartbeatErrorSignature,
   sendHeartbeat,
 } from './heartbeat-client.js';
 
@@ -19,6 +20,7 @@ const config: RunnerConfig = Object.freeze({
   RUNNER_MAX_CONCURRENT_RUNS: 3,
   RUNNER_HEARTBEAT_INTERVAL_MS: 30_000,
   RUNNER_DIRECTIVE_SEEN_SET_SIZE: 200,
+  RUNNER_DIAGNOSTICS_DIR: '/tmp',
 });
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -114,6 +116,45 @@ describe('sendHeartbeat (012 T045 — the runner initiates, outbound only)', () 
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({ status: 'not-a-real-status' }));
     await expect(sendHeartbeat(config, buildHeartbeatPayload(config), fetchImpl)).rejects.toThrow(
       HeartbeatTransportError,
+    );
+  });
+});
+
+describe("normalizeHeartbeatErrorSignature (012 T048 — the diagnostics bundle's own error tally, FR-024)", () => {
+  it('categorises a network-level failure without keeping the underlying message', () => {
+    const error = new HeartbeatTransportError('heartbeat POST failed: MARKER-CONNECTION-DETAIL');
+    const signature = normalizeHeartbeatErrorSignature(error);
+    expect(signature).toBe('network error');
+    expect(signature).not.toContain('MARKER-CONNECTION-DETAIL');
+  });
+
+  it('categorises a non-2xx response by status code alone', () => {
+    const signature = normalizeHeartbeatErrorSignature(
+      new HeartbeatTransportError('heartbeat POST returned 503'),
+    );
+    expect(signature).toBe('non-2xx: 503');
+  });
+
+  it('categorises a response-validation failure without keeping the zod error detail', () => {
+    const error = new HeartbeatTransportError(
+      'heartbeat response failed validation: MARKER-ZOD-DETAIL received value MARKER-BAD-STATUS',
+    );
+    const signature = normalizeHeartbeatErrorSignature(error);
+    expect(signature).toBe('response validation failed');
+    expect(signature).not.toContain('MARKER-ZOD-DETAIL');
+    expect(signature).not.toContain('MARKER-BAD-STATUS');
+  });
+
+  it('falls back to a bounded category for an error this function does not recognise, never the raw message', () => {
+    const signature = normalizeHeartbeatErrorSignature(new Error('MARKER-UNEXPECTED-DETAIL'));
+    expect(signature).toBe('unexpected error');
+    expect(signature).not.toContain('MARKER-UNEXPECTED-DETAIL');
+  });
+
+  it('never throws on a non-Error thrown value', () => {
+    expect(() => normalizeHeartbeatErrorSignature('MARKER-STRING-THROW')).not.toThrow();
+    expect(normalizeHeartbeatErrorSignature('MARKER-STRING-THROW')).not.toContain(
+      'MARKER-STRING-THROW',
     );
   });
 });

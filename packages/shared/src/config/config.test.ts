@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigurationError, loadConfig, loadRunnerConfig } from './index.js';
+import {
+  ConfigurationError,
+  getRunnerConfigPresence,
+  loadConfig,
+  loadRunnerConfig,
+} from './index.js';
 
 const valid = {
   DATABASE_URL: 'postgresql://healer:healer@localhost:5432/healer',
@@ -96,5 +101,36 @@ describe('loadRunnerConfig (012 T045 — apps/runner has no DATABASE_URL/REDIS_U
   it('accepts the longest heartbeat interval that still keeps the drain timeout safely under the shipped stop_grace_period', () => {
     const config = loadRunnerConfig({ ...validRunner, RUNNER_HEARTBEAT_INTERVAL_MS: '32000' });
     expect(config.RUNNER_HEARTBEAT_INTERVAL_MS).toBe(32_000);
+  });
+});
+
+describe('getRunnerConfigPresence (012 T048 — configuration reduced to presence-only, FR-024)', () => {
+  it('reports every key present in source as "set", regardless of what loadRunnerConfig later does with it', () => {
+    const presence = getRunnerConfigPresence(validRunner);
+    for (const key of Object.keys(validRunner)) {
+      expect(presence[key]).toBe('set');
+    }
+  });
+
+  it('reports a key absent from source as "default"', () => {
+    const presence = getRunnerConfigPresence(validRunner);
+    expect(presence.RUNNER_CPU_LIMIT).toBe('default');
+    expect(presence.LOG_LEVEL).toBe('default');
+    expect(presence.RUNNER_HEARTBEAT_INTERVAL_MS).toBe('default');
+  });
+
+  it('covers exactly the runner schema key set — one authority, not a hand-maintained copy', () => {
+    const presence = getRunnerConfigPresence(validRunner);
+    const config = loadRunnerConfig(validRunner);
+    expect(Object.keys(presence).sort()).toEqual(Object.keys(config).sort());
+  });
+
+  it('never carries a value, even when the value itself is a planted marker', () => {
+    const presence = getRunnerConfigPresence({
+      ...validRunner,
+      RUNNER_NAME: 'MARKER-PLANTED-CONFIG-VALUE',
+    });
+    expect(JSON.stringify(presence)).not.toContain('MARKER-PLANTED-CONFIG-VALUE');
+    expect(presence.RUNNER_NAME).toBe('set');
   });
 });

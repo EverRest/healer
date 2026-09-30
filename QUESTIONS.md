@@ -31,7 +31,7 @@ ahead of the thing that owns it. Waits for Phase 13's diff infra.
 
 001's repository/controller pattern (`packages/domain/issues`) and `apps/runner` having real
 source have unblocked all six deferred phase-6 tasks (roadmap.md's own "Next" note, 2026-09-28).
-Working through them now in `worktree-012-runner`.
+All six (T042, T045, T046, T047, T048, T049–T051) are now landed in `worktree-012-runner`.
 
 - **No registry or hosting exists for the runner image, and none is invented here.**
   `make runner-build` builds and tags the image locally and stamps version + digest
@@ -380,6 +380,136 @@ verify:**
   real Prisma file content remains anywhere — this is purely leftover symlink aliases with nothing
   behind them, not a functional leak. Not worth a third fix round; noted here in case a future
   `find -iname '*prisma*'`-style audit of the image is confused by it.
+
+### T048 landed — `make runner-diagnostics`, the last deferred phase-6 task
+
+`packages/boundary-contract/src/diagnostics.ts` (pure bundle shape + assembler),
+`apps/runner/src/diagnostics-state.ts` (runner-local accumulation), `apps/runner/src/main.ts`
+(instrumentation + `SIGUSR2` dump-to-file), `scripts/runner-diagnostics.mjs` (`make
+runner-diagnostics`). `typecheck`/`lint`/`format-check`/`test-unit` all green (515 tests); the
+FR-023 planted-marker test applied to this bundle (FR-024's own explicit requirement) passes; a
+plain-process (non-Docker) e2e test proves the real `SIGUSR2`-dump-and-read cycle against a
+spawned, compiled runner, and the finished target was also run by hand against a live spawned
+runner (pasted output below) and against no runner at all (fails clearly, both for an absent
+pidfile and for a stale one naming a dead pid).
+
+- **No listening socket, ever — a signal plus a file, not an admin endpoint.** The task's own
+  framing already ruled this out explicitly, and it is the one constraint this whole feature (T045)
+  exists to guarantee; `SIGUSR2` on the exact precedent already set by `SIGTERM`/`SIGINT` in
+  `main.ts`, dumping to a local file, is the outbound-only-compatible equivalent. `close()` now also
+  does `process.off('SIGUSR2', ...)` and removes the pidfile — hygiene `SIGTERM`/`SIGINT`'s own
+  process-level `process.exit(0)` never needed, since this handler is registered per-`start()` call
+  and `start()` is called directly (and repeatedly, across tests) outside the CLI guard too.
+- **Where the pure bundle shape lives: `packages/boundary-contract`, not `apps/runner`** — same
+  precedent as `handshake.ts`/`runner-registration.ts`: a pure shape plus a pure assembler with no
+  process state, importable without pulling in Prisma or anything runner-process-specific.
+  Deliberately decoupled from `RunnerConfig` itself (the builder takes plain primitives, not a
+  `RunnerConfig` object) so this package gains no new dependency on `@healer/shared` for it. The
+  *stateful* accumulation (the histogram, the ring buffer, the error tally) is genuinely
+  runner-process-specific and lives in `apps/runner/src/diagnostics-state.ts` instead — the same
+  split T042 already drew between `findStaleRunners` (shared, pure) and its Prisma repository
+  (`apps/api`-local).
+- **"Configuration reduced to presence-only" — solved by reading `source` directly, not by
+  widening `loadRunnerConfig`'s return type.** `loadRunnerConfig`'s frozen, parsed `RunnerConfig`
+  cannot distinguish an explicit value from a default that happens to match it once parsed. Added
+  `getRunnerConfigPresence(source)` (same file, same `source` parameter `loadRunnerConfig` already
+  takes) that derives the key list from `runnerSchema.shape` — one authority, not a second
+  hand-maintained key array — and reports `'set'` when `Object.hasOwn(source, key)`, `'default'`
+  otherwise. Never the value, by construction: the function's own return type has no slot for one.
+- **A new config key, `RUNNER_DIAGNOSTICS_DIR`, not a hardcoded `apps/runner/dist/` path** — a
+  real correctness finding, not a style preference. `apps/runner/Dockerfile`'s runtime stage `COPY`s
+  `apps/runner/dist` as `root` and then runs as `USER node` (a deliberate T050 hardening); a
+  non-root process cannot write a diagnostics dump or pidfile into a root-owned directory there
+  without an image change this task has no reason to make. Defaults to `os.tmpdir()` (writable by
+  the runtime user both in a plain process and in the shipped Alpine image), configurable so a host
+  running more than one runner instance — or this feature's own e2e test — can give each instance
+  its own path instead of colliding on one fixed file. Threaded through the schema like every other
+  runner config value, not read directly in `main.ts` (the `process.env`-outside-`shared/config`
+  lint rule, R-01, applies to every `.ts` file, this one included).
+- **`make runner-diagnostics` finds the runner purely by PID — an explicit argument, `RUNNER_PID`,
+  or a pidfile the runner writes at startup (`RUNNER_PIDFILE` overrides its path).** There is no
+  registry or query endpoint to find a runner another way (same gap as "no registry exists for the
+  runner image" above, now also true of runner *processes*). This only reaches a process the
+  script's own OS can signal directly — a bare process, or a container run with a shared PID
+  namespace (`docker run --pid=host`). **A container run under Compose's own default, separate PID
+  namespace is a known, unsolved limitation**: `docker exec <container> kill -USR2 1` plus reading
+  the file back via a mounted volume or `docker cp`/`docker exec cat` is the equivalent there, not
+  built by this script — consistent with this task's own explicit guidance to avoid deep Docker
+  involvement for a diagnostics convenience, and worth a follow-up if/when `make runner-diagnostics`
+  needs to reach a Compose-deployed runner directly rather than one run locally for support.
+- **The FR-024 fields this bundle does not carry — `task outcomes`, `resource statistics`,
+  `contract-rejection counts`, `clock offset` — named in the spec's FR-024 prose but not in
+  `contracts/runner-protocol.md`'s own, more operational Diagnostics (R-06) section, and not built
+  here.** No task execution capability exists yet (T093+), no resource-statistics collector exists,
+  no contract-rejection counter exists, and no clock-offset field currently flows through the
+  heartbeat request at all (`buildHeartbeatPayload` in `heartbeat-client.ts` sends `name`,
+  `protocolVersion`, `imageVersion`, `capabilities`, `resourceLimits` — nothing else). This mirrors
+  T045's own "real evidence submission has no receiving endpoint yet" and T042's "the handshake
+  resolves against an empty requirement list" — reporting what is real rather than fabricating a
+  field with nothing behind it (AGENTS.md: source trust and honesty about gaps). The task's own
+  "What to build" list matches R-06's narrower, buildable set exactly; whoever adds task execution,
+  resource-statistics collection or clock-offset reporting to the heartbeat is also the one who
+  extends this bundle to carry them.
+- **The last-N-exchanges bound (`MAX_RECENT_EXCHANGES = 20`, `diagnostics-state.ts`) and the
+  histogram's eight fixed buckets are placeholders**, same status as `RUNNER_DIRECTIVE_SEEN_SET_SIZE`
+  and every other un-measured bound in this codebase — no real fleet exists yet to measure a useful
+  support window or latency distribution against.
+- **No metrics library** — a fixed bucket array plus a plain counter array is the whole histogram;
+  nothing here needed a new dependency.
+- **Docker was not needed for the signal-dump-and-read cycle itself** — a plain `child_process.spawn`
+  of the compiled `apps/runner/dist/main.js`, real `SIGUSR2`, real file read
+  (`apps/runner/main-diagnostics.e2e.test.ts`) proves the exact same `main.ts` signal-handling logic
+  a Docker container would, without the multi-hour host-contention cost this session's other Docker
+  work already paid (`runner-image.e2e.test.ts`'s own doc comment). The test builds
+  `apps/runner/dist/main.js` itself in `beforeAll` (same self-contained-build precedent as that file
+  and `scripts/runner-build.e2e.test.ts`) so it does not depend on an earlier `pnpm run
+  build`/`typecheck` already having run. One real bug caught while writing it: polling
+  `child.exitCode`/`child.signalCode` (Node-internal state, only updated once Node's own event loop
+  processes the spawned child's exit) with a *blocking* `execFileSync('sleep', ...)` poll loop never
+  works, because the blocking call never lets that event loop run — unlike polling *external* state
+  (`existsSync`, or `runner-image.e2e.test.ts`'s own `docker inspect` calls), which does not depend
+  on this process's own event loop turning over at all. Fixed by polling with a real, non-blocking
+  `await` (`node:timers/promises`'s `setTimeout`) instead.
+- **`make-targets.md`'s "Runner targets" table was missing `runner-diagnostics` entirely**, even
+  though `runner-protocol.md`'s Diagnostics (R-06) section already described its required behaviour
+  — a real, pre-existing documentation gap (a closed list with only two of its three real entries is
+  the same failure as having none, AGENTS.md). Added the row, matching R-06's own wording, so the
+  two documents agree.
+
+Pasted output from a real, hand-run `make runner-diagnostics` against a live, locally-spawned
+runner pointed at an unreachable control plane (`http://127.0.0.1:1`), confirming the mechanism end
+to end beyond the automated e2e test:
+
+```json
+{
+  "generatedAt": "2026-09-30T13:37:14.784Z",
+  "versions": { "imageVersion": "0.9.9-smoke", "protocolVersion": 1 },
+  "capabilities": [],
+  "configuration": {
+    "LOG_LEVEL": "set", "RUNNER_CONTROL_PLANE_URL": "set", "RUNNER_TENANT_ID": "set",
+    "RUNNER_NAME": "set", "RUNNER_IMAGE_VERSION": "set", "RUNNER_PROTOCOL_VERSION": "default",
+    "RUNNER_CAPABILITIES": "default", "RUNNER_CPU_LIMIT": "default",
+    "RUNNER_MEMORY_MB_LIMIT": "default", "RUNNER_MAX_CONCURRENT_RUNS": "default",
+    "RUNNER_HEARTBEAT_INTERVAL_MS": "set", "RUNNER_DIRECTIVE_SEEN_SET_SIZE": "default",
+    "RUNNER_DIAGNOSTICS_DIR": "set"
+  },
+  "queueDepths": { "directiveSeenSet": 0 },
+  "heartbeatLatencyHistogramMs": {
+    "bucketsMs": [50, 100, 250, 500, 1000, 2500, 5000, 10000],
+    "counts": [1, 0, 0, 0, 0, 0, 0, 0],
+    "overflowCount": 0
+  },
+  "errorSignatures": { "network error": 1 },
+  "recentExchanges": [
+    { "timestamp": "2026-09-30T13:37:06.901Z", "schema": "heartbeat-request", "byteSize": 154 }
+  ]
+}
+```
+
+Also confirmed: with no runner running (a graceful shutdown had already removed its own pidfile),
+`make runner-diagnostics` fails with `no runner pidfile at ... — is a runner running?`; against an
+explicit `RUNNER_PID` naming a process that does not exist, it fails with `no running process at
+pid ... — is the runner still running?`. Neither hangs or fabricates output.
 
 ## 001 data-model.md — fingerprint index exclusion set
 

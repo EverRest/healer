@@ -119,6 +119,7 @@ this file
 | `make runner-build` | build the image; stamp protocol version and image version |
 | `make runner-contract-test` | assert the evidence schema is closed — a free-form string field fails (R-04) |
 | `make runner-compat-test` | run the capability handshake across the supported version window and one version below the floor, asserting refusal (R-03) |
+| `make runner-diagnostics` | signal a running runner process (`SIGUSR2`, by PID or pidfile — no registry or query endpoint exists to find one another way) and print the support diagnostic bundle it dumps to a local file in response: versions, capability set, configuration reduced to presence-only, queue depths, timing histograms, the runner's own error signatures, and the last N exchanges as schema identifier and size — no customer data, no source, no log bodies (R-06, FR-024). Fails clearly, does not hang or fabricate output, when no runner process is found |
 
 ## Not in `ci`
 

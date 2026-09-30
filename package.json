@@ -36,7 +36,8 @@
     "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs",
     "runner-contract-test": "vitest run packages/boundary-contract/src/index.test.ts",
     "runner-compat-test": "vitest run packages/boundary-contract/src/handshake.test.ts",
-    "runner-build": "node scripts/runner-build.mjs"
+    "runner-build": "node scripts/runner-build.mjs",
+    "runner-diagnostics": "node scripts/runner-diagnostics.mjs"
   },
   "devDependencies": {
     "@healer/domain-evidence": "workspace:*",

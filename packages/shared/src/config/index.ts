@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os';
 import { z } from 'zod';
 
 /**
@@ -87,6 +88,21 @@ const runnerSchema = z.object({
    *  un-measured bound in this codebase (e.g. 001's `MAX_FINGERPRINT_FRAMES`) — no real fleet
    *  exists yet to measure in-flight directive concurrency against. */
   RUNNER_DIRECTIVE_SEEN_SET_SIZE: z.coerce.number().int().positive().default(200),
+  /**
+   * Where `make runner-diagnostics` (012 T048, FR-024) finds a running runner: the pidfile it
+   * writes at startup and the diagnostics bundle it dumps on `SIGUSR2` both live here. Defaults to
+   * `os.tmpdir()` rather than a path under the deployed image (e.g. `apps/runner/dist/`) on
+   * purpose — `apps/runner/Dockerfile`'s runtime stage `COPY`s that directory as `root` and then
+   * runs as `USER node`, so a non-root process could not write there without an image change this
+   * task has no reason to make; the OS temp directory is writable by the runtime user in both a
+   * plain local process and the shipped container image without one. Configurable, not hardcoded,
+   * so a host running more than one runner instance (or the e2e test proving this mechanism) can
+   * give each its own path instead of colliding on one fixed file.
+   */
+  RUNNER_DIAGNOSTICS_DIR: z
+    .string()
+    .min(1)
+    .default(() => tmpdir()),
 });
 
 export type RunnerConfig = Readonly<z.infer<typeof runnerSchema>>;
@@ -99,4 +115,26 @@ export function loadRunnerConfig(source: NodeJS.ProcessEnv = process.env): Runne
     );
   }
   return Object.freeze(parsed.data);
+}
+
+/**
+ * Which `runnerSchema` keys were explicitly set in `source` versus left to their default —
+ * "configuration reduced to presence-only" (012 T048, FR-024, `contracts/runner-protocol.md`'s
+ * Diagnostics (R-06) section). `runnerSchema.shape` is the one authority for the key list
+ * (AGENTS.md "a closed list has exactly one authority") — this never hand-maintains a second copy
+ * that could silently drift from it. Reports presence only, never the value: a config value can
+ * carry something a support bundle must never contain (a control-plane URL's credentials, a
+ * tenant id), which is exactly what R-06's "presence-only" wording rules out. `loadRunnerConfig`'s
+ * own frozen, parsed `RunnerConfig` cannot answer this question by itself — a default that happens
+ * to match what an operator would have typed is indistinguishable from an explicit value once
+ * parsed — so this reads `source` directly, the same parameter `loadRunnerConfig` already takes.
+ */
+export function getRunnerConfigPresence(
+  source: NodeJS.ProcessEnv = process.env,
+): Readonly<Record<string, 'set' | 'default'>> {
+  const presence: Record<string, 'set' | 'default'> = {};
+  for (const key of Object.keys(runnerSchema.shape)) {
+    presence[key] = Object.hasOwn(source, key) ? 'set' : 'default';
+  }
+  return Object.freeze(presence);
 }

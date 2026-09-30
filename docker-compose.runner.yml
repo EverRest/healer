@@ -56,4 +56,8 @@ services:
       - RUNNER_MAX_CONCURRENT_RUNS
       - RUNNER_HEARTBEAT_INTERVAL_MS
       - RUNNER_DIRECTIVE_SEEN_SET_SIZE
+      # `make runner-diagnostics` (012 T048) target directory for the pidfile and dumped
+      # diagnostics bundle — defaults to the container's own /tmp when unset, which the `node`
+      # user this image runs as can always write to (packages/shared/src/config/index.ts).
+      - RUNNER_DIAGNOSTICS_DIR
     # No `ports:` — outbound-only, nothing for the customer's network to expose or connect into.

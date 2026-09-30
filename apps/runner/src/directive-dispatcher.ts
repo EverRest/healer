@@ -42,6 +42,12 @@ export class BoundedSeenSet {
     return this.seen.has(id);
   }
 
+  /** Current occupancy — the diagnostics bundle's directive-idempotency queue depth (012 T048,
+   *  `contracts/runner-protocol.md`'s Diagnostics (R-06) section). */
+  get size(): number {
+    return this.order.length;
+  }
+
   /** Refreshes recency instead of no-op-ing on a re-mark, so a directive that keeps arriving
    *  (redelivered while still pending, or already executed) is the last one evicted — not evicted
    *  by the very redelivery that should keep it alive in the set. A plain FIFO seen-set, marked
