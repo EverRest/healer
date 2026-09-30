@@ -5,8 +5,10 @@ import {
   evaluateAndBind,
   publishRuleset,
   PrismaAutonomyEpochRepository,
+  PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  SEED_POLICY_ACTIONS,
   type DecisionInput,
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, withCorrelation } from '@healer/shared';
@@ -78,6 +80,12 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
     const rulesets = new PrismaPolicyRulesetRepository(prisma);
     const decisions = new PrismaPolicyDecisionRepository(prisma);
     const autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
+    const actions = new PrismaPolicyActionRepository(prisma);
+    for (const action of SEED_POLICY_ACTIONS) {
+      await prisma.policyAction.create({
+        data: { ...action, introducedAt: new Date('2026-01-01T00:00:00Z') },
+      });
+    }
 
     await withCorrelation(newCorrelationId(), async () => {
       await publishRuleset(rulesets, CONTEXT, {
@@ -99,7 +107,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
         ],
         publishedBy: 'pavlo',
       });
-      await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, CONTEXT, {
+      await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, {
         decisionInput: buildDecisionInput(),
       });
     });
@@ -121,6 +129,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
     const rulesets = new PrismaPolicyRulesetRepository(prisma);
     const decisions = new PrismaPolicyDecisionRepository(prisma);
     const autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
+    const actions = new PrismaPolicyActionRepository(prisma);
 
     await withCorrelation(newCorrelationId(), async () => {
       await publishRuleset(rulesets, tenant, {
@@ -137,7 +146,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
         ],
         publishedBy: 'pavlo',
       });
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, tenant, {
+      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, tenant, {
         decisionInput: buildDecisionInput(),
       });
       expect(decision.outcome).toBe('allow');

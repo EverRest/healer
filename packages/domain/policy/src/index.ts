@@ -34,8 +34,10 @@ export * from './domain/predicates/index.js';
 export { REASON_CODES, type ReasonCode } from './domain/reason-code.js';
 export type { CooldownBounds, ResolvedRuleset, Rule } from './domain/rule.js';
 export {
+  assertValidPredicates,
   computeRulesetDigest,
   DuplicateRuleKeyError,
+  RulesetPredicateInvalidError,
   type RuleBody,
 } from './domain/policy-ruleset.js';
 export {
@@ -48,6 +50,7 @@ export {
 export { computeProposalDigest } from './domain/proposal-digest.js';
 export {
   DecisionAlreadyConsumedError,
+  DecisionNotAllowedError,
   DigestMismatchError,
   type ConsumeDecisionInput,
   type DecisionBinding,
@@ -59,7 +62,10 @@ export {
 } from './domain/policy-decision-repository.js';
 export { publishRuleset } from './application/commands/publish-ruleset.js';
 export { evaluateAndBind } from './application/commands/evaluate-and-bind.js';
-export { NoPublishedRulesetError } from './application/resolve-ruleset-and-evaluate.js';
+export {
+  NoPublishedRulesetError,
+  UnregisteredActionError,
+} from './application/resolve-ruleset-and-evaluate.js';
 export { consumeDecision } from './application/commands/consume-decision.js';
 export {
   explainDecision,

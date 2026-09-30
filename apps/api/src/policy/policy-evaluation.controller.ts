@@ -12,6 +12,7 @@ import {
   ACTION_CEILING,
   explainDecision,
   NoPublishedRulesetError,
+  UnregisteredActionError,
   type PolicyActionRepository,
   type PolicyRulesetRepository,
 } from '@healer/domain-policy';
@@ -51,9 +52,11 @@ export class PolicyEvaluationController {
     }
 
     try {
-      const { decision, trace } = await explainDecision({ rulesets: this.rulesets }, context, {
-        decisionInput: parsed.data,
-      });
+      const { decision, trace } = await explainDecision(
+        { rulesets: this.rulesets, actions: this.actions },
+        context,
+        { decisionInput: parsed.data },
+      );
       return {
         outcome: decision.outcome,
         rulesetVersion: decision.rulesetVersion,
@@ -66,7 +69,7 @@ export class PolicyEvaluationController {
         reasonCodes: trace.reasonCodes,
       };
     } catch (error) {
-      if (error instanceof NoPublishedRulesetError) {
+      if (error instanceof NoPublishedRulesetError || error instanceof UnregisteredActionError) {
         throw new UnprocessableEntityException(error.message);
       }
       throw error;

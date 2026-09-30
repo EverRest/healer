@@ -82,6 +82,31 @@ export class DigestMismatchError extends HealerError {
   }
 }
 
+/** Refuses `consume()` for a decision that was never an `allow` (batch 9 C1(a), review finding):
+ *  the typed evaluation surface is supposed to be "the only way to obtain an ALLOW" (R-14) —
+ *  before this fix, `consume()` checked only `consumed_at`/`proposal_digest`, so a `deny` or
+ *  `require_approval` decision consumed cleanly and an executor calling it would proceed as if
+ *  permitted. `reason: 'outcome'` is a decision whose recorded `outcome !== 'allow'`; `reason:
+ *  'invalidated'` is a decision with a non-null `invalidated_reason` — the CHECK constraint
+ *  already forbids `consumed_at` and `invalidated_reason` both being set, so without this refusal
+ *  the raw `UPDATE` would hit that constraint as an unhandled Postgres error instead of a typed
+ *  one. One class covers both: to the caller, either reason means "this decision never authorized
+ *  the action," which is the fact that matters. */
+export class DecisionNotAllowedError extends HealerError {
+  constructor(
+    readonly decisionId: string,
+    readonly reason: 'outcome' | 'invalidated',
+  ) {
+    super(
+      'DECISION_NOT_ALLOWED',
+      reason === 'outcome'
+        ? `policy decision ${decisionId} did not resolve to allow and cannot be consumed`
+        : `policy decision ${decisionId} has been invalidated and cannot be consumed`,
+    );
+    this.name = 'DecisionNotAllowedError';
+  }
+}
+
 /**
  * `policy_decision` (T021/T023, data-model.md). Every method takes `TenantScoped` (T015).
  */
@@ -91,11 +116,15 @@ export interface PolicyDecisionRepository {
   record(where: TenantScoped<NewRecordedDecision>): Promise<RecordedDecision>;
 
   /**
-   * Single-use consumption (T023): `consumed_at IS NULL` else `DecisionAlreadyConsumedError`,
-   * `proposal_digest === presentedDigest` else `DigestMismatchError` — checked in that order,
-   * atomically against concurrent consumption of the same decision — then sets `consumed_at`.
-   * Throws `NotFoundError` (`@healer/shared`) for a decision id that does not resolve under this
-   * tenant.
+   * Single-use consumption (T023, hardened batch 9 C1(a)): checked in this order, atomically
+   * against concurrent consumption of the same decision, then sets `consumed_at` —
+   * `consumed_at IS NULL` else `DecisionAlreadyConsumedError`; `invalidated_reason IS NULL` else
+   * `DecisionNotAllowedError('invalidated')`; `outcome === 'allow'` else
+   * `DecisionNotAllowedError('outcome')`; `proposal_digest === presentedDigest` else
+   * `DigestMismatchError`. The outcome/invalidated checks come before the digest check
+   * deliberately: whether this decision ever authorized anything is a fact about the decision
+   * itself, independent of what the caller presents. Throws `NotFoundError` (`@healer/shared`)
+   * for a decision id that does not resolve under this tenant.
    */
   consume(where: TenantScoped<ConsumeDecisionInput>): Promise<void>;
 

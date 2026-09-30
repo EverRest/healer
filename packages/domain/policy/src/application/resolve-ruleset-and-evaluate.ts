@@ -1,6 +1,7 @@
 import { scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../domain/decision-input.js';
 import { evaluate, type Decision, type EvaluationTrace } from '../domain/evaluate.js';
+import type { PolicyActionRepository } from '../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../domain/policy-ruleset-repository.js';
 import type { Rule } from '../domain/rule.js';
 
@@ -17,8 +18,19 @@ export class NoPublishedRulesetError extends Error {
   }
 }
 
+/** `input.action.actionKey` is not a registered `policy_action.action_key` (batch 9 C1(b),
+ *  review finding): there is no `ALLOW` possible for an action nobody registered, so this refuses
+ *  rather than evaluating against whatever the caller happened to claim. */
+export class UnregisteredActionError extends Error {
+  constructor(readonly actionKey: string) {
+    super(`action key "${actionKey}" is not registered in policy_action`);
+    this.name = 'UnregisteredActionError';
+  }
+}
+
 export interface ResolveRulesetAndEvaluateRepos {
   readonly rulesets: ReadOnlyPolicyRulesetRepository;
+  readonly actions: PolicyActionRepository;
 }
 
 /**
@@ -30,13 +42,41 @@ export interface ResolveRulesetAndEvaluateRepos {
  *
  * Takes only a read-only ruleset dependency: nothing downstream of this function can reach a
  * write-capable repository method through it, by construction of `ReadOnlyPolicyRulesetRepository`
- * (T024/T026) rather than by this function choosing not to call one.
+ * (T024/T026) rather than by this function choosing not to call one. `PolicyActionRepository`
+ * (T014) has no write-capable method at all, so adding it here doesn't weaken that guarantee.
+ *
+ * Batch 9 C1(b), review finding: before this fix, `input.action.actionClass` was whatever the
+ * caller supplied, never cross-checked against the registry — a caller claiming a lower/wrong
+ * class got that class's ceiling instead of the real one, defeating FR-008's un-exceedable
+ * ceiling at the one point in the whole design meant to make that impossible. This looks up
+ * `actionKey` in `policy_action` and **overwrites** `actionClass` with the registry's own value
+ * before `evaluate()` ever sees it — chosen over removing `actionClass` from `DecisionInput`
+ * entirely because `evaluate()`/`ceiling.ts`/`predicates/*` (out of scope for this batch to touch)
+ * all read `action.actionClass` structurally off `DecisionInput`; splitting the type into a
+ * caller-facing shape without the field and an internal one with it would touch every test and
+ * fixture that builds a `DecisionInput` literal, for no additional safety over overwriting the one
+ * field this function already fully controls. The corrected `decisionInput` is returned alongside
+ * the decision so callers that persist it (`EvaluateAndBind`) record what was actually evaluated,
+ * not what was claimed — otherwise a replay of the stored (uncorrected) input would reintroduce
+ * this exact bug.
  */
 export async function resolveRulesetAndEvaluate(
   repos: ResolveRulesetAndEvaluateRepos,
   context: TenantContext,
   decisionInput: DecisionInput,
-): Promise<{ readonly decision: Decision; readonly trace: EvaluationTrace }> {
+): Promise<{
+  readonly decision: Decision;
+  readonly trace: EvaluationTrace;
+  readonly decisionInput: DecisionInput;
+}> {
+  const action = await repos.actions.findByKey(decisionInput.action.actionKey);
+  if (action === null) throw new UnregisteredActionError(decisionInput.action.actionKey);
+
+  const correctedInput: DecisionInput = {
+    ...decisionInput,
+    action: { ...decisionInput.action, actionClass: action.actionClass },
+  };
+
   const latest = await repos.rulesets.findLatest(scope(context, {}));
   if (latest === null) throw new NoPublishedRulesetError();
 
@@ -47,5 +87,6 @@ export async function resolveRulesetAndEvaluate(
     reasonCode: r.reasonCode,
   }));
 
-  return evaluate({ version: latest.version, rules }, decisionInput);
+  const { decision, trace } = evaluate({ version: latest.version, rules }, correctedInput);
+  return { decision, trace, decisionInput: correctedInput };
 }

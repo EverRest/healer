@@ -6,7 +6,7 @@ import {
   type PolicyRulesetRepository,
   type PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
-import { DuplicateRuleKeyError, type RuleBody } from '../../domain/policy-ruleset.js';
+import { DuplicateRuleKeyError, RulesetPredicateInvalidError, type RuleBody } from '../../domain/policy-ruleset.js';
 import type { ResolvedRuleset, Rule } from '../../domain/rule.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import { publishRuleset } from './publish-ruleset.js';
@@ -309,5 +309,66 @@ describe('publishRuleset — conflict warnings (T020, FR-006, quickstart 6)', ()
     const { decision } = evaluate(asResolvedRuleset(published), buildDecisionInput());
     expect(decision.outcome).toBe('deny');
     expect([...decision.matchedRuleKeys].sort()).toEqual(['allow-code-change', 'deny-code-change']);
+  });
+});
+
+// Batch 9 I2, review finding: publish-time predicate validation used to exist only at the HTTP DTO
+// edge — an in-process publish (a seed script, 011's future simulator) could store a rule set that
+// makes `evaluate()` throw. These calls go through `publishRuleset` directly, bypassing the HTTP
+// DTO entirely, to prove the domain layer itself validates, not just the DTO.
+describe('publishRuleset — predicate validation (I2, review finding)', () => {
+  it('rejects a quantity predicate comparing against a field in a different group', async () => {
+    const repo = new FakeRulesetRepo();
+    const rules = [
+      ruleBody({
+        ruleKey: 'bad-cross-group',
+        predicates: [
+          {
+            kind: 'quantity',
+            field: 'budget.consumed',
+            operator: 'atLeast',
+            value: { kind: 'field', field: 'cooldown.attemptCount' },
+          },
+        ],
+      }),
+    ];
+    await expect(publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' })).rejects.toThrow(
+      RulesetPredicateInvalidError,
+    );
+    expect(repo.calls).toEqual({ findByDigest: 0, findLatest: 0, publish: 0 });
+  });
+
+  it('rejects an instant predicate whose literal does not parse as a date', async () => {
+    const repo = new FakeRulesetRepo();
+    const rules = [
+      ruleBody({
+        ruleKey: 'bad-instant',
+        predicates: [
+          { kind: 'instant', field: 'evaluatedAt', operator: 'before', value: 'not-a-real-date' },
+        ],
+      }),
+    ];
+    await expect(publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' })).rejects.toThrow(
+      RulesetPredicateInvalidError,
+    );
+  });
+
+  it('accepts a quantity predicate comparing against a field in the same group', async () => {
+    const repo = new FakeRulesetRepo();
+    const rules = [
+      ruleBody({
+        ruleKey: 'ok-same-group',
+        predicates: [
+          {
+            kind: 'quantity',
+            field: 'budget.consumed',
+            operator: 'atMost',
+            value: { kind: 'field', field: 'budget.limit' },
+          },
+        ],
+      }),
+    ];
+    const published = await publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' });
+    expect(published.rules).toHaveLength(1);
   });
 });

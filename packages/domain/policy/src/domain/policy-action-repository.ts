@@ -37,6 +37,22 @@ export const SEED_POLICY_ACTIONS: readonly Omit<PolicyAction, 'introducedAt'>[] 
     mutating: true,
     owningSpec: '010',
   },
+  // `PublishRuleset` audits as `policy.publish_ruleset` (`publish-ruleset.ts`'s
+  // `PUBLISH_RULESET_AUDIT_ACTION`) — batch 9 I1, review finding: unregistered, this tripped
+  // batch 8's own `check:policy-coverage` LEFT-join fix on every ruleset publish, including this
+  // spec's own (a check that is red from day one has no reader). `mutating: false` because this
+  // action is not gated by `evaluate()` at all — a publish is an admin/config change, not a
+  // decision the ceiling applies to, so it never needs a consumed ALLOW behind it.
+  // `actionClass` has no clean fit in `ACTION_CLASSES` (none of the seven describe "an admin
+  // action over the policy engine itself"); `read_only` is the least wrong of them — it changes
+  // nothing about how the action is treated, since `mutating: false` already means no ceiling
+  // ever applies to it.
+  {
+    actionKey: 'policy.publish_ruleset',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
 ];
 
 /**

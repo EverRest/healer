@@ -207,6 +207,14 @@ ALTER TABLE "policy"."autonomy_grant" ADD CONSTRAINT "autonomy_grant_action_key_
 -- AddForeignKey
 ALTER TABLE "policy"."approval_request" ADD CONSTRAINT "approval_request_decision_id_tenant_id_fkey" FOREIGN KEY ("decision_id", "tenant_id") REFERENCES "policy"."policy_decision"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- AddForeignKey
+-- This should have had a FK from the start (batch 9 C1(b), review finding): `policy_decision`
+-- carries `action_key` as plain text, exactly the pre-FK shape `autonomy_grant.action_key` above
+-- was already fixed against. Without it, a decision could be recorded against an action key that
+-- resolves to nothing in the registry — the FK makes that state unrepresentable at the database
+-- layer, on top of `resolveRulesetAndEvaluate`'s own `UnregisteredActionError` refusal in code.
+ALTER TABLE "policy"."policy_decision" ADD CONSTRAINT "policy_decision_action_key_fkey" FOREIGN KEY ("action_key") REFERENCES "policy"."policy_action"("action_key") ON DELETE RESTRICT ON UPDATE CASCADE;
+
 -- policy_decision: consumed and invalidated are mutually exclusive terminal branches
 -- (data-model.md "State transitions" — no edge between them; SC-001's reconciliation invariant
 -- needs a decision to be unambiguously "executed" or not). A CHECK constraint covers INSERT as
@@ -247,6 +255,12 @@ CREATE TRIGGER policy_rule_no_truncate
 -- transition once, from null (data-model.md "State transitions" — a decision is issued once,
 -- then moves to consumed OR invalidated, never back, never both changing after the first write to
 -- either). DELETE is always rejected; every other column is frozen at insert.
+--
+-- Frozen by exclusion, not enumeration (batch 9 I3, review finding): comparing `to_jsonb(OLD)` and
+-- `to_jsonb(NEW)` with the two mutable columns subtracted out means a column added later (Phase
+-- 4's epoch, per `EvaluateAndBindResult`'s own doc comment) is frozen the moment it exists, rather
+-- than defaulting to mutable until someone remembers to list it here too — the same "closed list
+-- has exactly one authority" failure this migration's own column-by-column version used to repeat.
 CREATE OR REPLACE FUNCTION reject_policy_decision_mutation() RETURNS trigger AS $$
 BEGIN
   IF current_setting('healer.privileged_write', true) = 'on' THEN
@@ -255,25 +269,8 @@ BEGIN
   IF TG_OP = 'DELETE' THEN
     RAISE EXCEPTION 'policy_decision rows are append-only and cannot be deleted';
   END IF;
-  IF NOT (
-    OLD.id IS NOT DISTINCT FROM NEW.id AND
-    OLD.tenant_id IS NOT DISTINCT FROM NEW.tenant_id AND
-    OLD.issue_id IS NOT DISTINCT FROM NEW.issue_id AND
-    OLD.workflow_run_id IS NOT DISTINCT FROM NEW.workflow_run_id AND
-    OLD.workflow_state IS NOT DISTINCT FROM NEW.workflow_state AND
-    OLD.action_key IS NOT DISTINCT FROM NEW.action_key AND
-    OLD.target_ref IS NOT DISTINCT FROM NEW.target_ref AND
-    OLD.fingerprint IS NOT DISTINCT FROM NEW.fingerprint AND
-    OLD.proposal_digest IS NOT DISTINCT FROM NEW.proposal_digest AND
-    OLD.decision_input IS NOT DISTINCT FROM NEW.decision_input AND
-    OLD.ruleset_version IS NOT DISTINCT FROM NEW.ruleset_version AND
-    OLD.matched_rule_keys IS NOT DISTINCT FROM NEW.matched_rule_keys AND
-    OLD.outcome IS NOT DISTINCT FROM NEW.outcome AND
-    OLD.reason_codes IS NOT DISTINCT FROM NEW.reason_codes AND
-    OLD.ceiling_applied IS NOT DISTINCT FROM NEW.ceiling_applied AND
-    OLD.budget_state IS NOT DISTINCT FROM NEW.budget_state AND
-    OLD.evaluated_at IS NOT DISTINCT FROM NEW.evaluated_at
-  ) THEN
+  IF (to_jsonb(OLD) - 'consumed_at' - 'invalidated_reason')
+     IS DISTINCT FROM (to_jsonb(NEW) - 'consumed_at' - 'invalidated_reason') THEN
     RAISE EXCEPTION 'policy_decision rows are append-only; only consumed_at and invalidated_reason may change';
   END IF;
   IF OLD.consumed_at IS DISTINCT FROM NEW.consumed_at AND OLD.consumed_at IS NOT NULL THEN

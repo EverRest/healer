@@ -117,6 +117,7 @@ describe('/policy (002 T027-T030, T032)', () => {
   let rulesets: PrismaPolicyRulesetRepository;
   let decisions: PrismaPolicyDecisionRepository;
   let autonomyEpochs: PrismaAutonomyEpochRepository;
+  let actions: PrismaPolicyActionRepository;
 
   const path = (p: string) => `/api/v1${p}`;
 
@@ -128,18 +129,21 @@ describe('/policy (002 T027-T030, T032)', () => {
     // `policy_action` is global, seeded once for the whole database (mirrors `db-seed.mjs`'s own
     // copy of `SEED_POLICY_ACTIONS` — see that file's comment for why it is duplicated, not
     // imported, there; this test imports the real package since it runs under vitest, not plain
-    // `node` pre-build).
+    // `node` pre-build). `policy.publish_ruleset` added batch 9 I1 — this suite's own
+    // `POST /policy/rulesets` calls need it registered too, same as every other consumer.
     await query(
       pg,
       `insert into "policy"."policy_action" (action_key, action_class, mutating, owning_spec, introduced_at)
        values ('change.open_pull_request', 'code_change', true, '008', now()),
-              ('deployment.rollback', 'reversible_remediation', true, '010', now())`,
+              ('deployment.rollback', 'reversible_remediation', true, '010', now()),
+              ('policy.publish_ruleset', 'read_only', false, '002', now())`,
     );
 
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     rulesets = new PrismaPolicyRulesetRepository(prisma);
     decisions = new PrismaPolicyDecisionRepository(prisma);
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
+    actions = new PrismaPolicyActionRepository(prisma);
 
     const ApiModule = createApiModule(
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
@@ -152,7 +156,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       new PrismaEvidenceGraphRepository(prisma),
       rulesets,
       decisions,
-      new PrismaPolicyActionRepository(prisma),
+      actions,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -177,7 +181,7 @@ describe('/policy (002 T027-T030, T032)', () => {
     withCorrelation(newCorrelationId(), async () => {
       const tenant = TenantContext.forTrustedInternalUse(tenantId);
       await publishUnder(tenantId);
-      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, tenant, {
+      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, tenant, {
         decisionInput: buildDecisionInput(overrides),
       });
       return decision;
@@ -232,6 +236,51 @@ describe('/policy (002 T027-T030, T032)', () => {
             {
               ruleKey: 'bad-op',
               predicates: [{ field: 'evidence.complete', operator: 'atLeast', value: 1 }],
+              outcome: 'allow',
+              reasonCode: 'NO_ADOPTED_EXPECTATION',
+              note: '',
+            },
+          ],
+        })
+        .expect(422);
+    });
+
+    it('422s a quantity predicate comparing across groups (batch 9 I2, review finding: deferred from T006-T013 to T019, never picked up until now)', async () => {
+      await request(app.getHttpServer())
+        .post(path('/policy/rulesets'))
+        .set('X-Tenant-Id', TENANT_ID)
+        .set('X-Actor-Id', 'pavlo')
+        .set('Idempotency-Key', randomUUID())
+        .send({
+          rules: [
+            {
+              ruleKey: 'bad-cross-group-quantity',
+              // budget.consumed (group "budget") against cooldown.attemptCount (group "cooldown")
+              // — contracts/evaluation.md: "against a literal or against another field in the
+              // same group."
+              predicates: [
+                { field: 'budget.consumed', operator: 'atLeast', value: { kind: 'field', field: 'cooldown.attemptCount' } },
+              ],
+              outcome: 'allow',
+              reasonCode: 'NO_ADOPTED_EXPECTATION',
+              note: '',
+            },
+          ],
+        })
+        .expect(422);
+    });
+
+    it('422s an instant predicate with a literal that does not parse as a date (batch 9 I2, review finding)', async () => {
+      await request(app.getHttpServer())
+        .post(path('/policy/rulesets'))
+        .set('X-Tenant-Id', TENANT_ID)
+        .set('X-Actor-Id', 'pavlo')
+        .set('Idempotency-Key', randomUUID())
+        .send({
+          rules: [
+            {
+              ruleKey: 'bad-instant-literal',
+              predicates: [{ field: 'evaluatedAt', operator: 'before', value: 'not-a-date' }],
               outcome: 'allow',
               reasonCode: 'NO_ADOPTED_EXPECTATION',
               note: '',
@@ -367,6 +416,35 @@ describe('/policy (002 T027-T030, T032)', () => {
       expect(response.body.identical).toBe(false);
       expect(response.body.original).toMatchObject({ outcome: 'deny' });
       expect(response.body.replayed).toMatchObject({ outcome: 'allow' });
+    });
+
+    it('replays a decision recorded against a rule set with an instant predicate without throwing (batch 9 C2, review finding — reproduced)', async () => {
+      // Before the fix, `decision_input` round-tripped through JSONB with `evaluatedAt` as a
+      // string, and `matchesInstant`'s `.getTime()` threw — this hit exactly this endpoint (500)
+      // for any decision recorded against an instant-predicate rule.
+      const tenantId = randomUUID();
+      await publishUnder(tenantId, [
+        allowRule({
+          ruleKey: `instant-${randomUUID()}`,
+          predicates: [
+            { kind: 'instant', field: 'evaluatedAt', operator: 'after', value: '2020-01-01T00:00:00.000Z' },
+          ],
+        }),
+      ]);
+      const decision = await withCorrelation(newCorrelationId(), async () => {
+        const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, TenantContext.forTrustedInternalUse(tenantId), {
+          decisionInput: buildDecisionInput(),
+        });
+        return decision;
+      });
+      expect(decision.outcome).toBe('allow');
+
+      const response = await request(app.getHttpServer())
+        .post(path(`/policy/decisions/${decision.id}/replay`))
+        .set('X-Tenant-Id', tenantId)
+        .expect(200);
+      expect(response.body.identical).toBe(true);
+      expect(response.body.replayed.outcome).toBe('allow');
     });
   });
 

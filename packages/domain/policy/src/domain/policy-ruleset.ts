@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { HealerError } from '@healer/shared';
 import { canonicalize } from './canonicalize.js';
 import type { Outcome } from './outcome-lattice.js';
+import { validatePredicateShape } from './predicates/validate.js';
 import type { PredicateConjunction } from './predicates/types.js';
 import type { ReasonCode } from './reason-code.js';
 import { type ConflictWarning } from './conflict-warnings.js';
@@ -70,6 +71,31 @@ export function assertUniqueRuleKeys(rules: readonly RuleBody[]): void {
   for (const rule of rules) {
     if (seen.has(rule.ruleKey)) throw new DuplicateRuleKeyError(rule.ruleKey);
     seen.add(rule.ruleKey);
+  }
+}
+
+/** Batch 9 I2, review finding: publish-time predicate validation used to exist only at the HTTP
+ *  DTO edge (`apps/api/src/policy/publish-ruleset.dto.ts`) — an in-process publish (a seed script,
+ *  011's future simulator) could store a rule set that makes `evaluate()` throw. `RULESET_INVALID`
+ *  has no entry in `@healer/shared`'s closed `ErrorCode` union, so this maps to `VALIDATION`, the
+ *  same substitution `DuplicateRuleKeyError` above already makes and the DTO's own header already
+ *  flags for the HTTP boundary. */
+export class RulesetPredicateInvalidError extends HealerError {
+  constructor(
+    readonly ruleKey: string,
+    readonly reason: string,
+  ) {
+    super('VALIDATION', `rule "${ruleKey}": ${reason}`);
+    this.name = 'RulesetPredicateInvalidError';
+  }
+}
+
+export function assertValidPredicates(rules: readonly RuleBody[]): void {
+  for (const rule of rules) {
+    for (const predicate of rule.predicates) {
+      const violation = validatePredicateShape(predicate);
+      if (violation !== null) throw new RulesetPredicateInvalidError(rule.ruleKey, violation);
+    }
   }
 }
 

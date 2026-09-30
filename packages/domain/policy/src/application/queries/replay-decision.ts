@@ -35,6 +35,7 @@ export async function replayDecision(
     readonly decisionInput: DecisionInput;
     readonly rulesetVersion: number;
     readonly outcome: Decision['outcome'];
+    readonly matchedRuleKeys: readonly string[];
   },
 ): Promise<{ readonly identical: boolean; readonly replayed: Decision }> {
   const ruleset = await repos.rulesets.findByVersion(
@@ -50,5 +51,19 @@ export async function replayDecision(
   }));
 
   const { decision } = evaluate({ version: ruleset.version, rules }, stored.decisionInput);
-  return { identical: decision.outcome === stored.outcome, replayed: decision };
+  // data-model.md's Invariants: "`evaluate(ruleset_version, decision_input) = (outcome,
+  // matched_rule_keys)` replays identically" — both halves of that pair, not only `outcome`
+  // (batch 9 C2, review finding: comparing outcome alone would call two decisions identical even
+  // when a different set of rules matched to reach the same fold result).
+  const identical =
+    decision.outcome === stored.outcome &&
+    sameRuleKeys(decision.matchedRuleKeys, stored.matchedRuleKeys);
+  return { identical, replayed: decision };
+}
+
+function sameRuleKeys(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((key, i) => key === sortedB[i]);
 }

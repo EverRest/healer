@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { TenantContext } from '@healer/shared';
+import type { ActionClass } from '../../domain/action-class.js';
+import type { PolicyAction, PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type {
   ReadOnlyPolicyRulesetRepository,
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
-import { NoPublishedRulesetError } from '../resolve-ruleset-and-evaluate.js';
+import { NoPublishedRulesetError, UnregisteredActionError } from '../resolve-ruleset-and-evaluate.js';
 import { explainDecision, type ExplainDecisionRepos } from './explain-decision.js';
 
 const CONTEXT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000d2');
@@ -60,8 +62,38 @@ class ReadOnlyFakeRulesetRepo implements ReadOnlyPolicyRulesetRepository {
   }
 }
 
+/** `change.open_pull_request` → `code_change` by default, matching `buildDecisionInput`'s own
+ *  fixture — batch 9 C1(b) made `actions` a required `ExplainDecisionRepos` dependency. */
+class FakeActionRepo implements PolicyActionRepository {
+  constructor(
+    private readonly byKey: ReadonlyMap<string, ActionClass> = new Map([
+      ['change.open_pull_request', 'code_change'],
+    ]),
+  ) {}
+  async findByKey(actionKey: string): Promise<PolicyAction | null> {
+    const actionClass = this.byKey.get(actionKey);
+    if (actionClass === undefined) return null;
+    return {
+      actionKey,
+      actionClass,
+      mutating: true,
+      owningSpec: 'test',
+      introducedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+  }
+  async list(): Promise<readonly PolicyAction[]> {
+    return [...this.byKey.entries()].map(([actionKey, actionClass]) => ({
+      actionKey,
+      actionClass,
+      mutating: true,
+      owningSpec: 'test',
+      introducedAt: new Date('2026-01-01T00:00:00Z'),
+    }));
+  }
+}
+
 describe('ExplainDecision — structural read-only guarantee (T026, R-08, quickstart 32)', () => {
-  it('ReadOnlyPolicyRulesetRepository, the only type ExplainDecisionRepos names, has no write-shaped method', () => {
+  it('ReadOnlyPolicyRulesetRepository, one of the two types ExplainDecisionRepos names, has no write-shaped method', () => {
     const repo = new ReadOnlyFakeRulesetRepo(published());
     for (const mutatingMethod of [
       'publish',
@@ -80,7 +112,10 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
   });
 
   it('a repos value typed as ExplainDecisionRepos cannot reach `.publish` — compile-time, not runtime', () => {
-    const repos: ExplainDecisionRepos = { rulesets: new ReadOnlyFakeRulesetRepo(published()) };
+    const repos: ExplainDecisionRepos = {
+      rulesets: new ReadOnlyFakeRulesetRepo(published()),
+      actions: new FakeActionRepo(),
+    };
     // @ts-expect-error — `rulesets` is `ReadOnlyPolicyRulesetRepository`; `publish` is not a
     // member of that type. If this stops being a type error (e.g. someone widens
     // `ExplainDecisionRepos.rulesets` back to `PolicyRulesetRepository`), `tsc` fails on the
@@ -94,7 +129,7 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
 describe('explainDecision (T024)', () => {
   it('returns the decision and trace for the current published ruleset, persisting nothing observable to this handler', async () => {
     const result = await explainDecision(
-      { rulesets: new ReadOnlyFakeRulesetRepo(published()) },
+      { rulesets: new ReadOnlyFakeRulesetRepo(published()), actions: new FakeActionRepo() },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
     );
@@ -105,9 +140,55 @@ describe('explainDecision (T024)', () => {
 
   it('refuses when no ruleset has ever been published for the tenant', async () => {
     await expect(
-      explainDecision({ rulesets: new ReadOnlyFakeRulesetRepo(null) }, CONTEXT, {
-        decisionInput: buildDecisionInput(),
-      }),
+      explainDecision(
+        { rulesets: new ReadOnlyFakeRulesetRepo(null), actions: new FakeActionRepo() },
+        CONTEXT,
+        { decisionInput: buildDecisionInput() },
+      ),
     ).rejects.toThrow(NoPublishedRulesetError);
+  });
+
+  it('resolves actionClass from the registry, not the caller (batch 9 C1(b), review finding)', async () => {
+    // Claimed class `read_only` would match this rule (equals code_change fails) — no, deliberately
+    // uses a rule that matches on the *corrected* class, so a passing result proves the registry's
+    // class is what evaluation actually saw, not the caller's claim.
+    const rulesetMatchingRealClass = published({
+      rules: [
+        {
+          ruleKey: 'allow-merge-class',
+          predicates: [
+            { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'merge' },
+          ],
+          outcome: 'allow',
+          reasonCode: 'NO_ADOPTED_EXPECTATION',
+          note: '',
+        },
+      ],
+    });
+    const actions = new FakeActionRepo(new Map([['merge.something', 'merge']]));
+    const result = await explainDecision(
+      { rulesets: new ReadOnlyFakeRulesetRepo(rulesetMatchingRealClass), actions },
+      CONTEXT,
+      {
+        decisionInput: buildDecisionInput({
+          action: { actionKey: 'merge.something', actionClass: 'read_only' },
+        }),
+      },
+    );
+    expect(result.trace.matchedRules).toEqual([{ ruleKey: 'allow-merge-class', outcome: 'allow' }]);
+  });
+
+  it('refuses an unregistered action key rather than evaluating against whatever the caller claims', async () => {
+    await expect(
+      explainDecision(
+        { rulesets: new ReadOnlyFakeRulesetRepo(published()), actions: new FakeActionRepo(new Map()) },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput({
+            action: { actionKey: 'nobody.registered.this', actionClass: 'read_only' },
+          }),
+        },
+      ),
+    ).rejects.toThrow(UnregisteredActionError);
   });
 });

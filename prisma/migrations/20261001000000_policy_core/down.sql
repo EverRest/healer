@@ -15,6 +15,9 @@ DROP TRIGGER IF EXISTS policy_ruleset_append_only ON "policy"."policy_ruleset";
 DROP INDEX IF EXISTS "policy"."autonomy_grant_tenant_id_action_key_environment_active_idx";
 
 -- DropForeignKey
+ALTER TABLE "policy"."policy_decision" DROP CONSTRAINT "policy_decision_action_key_fkey";
+
+-- DropForeignKey
 ALTER TABLE "policy"."approval_request" DROP CONSTRAINT "approval_request_decision_id_tenant_id_fkey";
 
 -- DropForeignKey

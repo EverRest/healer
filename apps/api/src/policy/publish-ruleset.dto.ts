@@ -1,15 +1,13 @@
 import { z } from 'zod';
 import {
-  BOOLEAN_FIELDS,
-  CLOSURE_FIELDS,
-  ENUMERATED_FIELDS,
-  IDENTIFIER_FIELDS,
-  INSTANT_FIELDS,
+  fieldKindOf,
+  OPERATORS_BY_KIND,
   OUTCOME_ORDER,
-  ORDINAL_FIELDS,
   QUANTITY_FIELDS,
   REASON_CODES,
+  validatePredicateShape,
   type Predicate,
+  type PredicateKind,
 } from '@healer/domain-policy';
 
 /** `POST /policy/rulesets` body (`contracts/openapi.yaml`): validates the closed predicate
@@ -21,35 +19,17 @@ import {
  *  flagging, not a silent substitution).
  *
  * `evaluate-predicate.ts`'s own comment names this exact gap: "publish-time validation ... is
- * meant to catch this before it gets this far" — nothing upstream did until now, so an
- * out-of-vocabulary predicate reaching `evaluate()` used to throw an opaque "unreachable predicate
- * shape" error (a 500) instead of a caller-facing 422. Field→kind and kind→operator mirror
- * `predicates/fields.ts` and `predicates/types.ts` exactly — the single authority for both stays
- * the domain package; this only re-derives the runtime check TypeScript's discriminated union
- * enforces at compile time for a caller who never went through `tsc`.
+ * meant to catch this before it gets this far". `fieldKindOf`/`OPERATORS_BY_KIND` and
+ * `validatePredicateShape` (batch 9 I2, review finding) are the domain package's single runtime
+ * authority for the predicate vocabulary — this file used to hand-copy `OPERATORS_BY_KIND`, an
+ * untested second table that could silently drift from `contracts/evaluation.md`'s own; it now
+ * only turns a raw wire object `{field, operator, value}` (no `kind`; JSON has no discriminated
+ * unions) into the domain's typed `Predicate`, and delegates every semantic check — including the
+ * two gaps `validatePredicateShape` closes (same-quantity-group comparison, unparseable instant
+ * literals) — to the same function `publishRuleset` calls in-process, so the HTTP edge and a
+ * bypassing caller are checked identically.
  */
-type Kind =
-  'enumerated' | 'identifier' | 'boolean' | 'ordinal' | 'quantity' | 'instant' | 'closure';
-
-const FIELD_KIND = new Map<string, Kind>([
-  ...ENUMERATED_FIELDS.map((f): [string, Kind] => [f, 'enumerated']),
-  ...IDENTIFIER_FIELDS.map((f): [string, Kind] => [f, 'identifier']),
-  ...BOOLEAN_FIELDS.map((f): [string, Kind] => [f, 'boolean']),
-  ...ORDINAL_FIELDS.map((f): [string, Kind] => [f, 'ordinal']),
-  ...QUANTITY_FIELDS.map((f): [string, Kind] => [f, 'quantity']),
-  ...INSTANT_FIELDS.map((f): [string, Kind] => [f, 'instant']),
-  ...CLOSURE_FIELDS.map((f): [string, Kind] => [f, 'closure']),
-]);
-
-const OPERATORS_BY_KIND: Record<Kind, readonly string[]> = {
-  enumerated: ['equals', 'notEquals', 'in', 'notIn'],
-  identifier: ['equals', 'in', 'notIn'],
-  boolean: ['isTrue', 'isFalse'],
-  ordinal: ['atLeast', 'atMost', 'equals'],
-  quantity: ['atLeast', 'atMost'],
-  instant: ['before', 'after'],
-  closure: ['containsNoneOf', 'subsetOf', 'sizeAtMost', 'maxDepthAtMost'],
-};
+type Kind = PredicateKind;
 
 const rawPredicateSchema = z
   .object({ field: z.string(), operator: z.string(), value: z.unknown().optional() })
@@ -68,7 +48,7 @@ function validatePredicate(
   raw: { readonly field: string; readonly operator: string; readonly value?: unknown },
   ctx: z.RefinementCtx,
 ): Predicate | typeof z.NEVER {
-  const kind = FIELD_KIND.get(raw.field);
+  const kind = fieldKindOf(raw.field);
   if (kind === undefined) {
     ctx.addIssue({ code: 'custom', message: `unknown predicate field "${raw.field}"` });
     return z.NEVER;
@@ -94,10 +74,21 @@ function validatePredicate(
 
   // Boolean predicates carry no `value` in the domain shape (`predicates/types.ts`) — whatever
   // the caller sent for it is validated above (a caller may omit it entirely) and then dropped.
-  if (kind === 'boolean') {
-    return { kind, field: raw.field, operator: raw.operator } as Predicate;
+  const predicate = (
+    kind === 'boolean'
+      ? { kind, field: raw.field, operator: raw.operator }
+      : { kind, field: raw.field, operator: raw.operator, value: parsedValue.data }
+  ) as Predicate;
+
+  // The two gaps this batch closes (same-quantity-group comparison, unparseable instant literals)
+  // live in `validatePredicateShape` — the same function `publishRuleset` calls in-process, so
+  // the wire path and a bypassing caller reject the same malformed predicates for the same reason.
+  const violation = validatePredicateShape(predicate);
+  if (violation !== null) {
+    ctx.addIssue({ code: 'custom', message: violation });
+    return z.NEVER;
   }
-  return { kind, field: raw.field, operator: raw.operator, value: parsedValue.data } as Predicate;
+  return predicate;
 }
 
 const STRING = z.string();

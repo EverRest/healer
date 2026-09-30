@@ -91,6 +91,14 @@ describe('tenant deletion of an issue (001 T053)', () => {
       `insert into "prompt"."prompt_version" (id, key, digest, body, published_by)
        values ('${promptVersionId}', 'investigate', 'd1', 'body', 'test')`,
     );
+    // `policy_decision.action_key` now has a FK to `policy_action.action_key` (batch 9 C1(b)) —
+    // this file's own seeded rows below need the row to exist, same as every other test that
+    // inserts a `policy_decision` row for `change.open_pull_request`.
+    await query(
+      pg,
+      `insert into "policy"."policy_action" (action_key, action_class, mutating, owning_spec, introduced_at)
+       values ('change.open_pull_request', 'code_change', true, '008', now())`,
+    );
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     await prisma.$connect();
     repo = new PrismaIssueRepository(prisma);

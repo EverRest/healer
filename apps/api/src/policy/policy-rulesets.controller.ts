@@ -14,6 +14,7 @@ import {
 import {
   DuplicateRuleKeyError,
   publishRuleset,
+  RulesetPredicateInvalidError,
   StaleRulesetVersionError,
   type PolicyRulesetRepository,
   type PublishedRuleset,
@@ -84,7 +85,7 @@ export class PolicyRulesetsController {
       );
       return serializeRuleset(published);
     } catch (error) {
-      if (error instanceof DuplicateRuleKeyError) {
+      if (error instanceof DuplicateRuleKeyError || error instanceof RulesetPredicateInvalidError) {
         throw new UnprocessableEntityException(error.message);
       }
       if (error instanceof StaleRulesetVersionError) {

@@ -2,19 +2,25 @@ import { randomUUID } from 'node:crypto';
 import { scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
+import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type { DecisionBinding, PolicyDecisionRepository, RecordedDecision } from '../../domain/policy-decision-repository.js';
 import type { PolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
-import { NoPublishedRulesetError, resolveRulesetAndEvaluate } from '../resolve-ruleset-and-evaluate.js';
+import {
+  NoPublishedRulesetError,
+  UnregisteredActionError,
+  resolveRulesetAndEvaluate,
+} from '../resolve-ruleset-and-evaluate.js';
 
-// Re-exported so existing callers/tests importing this error from here keep working — the error
-// itself now lives in `resolve-ruleset-and-evaluate.ts` since `ExplainDecision` (T024) throws it too.
-export { NoPublishedRulesetError };
+// Re-exported so existing callers/tests importing these errors from here keep working — both now
+// live in `resolve-ruleset-and-evaluate.ts` since `ExplainDecision` (T024) throws them too.
+export { NoPublishedRulesetError, UnregisteredActionError };
 
 export interface EvaluateAndBindRepos {
   readonly rulesets: PolicyRulesetRepository;
   readonly decisions: PolicyDecisionRepository;
   readonly autonomyEpochs: AutonomyEpochRepository;
+  readonly actions: PolicyActionRepository;
 }
 
 export interface EvaluateAndBindResult {
@@ -48,20 +54,28 @@ export async function evaluateAndBind(
   context: TenantContext,
   input: { readonly decisionInput: DecisionInput; readonly binding?: DecisionBinding },
 ): Promise<EvaluateAndBindResult> {
-  const { decision, trace } = await resolveRulesetAndEvaluate(repos, context, input.decisionInput);
-  const proposalDigest = computeProposalDigest(input.decisionInput);
+  // `decisionInput` here is the *corrected* one (batch 9 C1(b)) — `action.actionClass` overwritten
+  // with the registry's real value, not whatever `input.decisionInput` claimed. The digest and the
+  // persisted row are both built from this, never from the caller's original claim: persisting the
+  // uncorrected input would let a replay reintroduce the exact bug this fix closes.
+  const { decision, trace, decisionInput } = await resolveRulesetAndEvaluate(
+    repos,
+    context,
+    input.decisionInput,
+  );
+  const proposalDigest = computeProposalDigest(decisionInput);
   const autonomyEpoch = await repos.autonomyEpochs.current(scope(context, {}));
 
   const recorded = await repos.decisions.record(
     scope(context, {
       id: randomUUID(),
       decision,
-      decisionInput: input.decisionInput,
+      decisionInput,
       proposalDigest,
       budgetState: trace.budgetState,
-      actionKey: input.decisionInput.action.actionKey,
-      targetRef: input.decisionInput.target.targetRef,
-      fingerprint: input.decisionInput.target.fingerprint,
+      actionKey: decisionInput.action.actionKey,
+      targetRef: decisionInput.target.targetRef,
+      fingerprint: decisionInput.target.fingerprint,
       binding: input.binding ?? {},
     }),
   );

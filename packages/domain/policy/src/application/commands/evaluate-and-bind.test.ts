@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { TenantContext, type TenantScoped } from '@healer/shared';
+import type { ActionClass } from '../../domain/action-class.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
+import type { PolicyAction, PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type {
   NewRecordedDecision,
   PolicyDecisionRepository,
@@ -12,7 +14,11 @@ import type {
 } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
-import { evaluateAndBind, NoPublishedRulesetError } from './evaluate-and-bind.js';
+import {
+  evaluateAndBind,
+  NoPublishedRulesetError,
+  UnregisteredActionError,
+} from './evaluate-and-bind.js';
 
 const CONTEXT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000d1');
 
@@ -96,6 +102,37 @@ class FakeEpochRepo implements AutonomyEpochRepository {
   }
 }
 
+/** `change.open_pull_request` → `code_change` by default, matching `buildDecisionInput`'s own
+ *  fixture (T014's `SEED_POLICY_ACTIONS`) — batch 9 C1(b) made `actions` a required dependency, so
+ *  every existing test needs a registry that resolves the fixture's own action key. */
+class FakeActionRepo implements PolicyActionRepository {
+  constructor(
+    private readonly byKey: ReadonlyMap<string, ActionClass> = new Map([
+      ['change.open_pull_request', 'code_change'],
+    ]),
+  ) {}
+  async findByKey(actionKey: string): Promise<PolicyAction | null> {
+    const actionClass = this.byKey.get(actionKey);
+    if (actionClass === undefined) return null;
+    return {
+      actionKey,
+      actionClass,
+      mutating: true,
+      owningSpec: 'test',
+      introducedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+  }
+  async list(): Promise<readonly PolicyAction[]> {
+    return [...this.byKey.entries()].map(([actionKey, actionClass]) => ({
+      actionKey,
+      actionClass,
+      mutating: true,
+      owningSpec: 'test',
+      introducedAt: new Date('2026-01-01T00:00:00Z'),
+    }));
+  }
+}
+
 describe('evaluateAndBind (T021)', () => {
   it('resolves the current ruleset, evaluates, and persists the decision bound to the workflow run/state', async () => {
     const decisions = new FakeDecisionRepo();
@@ -105,6 +142,7 @@ describe('evaluateAndBind (T021)', () => {
         rulesets: new FakeRulesetRepo(published()),
         decisions,
         autonomyEpochs: new FakeEpochRepo(0n),
+        actions: new FakeActionRepo(),
       },
       CONTEXT,
       {
@@ -132,6 +170,7 @@ describe('evaluateAndBind (T021)', () => {
         rulesets: new FakeRulesetRepo(published()),
         decisions: new FakeDecisionRepo(),
         autonomyEpochs: new FakeEpochRepo(3n),
+        actions: new FakeActionRepo(),
       },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
@@ -146,6 +185,7 @@ describe('evaluateAndBind (T021)', () => {
           rulesets: new FakeRulesetRepo(null),
           decisions: new FakeDecisionRepo(),
           autonomyEpochs: new FakeEpochRepo(0n),
+          actions: new FakeActionRepo(),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -159,10 +199,72 @@ describe('evaluateAndBind (T021)', () => {
       rulesets: new FakeRulesetRepo(published()),
       decisions,
       autonomyEpochs: new FakeEpochRepo(0n),
+      actions: new FakeActionRepo(),
     };
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
     expect(decisions.recorded).toHaveLength(2);
     expect(decisions.recorded[0]?.proposalDigest).toBe(decisions.recorded[1]?.proposalDigest);
+  });
+});
+
+describe('evaluateAndBind — actionClass is derived from the registry, not the caller (batch 9 C1(b), review finding)', () => {
+  it('the registry actionClass gates the ceiling even when the caller claims a lower/wrong class that would itself pass', async () => {
+    const alwaysAllow = published({
+      rules: [
+        {
+          ruleKey: 'always-allow',
+          predicates: [],
+          outcome: 'allow',
+          reasonCode: 'NO_ADOPTED_EXPECTATION',
+          note: '',
+        },
+      ],
+    });
+    // Real registry class is `merge` — ceiling `none`, no level ever granted (R-05). Claimed
+    // class is `read_only` — ceiling level 1, which the proposal's `autonomy.level: 1` would pass.
+    const actions = new FakeActionRepo(new Map([['merge.something', 'merge']]));
+    const decisions = new FakeDecisionRepo();
+
+    const result = await evaluateAndBind(
+      {
+        rulesets: new FakeRulesetRepo(alwaysAllow),
+        decisions,
+        autonomyEpochs: new FakeEpochRepo(0n),
+        actions,
+      },
+      CONTEXT,
+      {
+        decisionInput: buildDecisionInput({
+          action: { actionKey: 'merge.something', actionClass: 'read_only' },
+          autonomy: { level: 1 },
+        }),
+      },
+    );
+
+    expect(result.decision.outcome).toBe('deny');
+    expect(result.decision.reasonCodes).toContain('CEILING_EXCEEDED');
+    // The persisted decisionInput carries the corrected class, not the caller's claim — a replay
+    // of this stored row must reproduce the same refusal, not the caller's wrong one.
+    expect(decisions.recorded[0]?.decisionInput.action.actionClass).toBe('merge');
+  });
+
+  it('refuses an unregistered action key rather than evaluating against whatever the caller claims', async () => {
+    await expect(
+      evaluateAndBind(
+        {
+          rulesets: new FakeRulesetRepo(published()),
+          decisions: new FakeDecisionRepo(),
+          autonomyEpochs: new FakeEpochRepo(0n),
+          actions: new FakeActionRepo(new Map()),
+        },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput({
+            action: { actionKey: 'nobody.registered.this', actionClass: 'read_only' },
+          }),
+        },
+      ),
+    ).rejects.toThrow(UnregisteredActionError);
   });
 });

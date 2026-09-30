@@ -1,6 +1,8 @@
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { publishRuleset, PrismaPolicyRulesetRepository } from '@healer/domain-policy';
+import { TenantContext, newCorrelationId, withCorrelation } from '@healer/shared';
 import { PrismaClient } from '../../prisma/generated/client/index.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { findUncoveredMutatingActions } from './policy-coverage.mjs';
@@ -43,7 +45,8 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
       `insert into "policy"."policy_action" (action_key, action_class, mutating, owning_spec, introduced_at)
        values
          ('change.open_pull_request', 'code_change', true, '008', now()),
-         ('issue.view', 'read_only', false, '001', now())`,
+         ('issue.view', 'read_only', false, '001', now()),
+         ('policy.publish_ruleset', 'read_only', false, '002', now())`,
     );
 
     // Covered: a mutating action linked, via policy_decision_id, to a consumed ALLOW decision.
@@ -100,5 +103,32 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
     expect(unregistered).toContain('issue.close');
     expect(unregistered).toContain(TARGET_UNREGISTERED);
     expect(unregistered).toContain('not a registered policy_action.action_key');
+  });
+
+  // Batch 9 I1, review finding: `PublishRuleset` audits as `policy.publish_ruleset`, which was
+  // never in `SEED_POLICY_ACTIONS` — batch 8's own LEFT-join fix (unregistered = violation) flagged
+  // every ruleset publish, including this spec's own, so the check was red from day one. The rows
+  // inserted directly in `beforeAll` above don't exercise the real command; this does.
+  it('a real PublishRuleset call — mutating: false, so no consumed ALLOW decision is ever needed — produces zero violations', async () => {
+    const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fb');
+    const rulesets = new PrismaPolicyRulesetRepository(prisma);
+
+    await withCorrelation(newCorrelationId(), () =>
+      publishRuleset(rulesets, tenant, {
+        rules: [
+          {
+            ruleKey: 'allow-all',
+            predicates: [],
+            outcome: 'allow',
+            reasonCode: 'NO_ADOPTED_EXPECTATION',
+            note: '',
+          },
+        ],
+        publishedBy: 'pavlo',
+      }),
+    );
+
+    const violations = await findUncoveredMutatingActions(prisma);
+    expect(violations.filter((v) => v.includes('policy.publish_ruleset'))).toEqual([]);
   });
 });

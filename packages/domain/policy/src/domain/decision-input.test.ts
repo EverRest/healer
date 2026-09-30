@@ -29,4 +29,22 @@ describe('decisionInputSchema', () => {
     const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), extra: 'anything' });
     expect(result.success).toBe(false);
   });
+
+  // Batch 9 C2, review finding: `decision_input` round-trips through JSONB, which has no `Date`
+  // type — `evaluatedAt` comes back a string, and a raw type cast used to leave it that way, so
+  // `matchesInstant`'s `.getTime()` threw on any stored decision with an instant predicate.
+  it('coerces a string evaluatedAt (the shape a JSONB round-trip hands back) into a real Date', () => {
+    const jsonRoundTripped = { ...buildDecisionInput(), evaluatedAt: '2026-01-01T00:00:00.000Z' };
+    const result = decisionInputSchema.safeParse(jsonRoundTripped);
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.evaluatedAt).toBeInstanceOf(Date);
+    expect(result.success && result.data.evaluatedAt.getTime()).toBe(
+      new Date('2026-01-01T00:00:00.000Z').getTime(),
+    );
+  });
+
+  it('still rejects an evaluatedAt that does not parse as a date at all', () => {
+    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: 'not-a-date' });
+    expect(result.success).toBe(false);
+  });
 });

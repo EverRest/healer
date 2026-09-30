@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { scope, type TenantContext } from '@healer/shared';
 import { computeConflictWarnings } from '../../domain/conflict-warnings.js';
-import { assertUniqueRuleKeys, computeRulesetDigest, type RuleBody } from '../../domain/policy-ruleset.js';
+import {
+  assertUniqueRuleKeys,
+  assertValidPredicates,
+  computeRulesetDigest,
+  type RuleBody,
+} from '../../domain/policy-ruleset.js';
 import {
   StaleRulesetVersionError,
   type PolicyRulesetRepository,
@@ -44,6 +49,12 @@ function auditReason(version: number, supersedesVersion: number | undefined): st
  * `policy_rule`'s own `@@unique([rulesetId, ruleKey])` constraint used to reject this, so such a
  * request reached the repository, hit that constraint as a P2002, and was indistinguishable from
  * a genuine version race, burning every retry attempt against a request that could never succeed.
+ *
+ * Also validates every predicate's shape (`assertValidPredicates`, `RulesetPredicateInvalidError`,
+ * `VALIDATION` — batch 9 I2, review finding) before computing anything: an in-process publish (a
+ * seed script, 011's future simulator) used to be able to store a rule set that makes `evaluate()`
+ * throw, since the only check lived at the HTTP DTO edge. Same domain-layer validation the HTTP
+ * boundary now reuses, not a second copy of it.
  */
 export async function publishRuleset(
   repo: PolicyRulesetRepository,
@@ -52,6 +63,7 @@ export async function publishRuleset(
   now: () => Date = () => new Date(),
 ): Promise<PublishedRuleset> {
   assertUniqueRuleKeys(input.rules);
+  assertValidPredicates(input.rules);
   const digest = computeRulesetDigest(input.rules);
 
   for (let attempt = 1; ; attempt += 1) {

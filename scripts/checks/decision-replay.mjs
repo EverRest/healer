@@ -1,35 +1,73 @@
 #!/usr/bin/env node
 // `check:decision-replay` (002 T030, FR-002, SC-002): samples stored `policy_decision` rows and
 // replays each against its own recorded `decision_input` and `ruleset_version` — the *historical*
-// rule set, never the tenant's current one — using the same pure `evaluate()` the enforcing path
-// and `ExplainDecision` both call. A differing outcome is a production incident this check
-// surfaces, not a test assertion (contracts/evaluation.md: "a differing outcome is an incident,
-// not a test failure") — same posture as `check:evidence-coverage` and `check:expired-evidence`.
-import { evaluate } from '@healer/domain-policy';
+// rule set, never the tenant's current one — using the shared `replayDecision` query (batch 9 C2,
+// review finding: this used to re-implement `resolveRulesetAndEvaluate`'s call into `evaluate()`
+// by hand, which is how it missed the JSONB `evaluatedAt` coercion fix and would have needed its
+// own copy of any future fix too — one implementation now, called from both the HTTP endpoint and
+// here). A differing outcome is a production incident this check surfaces, not a test assertion
+// (contracts/evaluation.md: "a differing outcome is an incident, not a test failure") — same
+// posture as `check:evidence-coverage` and `check:expired-evidence`.
+import {
+  decisionInputSchema,
+  PrismaPolicyRulesetRepository,
+  replayDecision,
+  RulesetVersionNotFoundError,
+} from '@healer/domain-policy';
+import { TenantContext } from '@healer/shared';
 import { PrismaClient } from '../../prisma/generated/client/index.js';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
 const DEFAULT_SAMPLE_SIZE = 200;
 
-/**
- * One decision replayed against one resolved rule set — pure, no I/O, so it is unit-testable on
- * its own (`decision-replay.test.ts`) without a database.
- * @param {{ id: string, decisionInput: unknown, rulesetVersion: number, outcome: string }} row
- * @param {{ version: number, rules: { ruleKey: string, predicates: unknown, outcome: string, reasonCode: string }[] } | null} ruleset
- * @returns {string | null} a violation message, or null when the replay agrees with history
- */
-export function replayOne(row, ruleset) {
-  if (ruleset === null) {
-    return `decision ${row.id}: ruleset version ${row.rulesetVersion} no longer resolves for its tenant (violates SC-003)`;
+/** `data-model.md`'s Invariants: "`evaluate(ruleset_version, decision_input) = (outcome,
+ *  matched_rule_keys)` replays identically" — both halves of the pair (batch 9 C2, review
+ *  finding: comparing outcome alone would call two decisions identical even when a different set
+ *  of rules matched to reach the same fold result). The outcome-mismatch message is worded to
+ *  match what this check has always said for that case; the rule-key-only mismatch is new. */
+function formatMismatch(row, replayed) {
+  if (replayed.outcome !== row.outcome) {
+    return `decision ${row.id}: recorded outcome "${row.outcome}", replay against ruleset version ${row.rulesetVersion} produced "${replayed.outcome}"`;
   }
-  const { decision } = evaluate(
-    { version: ruleset.version, rules: ruleset.rules },
-    row.decisionInput,
+  return (
+    `decision ${row.id}: recorded matched rule keys ${JSON.stringify([...row.matchedRuleKeys].sort())}, ` +
+    `replay against ruleset version ${row.rulesetVersion} produced ${JSON.stringify([...replayed.matchedRuleKeys].sort())} ` +
+    `(same outcome "${row.outcome}")`
   );
-  if (decision.outcome !== row.outcome) {
-    return `decision ${row.id}: recorded outcome "${row.outcome}", replay against ruleset version ${row.rulesetVersion} produced "${decision.outcome}"`;
+}
+
+/**
+ * One decision replayed against its own resolved rule set, via the shared `replayDecision` query
+ * — real I/O (a `ReadOnlyPolicyRulesetRepository`), so this is proven against a real Postgres in
+ * `decision-replay.e2e.test.ts`; `decision-replay.test.ts` proves `formatMismatch` and the
+ * ruleset-not-found path against a fake repository.
+ * @param {import('@healer/domain-policy').ReadOnlyPolicyRulesetRepository} rulesets
+ * @param {{ id: string, tenantId: string, decisionInput: unknown, rulesetVersion: number, outcome: string, matchedRuleKeys: readonly string[] }} row
+ * @returns {Promise<string | null>} a violation message, or null when the replay agrees with history
+ */
+export async function replayOne(rulesets, row) {
+  const context = TenantContext.forTrustedInternalUse(row.tenantId);
+  // This query reads `decision_input` straight off the row (not through
+  // `PrismaPolicyDecisionRepository.findById`/`list`, which already parse it) — batch 9 C2's
+  // reproduction: JSONB round-trips `evaluatedAt` as a string, and `evaluate()`'s instant
+  // predicates call `.getTime()` on it. `decisionInputSchema` is the one place that coercion is
+  // defined; every reader of stored `decision_input` parses through it rather than trusting the
+  // raw cast.
+  const decisionInput = decisionInputSchema.parse(row.decisionInput);
+  try {
+    const { identical, replayed } = await replayDecision({ rulesets }, context, {
+      decisionInput,
+      rulesetVersion: row.rulesetVersion,
+      outcome: row.outcome,
+      matchedRuleKeys: row.matchedRuleKeys,
+    });
+    return identical ? null : formatMismatch(row, replayed);
+  } catch (error) {
+    if (error instanceof RulesetVersionNotFoundError) {
+      return `decision ${row.id}: ruleset version ${row.rulesetVersion} no longer resolves for its tenant (violates SC-003)`;
+    }
+    throw error;
   }
-  return null;
 }
 
 /**
@@ -37,31 +75,23 @@ export function replayOne(row, ruleset) {
  * @param {number} sampleSize
  */
 export async function findReplayMismatches(prisma, sampleSize = DEFAULT_SAMPLE_SIZE) {
+  const rulesets = new PrismaPolicyRulesetRepository(prisma);
   const rows = await prisma.policyDecision.findMany({
     take: sampleSize,
     orderBy: { evaluatedAt: 'desc' },
-    select: { id: true, tenantId: true, decisionInput: true, rulesetVersion: true, outcome: true },
+    select: {
+      id: true,
+      tenantId: true,
+      decisionInput: true,
+      rulesetVersion: true,
+      outcome: true,
+      matchedRuleKeys: true,
+    },
   });
 
   const violations = [];
   for (const row of rows) {
-    const rulesetRow = await prisma.policyRuleset.findUnique({
-      where: { tenantId_version: { tenantId: row.tenantId, version: row.rulesetVersion } },
-      include: { rules: true },
-    });
-    const ruleset =
-      rulesetRow === null
-        ? null
-        : {
-            version: rulesetRow.version,
-            rules: rulesetRow.rules.map((r) => ({
-              ruleKey: r.ruleKey,
-              predicates: r.predicates,
-              outcome: r.outcome,
-              reasonCode: r.reasonCode,
-            })),
-          };
-    const violation = replayOne(row, ruleset);
+    const violation = await replayOne(rulesets, row);
     if (violation !== null) violations.push(violation);
   }
   return violations;

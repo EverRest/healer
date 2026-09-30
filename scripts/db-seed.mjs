@@ -31,6 +31,12 @@ export const SEED_POLICY_ACTIONS = [
     mutating: true,
     owningSpec: '010',
   },
+  {
+    actionKey: 'policy.publish_ruleset',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
 ];
 
 // Fixed, not `new Date()`: `update: {}` below never changes `introducedAt` on an existing row

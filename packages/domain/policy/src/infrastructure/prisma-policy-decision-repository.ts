@@ -2,11 +2,12 @@ import { currentCorrelationId, NotFoundError, type TenantScoped } from '@healer/
 import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import { policyDecisionRecordedEvent } from '../domain/events.js';
-import type { DecisionInput } from '../domain/decision-input.js';
+import { decisionInputSchema } from '../domain/decision-input.js';
 import type { BudgetState } from '../domain/evaluate.js';
 import type { Outcome } from '../domain/outcome-lattice.js';
 import {
   DecisionAlreadyConsumedError,
+  DecisionNotAllowedError,
   DigestMismatchError,
   type ConsumeDecisionInput,
   type DecisionListFilter,
@@ -75,7 +76,12 @@ function toStoredDomain(row: StoredDecisionRow): StoredDecision {
     ...(row.workflowState !== null ? { workflowState: row.workflowState } : {}),
     ...(row.targetRef !== null ? { targetRef: row.targetRef } : {}),
     ...(row.fingerprint !== null ? { fingerprint: row.fingerprint } : {}),
-    decisionInput: row.decisionInput as unknown as DecisionInput,
+    // Parsed through `decisionInputSchema`, not a raw cast (batch 9 C2, review finding):
+    // `decision_input` is JSONB, so `evaluatedAt` round-trips as a string — every reader of a
+    // stored decision (replay, `findById`, `list`) needs a properly-typed `DecisionInput` back,
+    // with `evaluatedAt` coerced to a real `Date`, not just the one caller that happened to hit
+    // the crash first (`matchesInstant`'s `.getTime()` on a string).
+    decisionInput: decisionInputSchema.parse(row.decisionInput),
     budgetState: row.budgetState as unknown as BudgetState,
     ...(row.consumedAt !== null ? { consumedAt: row.consumedAt } : {}),
     ...(row.invalidatedReason !== null ? { invalidatedReason: row.invalidatedReason } : {}),
@@ -83,11 +89,15 @@ function toStoredDomain(row: StoredDecisionRow): StoredDecision {
 }
 
 /** Raw `FOR UPDATE` row shape (real column names) for the lock `consume()` takes before deciding
- *  which of the two refusals applies — the same pattern `prisma-issue-merge.ts`'s `lockIssues`
- *  already uses to serialise concurrent writers against one row. */
+ *  which refusal applies — the same pattern `prisma-issue-merge.ts`'s `lockIssues` already uses
+ *  to serialise concurrent writers against one row. `outcome`/`invalidated_reason` added batch 9
+ *  C1(a): the lock must cover every column the refusal decision reads, not only the two the
+ *  original single-use check used. */
 interface LockedDecisionRow {
   readonly consumed_at: Date | null;
   readonly proposal_digest: string;
+  readonly outcome: string;
+  readonly invalidated_reason: string | null;
 }
 
 /**
@@ -96,7 +106,8 @@ interface LockedDecisionRow {
  * audit entry: quickstart 37's four audited config changes are publish/grant/revoke/budget, not
  * every decision (contracts/evaluation.md's own event table lists no audit obligation here).
  * `consume` locks the row before checking, so two concurrent executions against the same decision
- * can never both see `consumed_at IS NULL`.
+ * can never both see `consumed_at IS NULL` — and (batch 9 C1(a)) refuses a decision that never
+ * resolved to `allow` or that has since been invalidated, before `consumed_at` is ever set.
  */
 export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -146,12 +157,17 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
     const { tenantId, decisionId, presentedDigest } = where;
     await this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<LockedDecisionRow[]>`
-        SELECT consumed_at, proposal_digest FROM "policy"."policy_decision"
+        SELECT consumed_at, proposal_digest, outcome, invalidated_reason
+        FROM "policy"."policy_decision"
         WHERE tenant_id = ${tenantId}::uuid AND id = ${decisionId}::uuid
         FOR UPDATE`;
       const row = rows[0];
       if (row === undefined) throw new NotFoundError('PolicyDecision');
       if (row.consumed_at !== null) throw new DecisionAlreadyConsumedError(decisionId);
+      if (row.invalidated_reason !== null) {
+        throw new DecisionNotAllowedError(decisionId, 'invalidated');
+      }
+      if (row.outcome !== 'allow') throw new DecisionNotAllowedError(decisionId, 'outcome');
       if (row.proposal_digest !== presentedDigest) throw new DigestMismatchError(decisionId);
       await tx.policyDecision.update({
         where: { id: decisionId },

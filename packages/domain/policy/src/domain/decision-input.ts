@@ -105,7 +105,14 @@ export const decisionInputSchema = z
         attemptCount: z.number().int().nonnegative(),
       })
       .strict(),
-    evaluatedAt: z.date(),
+    // `z.coerce.date()`, not `z.date()` (batch 9 C2, review finding): `decision_input` round-trips
+    // through JSONB, which has no `Date` type — `evaluatedAt` comes back a string, and
+    // `matchesInstant`'s `.getTime()` throws on a string. Coercing here means every reader that
+    // parses stored JSONB through this schema (`toStoredDomain`, below) gets a real `Date` back,
+    // not only the one caller (replay) that happened to hit the crash first. A string that does
+    // not parse to a valid date still fails validation — `z.coerce.date()` rejects an `Invalid
+    // Date` the same as `z.date()` rejects a non-Date value.
+    evaluatedAt: z.coerce.date(),
   })
   .strict();
 

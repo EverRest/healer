@@ -7,8 +7,10 @@ import {
   explainDecision,
   publishRuleset,
   PrismaAutonomyEpochRepository,
+  PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  SEED_POLICY_ACTIONS,
   type DecisionInput,
   type RuleBody,
 } from '@healer/domain-policy';
@@ -168,6 +170,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
   let rulesets: PrismaPolicyRulesetRepository;
   let decisions: PrismaPolicyDecisionRepository;
   let autonomyEpochs: PrismaAutonomyEpochRepository;
+  let actions: PrismaPolicyActionRepository;
 
   beforeAll(async () => {
     pg = await startPostgres();
@@ -178,6 +181,15 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     rulesets = new PrismaPolicyRulesetRepository(prisma);
     decisions = new PrismaPolicyDecisionRepository(prisma);
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
+    actions = new PrismaPolicyActionRepository(prisma);
+
+    // `policy_action` is global (batch 9 C1(b) made `actions` a required dependency of both
+    // callers this test compares).
+    for (const action of SEED_POLICY_ACTIONS) {
+      await prisma.policyAction.create({
+        data: { ...action, introducedAt: new Date('2026-01-01T00:00:00Z') },
+      });
+    }
 
     await withCorrelation('corr-seed-ruleset', () => publishRuleset(rulesets, CONTEXT, { rules: RULES, publishedBy: 'pavlo' }));
   }, 180_000);
@@ -191,7 +203,9 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     const before = await policyRowCounts(prisma);
 
     for (const { input } of MATRIX) {
-      await withCorrelation('corr-explain', () => explainDecision({ rulesets }, CONTEXT, { decisionInput: input }));
+      await withCorrelation('corr-explain', () =>
+        explainDecision({ rulesets, actions }, CONTEXT, { decisionInput: input }),
+      );
     }
 
     const after = await policyRowCounts(prisma);
@@ -201,9 +215,11 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
   it.each(MATRIX)(
     '$name: ExplainDecision and EvaluateAndBind agree on outcome, matched rules and reason codes (quickstart 31)',
     async ({ input }) => {
-      const explained = await withCorrelation('corr-explain-cmp', () => explainDecision({ rulesets }, CONTEXT, { decisionInput: input }));
+      const explained = await withCorrelation('corr-explain-cmp', () =>
+        explainDecision({ rulesets, actions }, CONTEXT, { decisionInput: input }),
+      );
       const bound = await withCorrelation('corr-bind-cmp', () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs }, CONTEXT, { decisionInput: input }),
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions }, CONTEXT, { decisionInput: input }),
       );
 
       expect(explained.decision.outcome).toBe(bound.decision.outcome);

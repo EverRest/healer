@@ -5,10 +5,13 @@ import type { PolicyDecisionRepository } from '../../domain/policy-decision-repo
  * `ConsumeDecision` (T023, contracts/evaluation.md "Binding, consumption and validity"): the
  * executor presents the decision identifier and the digest of what it is about to do. Thin, same
  * shape as `mergeIssues`/`closeIssue` — the single-use check-and-mutate is the repository's
- * atomic `consume()` (`DecisionAlreadyConsumedError` / `DigestMismatchError` / `NotFoundError`);
- * this only scopes the call to the tenant. No real executor caller exists yet (T022's tests call
- * this directly) — a future caller (008, 010) calls this immediately before performing the
- * guarded action, never across a wait (R-07).
+ * atomic `consume()` (`DecisionAlreadyConsumedError` / `DecisionNotAllowedError` /
+ * `DigestMismatchError` / `NotFoundError` — batch 9 C1(a) added `DecisionNotAllowedError`: a
+ * decision that never resolved to `allow`, or one since invalidated, refuses here too, not only
+ * DENY/REQUIRE_APPROVAL decisions that a caller might otherwise consume as if permitted); this
+ * only scopes the call to the tenant. No real executor caller exists yet (T022's tests call this
+ * directly) — a future caller (008, 010) calls this immediately before performing the guarded
+ * action, never across a wait (R-07).
  */
 export function consumeDecision(
   repo: PolicyDecisionRepository,

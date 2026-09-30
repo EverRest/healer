@@ -51,6 +51,17 @@ describe('policy_decision consumed/invalidated mutual exclusion (post-batch-1 fi
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
     prisma = new PrismaClient({ datasourceUrl: pg.url });
+    // `policy_decision.action_key` now has a FK to `policy_action.action_key` (batch 9 C1(b)) —
+    // `decisionData()` below needs the row to exist.
+    await prisma.policyAction.create({
+      data: {
+        actionKey: 'change.open_pull_request',
+        actionClass: 'code_change',
+        mutating: true,
+        owningSpec: '008',
+        introducedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    });
   }, 180_000);
 
   // policy_decision is append-only (T003) — DELETE is always rejected, even from the tests'

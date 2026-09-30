@@ -883,6 +883,7 @@ model PolicyAction {
   introducedAt DateTime          @map("introduced_at") @db.Timestamptz(6)
 
   autonomyGrants AutonomyGrant[]
+  policyDecisions PolicyDecision[]
 
   @@map("policy_action")
   @@schema("policy")
@@ -983,6 +984,11 @@ model PolicyDecision {
   invalidatedReason String?       @map("invalidated_reason")
 
   approvalRequests ApprovalRequest[]
+
+  // batch 9 C1(b), review finding: this should have had a FK from the start, the same shape
+  // AutonomyGrant.action already has — a decision recorded against an action key that resolves
+  // to nothing in the registry is now unrepresentable at the database layer.
+  action PolicyAction @relation(fields: [actionKey], references: [actionKey], onDelete: Restrict)
 
   // Backs ApprovalRequest's composite FK (decisionId, tenantId) — same pattern as WorkflowRun /
   // Issue / Evidence (FR-048): an approval naming a wrong tenant's decision is unrepresentable,

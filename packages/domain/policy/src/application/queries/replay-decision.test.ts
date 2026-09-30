@@ -60,6 +60,7 @@ describe('replayDecision (T028, FR-002)', () => {
       decisionInput: buildDecisionInput(),
       rulesetVersion: 1,
       outcome: 'allow',
+      matchedRuleKeys: ['allow-code-change'],
     });
     expect(result.identical).toBe(true);
     expect(result.replayed.outcome).toBe('allow');
@@ -71,9 +72,22 @@ describe('replayDecision (T028, FR-002)', () => {
       decisionInput: buildDecisionInput(),
       rulesetVersion: 1,
       outcome: 'deny',
+      matchedRuleKeys: ['allow-code-change'],
     });
     expect(result.identical).toBe(false);
     expect(result.replayed.outcome).toBe('allow');
+  });
+
+  it('reports a differing matched-rule-key set even when the outcome agrees (data-model.md Invariants: (outcome, matched_rule_keys) both replay identically, batch 9 C2)', async () => {
+    const repos = { rulesets: new FakeRulesetRepo(new Map([[1, published()]])) };
+    const result = await replayDecision(repos, CONTEXT, {
+      decisionInput: buildDecisionInput(),
+      rulesetVersion: 1,
+      outcome: 'allow',
+      matchedRuleKeys: ['some-other-rule-that-happened-to-also-allow'],
+    });
+    expect(result.replayed.outcome).toBe('allow');
+    expect(result.identical).toBe(false);
   });
 
   it('resolves version 1 even when a materially different version 2 has since superseded it (SC-003)', async () => {
@@ -93,6 +107,7 @@ describe('replayDecision (T028, FR-002)', () => {
       decisionInput: buildDecisionInput(),
       rulesetVersion: 1,
       outcome: 'allow',
+      matchedRuleKeys: ['allow-code-change'],
     });
 
     expect(result.identical).toBe(true);
@@ -107,6 +122,7 @@ describe('replayDecision (T028, FR-002)', () => {
         decisionInput: buildDecisionInput(),
         rulesetVersion: 9,
         outcome: 'allow',
+        matchedRuleKeys: [],
       }),
     ).rejects.toThrow(RulesetVersionNotFoundError);
   });
