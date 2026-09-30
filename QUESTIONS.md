@@ -1474,6 +1474,21 @@ un-exceedable" guarantee — it closed the `actionClass` half. The other two rem
 hence unverified, until T039/T048 land. Any code comment claiming the ceiling is fully
 un-defeatable before then is overclaiming and should be corrected to name what's actually closed.
 
+## 002 batch 9 (round 3 re-review) — instant *literal* values still parse timezone-dependently
+
+Batch 9 tightened `evaluatedAt` (the evaluation instant) to require an offset-qualified ISO string
+(`z.string().datetime({offset:true})`), closing a replay-determinism risk (FR-002/SC-002: the same
+stored input must replay identically on any host, in any timezone). The re-review found the same
+class of problem still open one layer over: an `instant` **predicate's literal comparison value**
+(e.g. `evaluatedAt before '2026-01-01T00:00:00'`, no offset) is still parsed with a plain
+`new Date(string)` in both `validateInstantValue` (domain) and the HTTP DTO, which is
+timezone-dependent — the same stored rule set could evaluate differently on hosts in different
+timezones. Not fixed in this run: it's a narrower, lower-severity version of the same fix
+(apply `datetime({offset:true})` to instant literals too), but expanding scope a third time on
+this same batch risks never converging; recording for a deliberate follow-up decision instead —
+either the next 002 session picks it up, or the person who does the eventual openapi.yaml/
+error-code reconciliation pass folds it in.
+
 ## 002 T031 — `check:policy-coverage` joins on `audit_entry.policy_decision_id`, not `target_ref`
 
 research.md R-14 names the conceptual join key `(tenant_id, action, target_id)` and explicitly
