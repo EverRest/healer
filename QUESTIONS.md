@@ -1448,3 +1448,28 @@ rather than reading the code alone. Results:
    `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
    reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this
    path yet.
+
+## 004 T012–T015 — judgment calls
+
+- **T012 was already satisfied** by the Foundational work: the only repository that exists,
+  `GraphNodeRepository.renameNaturalKey`, already takes `TenantScoped<{id}>`. No query/read
+  repository exists yet (correctly out of scope — that's Phase 3+). Added only the missing
+  compile-proof test (`graph-node-repository.test.ts`, mirroring `domain/issues`'s
+  `@ts-expect-error`/`expectTypeOf` pattern).
+- **T013/T014 have no consumer yet** — the read envelope and the four outbox event builders are
+  established shapes with no caller, same as 001's own precedent (`QUESTIONS.md`'s "seven of the
+  eleven contract events have no publisher yet" — normal for this repo's build order, not a gap).
+- **T015 — no capability/credential registry exists anywhere in the repo yet** (002-policy hasn't
+  built one, and it's out of bounds regardless). Decided, not escalated: built a textual structural
+  gate (`scripts/gates/graph-confirm-capability.mjs`, same shape as the existing
+  `gate-architecture-agnostic`) that scans for anything shaped like a confirm path in
+  `apps/mcp-server`/`apps/worker`/`apps/api`/`**/application/commands/**` and fails if it doesn't also
+  reference the new `GRAPH_CONFIRM_CAPABILITY` constant. Necessarily vacuous today (nothing to catch
+  yet — Phase 3 adds `ConfirmDraftItems`), proven to actually catch a fixture violation. Textual, not
+  AST-based — same honesty level as `gate-architecture-agnostic` already has, flagged as a future
+  hardening if it proves too weak once a real confirm command exists.
+- **The new gate is runnable (`pnpm run gate-graph-confirm-capability`) but deliberately not wired
+  into `make ci` or `specs/012-engineering-foundation/contracts/make-targets.md`** — that file is
+  explicitly normative and owned by 012, out of this session's scope to edit unilaterally. Whoever
+  owns 012's contract (or picks up 004's next phase) should add the one-line wiring once they've
+  looked at it.
