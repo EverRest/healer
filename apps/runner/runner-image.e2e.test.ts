@@ -262,8 +262,10 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
         '-e',
         'RUNNER_IMAGE_VERSION=0.0.0-e2e',
         // One tick, comfortably longer than this test — the second tick must never fire.
+        // 32_000ms is loadRunnerConfig's own max (012 T050 review: it caps the interval so the
+        // drain timeout it drives can never exceed docker-compose.runner.yml's stop_grace_period).
         '-e',
-        'RUNNER_HEARTBEAT_INTERVAL_MS=60000',
+        'RUNNER_HEARTBEAT_INTERVAL_MS=32000',
         IMAGE,
       ]);
       expect(run.status, run.stderr).toBe(0);

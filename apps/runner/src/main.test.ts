@@ -189,8 +189,10 @@ describe('start/close — drain the in-flight heartbeat before the process exits
     vi.stubEnv('RUNNER_TENANT_ID', 'tenant-1');
     vi.stubEnv('RUNNER_NAME', 'runner-1');
     vi.stubEnv('RUNNER_IMAGE_VERSION', '0.5.0');
-    // Long enough that the test's own close() call, not a second tick, is what's being raced.
-    vi.stubEnv('RUNNER_HEARTBEAT_INTERVAL_MS', '60000');
+    // Long enough that the test's own close() call, not a second tick, is what's being raced —
+    // 32_000ms is loadRunnerConfig's own max (012 T050 review: this value drives the drain
+    // timeout, capped so it can never exceed docker-compose.runner.yml's stop_grace_period).
+    vi.stubEnv('RUNNER_HEARTBEAT_INTERVAL_MS', '32000');
 
     let resolveFetch: (() => void) | undefined;
     const pending = new Promise<void>((resolve) => {
