@@ -74,6 +74,43 @@ describe('prune-runner-store: computeAllowedStoreKeys (012 T050 review)', () => 
     expect(computeAllowedStoreKeys(listing)).toEqual(new Set());
   });
 
+  it('collects a store key from optionalDependencies too, not just dependencies (012 T050 review — a real optional dep would otherwise be pruned as unreachable)', () => {
+    const listing = [
+      {
+        name: '@healer/runner',
+        dependencies: {},
+        optionalDependencies: {
+          fsevents: {
+            version: '2.3.3',
+            path: '/repo/node_modules/.pnpm/fsevents@2.3.3/node_modules/fsevents',
+          },
+        },
+      },
+    ];
+    expect(computeAllowedStoreKeys(listing)).toEqual(new Set(['fsevents@2.3.3']));
+  });
+
+  it('recurses into a nested optionalDependencies map, not just a nested dependencies map', () => {
+    const listing = [
+      {
+        name: '@healer/runner',
+        dependencies: {
+          '@healer/boundary-contract': {
+            version: 'link:../../packages/boundary-contract',
+            path: '/repo/packages/boundary-contract',
+            optionalDependencies: {
+              fsevents: {
+                version: '2.3.3',
+                path: '/repo/node_modules/.pnpm/fsevents@2.3.3/node_modules/fsevents',
+              },
+            },
+          },
+        },
+      },
+    ];
+    expect(computeAllowedStoreKeys(listing)).toEqual(new Set(['fsevents@2.3.3']));
+  });
+
   it('merges keys across multiple projects', () => {
     const listing = [
       {

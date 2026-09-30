@@ -33,28 +33,41 @@ const RUNNER_FILTER = '@healer/runner...';
 const STORE_PATH_RE = /node_modules[/\\]\.pnpm[/\\]([^/\\]+)[/\\]node_modules[/\\]/;
 
 /** @param {Record<string, unknown> | undefined} dependencies one `pnpm list --json` node's own
- *  `dependencies` map (recursive: each value may carry its own nested `dependencies`) */
+ *  `dependencies` OR `optionalDependencies` map (recursive: each value may carry its own nested
+ *  `dependencies`/`optionalDependencies`). This repo's own tree has no `optionalDependencies`
+ *  today (confirmed against a real `pnpm list --json` run, 012 T050 review) — walked anyway, so a
+ *  future optional dependency is genuinely reachable instead of silently pruned as unused the
+ *  moment one is added; the alternative (only walking `dependencies`) fails exactly the way this
+ *  script's whole existence warns against: correct today, a silent `MODULE_NOT_FOUND` later. */
 function collectStoreKeys(dependencies, keys) {
   if (!dependencies || typeof dependencies !== 'object') return;
   for (const info of Object.values(dependencies)) {
-    const path = /** @type {{ path?: unknown, dependencies?: unknown }} */ (info)?.path;
+    const node =
+      /** @type {{ path?: unknown, dependencies?: unknown, optionalDependencies?: unknown }} */ (
+        info
+      );
+    const path = node?.path;
     if (typeof path === 'string') {
       const match = path.match(STORE_PATH_RE);
       if (match) keys.add(match[1]);
     }
-    collectStoreKeys(/** @type {any} */ (info)?.dependencies, keys);
+    collectStoreKeys(/** @type {any} */ (node?.dependencies), keys);
+    collectStoreKeys(/** @type {any} */ (node?.optionalDependencies), keys);
   }
 }
 
 /**
- * @param {ReadonlyArray<{ dependencies?: Record<string, unknown> }>} pnpmListJson parsed
- *   `pnpm list --json --depth Infinity` output — one entry per matched project.
+ * @param {ReadonlyArray<{ dependencies?: Record<string, unknown>, optionalDependencies?: Record<string, unknown> }>} pnpmListJson
+ *   parsed `pnpm list --json --depth Infinity` output — one entry per matched project.
  * @returns {Set<string>} every store key (e.g. `zod@3.25.76`,
  *   `@opentelemetry+sdk-node@0.222.0_@opentelemetry+api@1.9.1`) genuinely reachable from them.
  */
 export function computeAllowedStoreKeys(pnpmListJson) {
   const keys = new Set();
-  for (const project of pnpmListJson) collectStoreKeys(project.dependencies, keys);
+  for (const project of pnpmListJson) {
+    collectStoreKeys(project.dependencies, keys);
+    collectStoreKeys(project.optionalDependencies, keys);
+  }
   return keys;
 }
 

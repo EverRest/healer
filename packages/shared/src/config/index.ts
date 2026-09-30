@@ -67,7 +67,20 @@ const runnerSchema = z.object({
   RUNNER_CPU_LIMIT: z.coerce.number().positive().default(1),
   RUNNER_MEMORY_MB_LIMIT: z.coerce.number().positive().default(512),
   RUNNER_MAX_CONCURRENT_RUNS: z.coerce.number().int().positive().default(1),
-  RUNNER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  /**
+   * Capped at 32_000ms so the drain timeout it drives can never silently outgrow what
+   * `docker-compose.runner.yml` assumes (012 T050 review). `apps/runner/src/heartbeat-client.ts`'s
+   * `computeHeartbeatTimeoutMs` (floor(interval * 0.5)) plus `main.ts`'s 2s
+   * `DRAIN_SAFETY_MARGIN_MS` must stay comfortably under the compose file's 20s
+   * `stop_grace_period`, or Docker's own SIGKILL fires before `close()`'s drain finishes —
+   * exactly the bug that review found. This schema can't import that formula directly (it would
+   * be a `packages/shared` → `apps/runner` dependency, backwards for this monorepo's layering),
+   * so the bound is the formula's result, restated here with the derivation spelled out: at
+   * 32_000ms, floor(32_000 * 0.5) + 2_000 = 18_000ms, 2 full seconds under the 20s grace period.
+   * Raising this max requires raising `stop_grace_period` (or the safety margin) to match —
+   * check both files together, not just one.
+   */
+  RUNNER_HEARTBEAT_INTERVAL_MS: z.coerce.number().int().positive().max(32_000).default(30_000),
   /** Bound for the directive idempotency seen-set (FR-028) — independent of heartbeat sizing on
    *  purpose: directive volume and heartbeat-retry volume are unrelated quantities, so one number
    *  must not do both jobs (review finding). 200 is a placeholder, same status as every other

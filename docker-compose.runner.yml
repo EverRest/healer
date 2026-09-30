@@ -30,11 +30,12 @@ services:
   runner:
     image: healer-runner:${RUNNER_IMAGE_TAG:?set RUNNER_IMAGE_TAG to the version make runner-build stamped}
     restart: unless-stopped
-    # Comfortably longer than main.ts's own shutdown drain bound at the *default*
-    # RUNNER_HEARTBEAT_INTERVAL_MS (30s heartbeat -> ~17s drain bound; see main.ts's
-    # `drainTimeoutMs`) — Compose has no way to derive this from another env var, so a deployment
-    # that configures a much longer heartbeat interval must raise this too, by the same margin.
-    # Otherwise `docker compose down`/`stop` would SIGKILL before `close()`'s own drain finishes.
+    # Comfortably longer than main.ts's own shutdown drain bound (`drainTimeoutMs`), which tops
+    # out at 18s: `loadRunnerConfig` caps `RUNNER_HEARTBEAT_INTERVAL_MS` at 32_000ms specifically
+    # so the drain bound it drives can never exceed this value (012 T050 review — a deployment
+    # that could silently misconfigure both numbers out of sync was the actual bug found; the cap
+    # makes that config unrepresentable rather than relying on an operator reading this comment).
+    # Raising this value and `packages/shared/src/config/index.ts`'s cap must be changed together.
     stop_grace_period: 20s
     environment:
       # Required — loadRunnerConfig has no default for these; `docker compose up` refuses to

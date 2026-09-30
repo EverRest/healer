@@ -119,6 +119,9 @@ export function start(): RunnerHandle {
   // (012 T050 review): a fixed 10s bound was actually *shorter* than the default heartbeat
   // interval's own 15s abort timeout, so `close()` could give up and let the process exit before
   // an in-flight request even reached its own timeout — not a real drain at the default setting.
+  // `loadRunnerConfig` caps RUNNER_HEARTBEAT_INTERVAL_MS at 32_000ms specifically so this can
+  // never exceed docker-compose.runner.yml's 20s stop_grace_period with margin to spare —
+  // the cap and the grace period must be changed together (packages/shared/src/config/index.ts).
   const drainTimeoutMs =
     computeHeartbeatTimeoutMs(config.RUNNER_HEARTBEAT_INTERVAL_MS) + DRAIN_SAFETY_MARGIN_MS;
 

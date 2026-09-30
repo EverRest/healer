@@ -75,4 +75,26 @@ describe('loadRunnerConfig (012 T045 — apps/runner has no DATABASE_URL/REDIS_U
       (config as { RUNNER_NAME: string }).RUNNER_NAME = 'other';
     }).toThrow();
   });
+
+  it("refuses a heartbeat interval long enough to push the drain timeout past docker-compose.runner.yml's stop_grace_period (012 T050 review)", () => {
+    // At 32_001ms the derived drain timeout (heartbeat-client.ts's computeHeartbeatTimeoutMs,
+    // floor(interval * 0.5), plus main.ts's 2s DRAIN_SAFETY_MARGIN_MS) would exceed 18_000ms —
+    // too close to the compose file's 20s stop_grace_period for Docker's own signal-delivery
+    // overhead to be safely inside it. This must fail loudly at config load, not silently ship a
+    // config that reintroduces the "SIGKILL before drain finishes" bug the T050 review found.
+    try {
+      loadRunnerConfig({ ...validRunner, RUNNER_HEARTBEAT_INTERVAL_MS: '32001' });
+      expect.unreachable('configuration must not load');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigurationError);
+      expect((error as ConfigurationError).issues.join(' ')).toContain(
+        'RUNNER_HEARTBEAT_INTERVAL_MS',
+      );
+    }
+  });
+
+  it('accepts the longest heartbeat interval that still keeps the drain timeout safely under the shipped stop_grace_period', () => {
+    const config = loadRunnerConfig({ ...validRunner, RUNNER_HEARTBEAT_INTERVAL_MS: '32000' });
+    expect(config.RUNNER_HEARTBEAT_INTERVAL_MS).toBe(32_000);
+  });
 });

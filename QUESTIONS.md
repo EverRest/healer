@@ -343,6 +343,44 @@ manually (see the commit/PR description for pasted output).
 - **Publishing (pushing to a registry) is still out of scope, unchanged from ADR 0014** — this
   task only builds and tags locally, per the existing QUESTIONS.md item 14 (No registry exists).
 
+**Review round 2 (two independent reviews found real, reproduced bugs — .dockerignore not
+actually excluding nested `dist`/`node_modules` broke the "identical rebuild is a no-op"
+guarantee, and the runtime image genuinely contained Prisma/TypeScript/devDependencies) — both
+fixed and personally re-verified with real Docker (same digest twice, zero Prisma content in the
+built image). A confirmation review then found one further real gap, fixed directly rather than
+routed through another agent round-trip, given both fixes were small and needed no Docker to
+verify:**
+
+- **The drain-timeout/`stop_grace_period` relationship was a guarantee with no reader.**
+  `drainTimeoutMs` (derived from `computeHeartbeatTimeoutMs`) only stays under
+  `docker-compose.runner.yml`'s fixed 20s `stop_grace_period` at the *default*
+  `RUNNER_HEARTBEAT_INTERVAL_MS` — nothing stopped an operator from raising the interval far enough
+  to push the derived drain timeout past 20s, silently reintroducing the exact "SIGKILL before
+  `close()`'s drain finishes" bug the first review round fixed. The compose file's own comment
+  already named this risk; nothing enforced it (`AGENTS.md`: "every guarantee names its reader").
+  Fixed by making the unsafe value unrepresentable rather than documenting it harder:
+  `packages/shared/src/config/index.ts`'s `RUNNER_HEARTBEAT_INTERVAL_MS` now has `.max(32_000)` — the
+  exact ceiling at which `floor(32_000 * 0.5) + 2_000 = 18_000ms`, two full seconds under the 20s
+  grace period. `loadRunnerConfig` can't import `computeHeartbeatTimeoutMs` directly (that would be
+  a `packages/shared` → `apps/runner` dependency, backwards for this monorepo's layering), so the
+  cap is the formula's *result*, restated with the derivation spelled out in a comment that
+  cross-references both `main.ts` and the compose file by name — raising any of the three numbers
+  (the cap, the safety margin, or the grace period) requires checking the other two, a real but
+  unavoidable three-file coupling given the layering constraint.
+- **`scripts/prune-runner-store.mjs`'s reachable-set computation only walked `dependencies`, never
+  `optionalDependencies`.** Not a live bug (confirmed via a real `pnpm list --json` run against this
+  repo's actual tree: no `optionalDependencies` key exists anywhere in it today), but a real latent
+  one: a future optional dependency (e.g. a native-binding package like `fsevents`) would be
+  silently pruned as "unreachable" the moment one appeared, producing a working-until-it-isn't
+  `MODULE_NOT_FOUND` in production with no warning. Fixed: `collectStoreKeys` now walks both
+  `dependencies` and `optionalDependencies` at every level, recursively.
+- **Cosmetic, not fixed**: the built image still contains a handful of zero-byte dangling symlinks
+  under `node_modules/.pnpm/node_modules/@prisma/*`, pointing at store directories
+  `prune-runner-store.mjs` already deleted. Confirmed via `du`/`find` inside the built image that no
+  real Prisma file content remains anywhere — this is purely leftover symlink aliases with nothing
+  behind them, not a functional leak. Not worth a third fix round; noted here in case a future
+  `find -iname '*prisma*'`-style audit of the image is confused by it.
+
 ## 001 data-model.md — fingerprint index exclusion set
 
 **Resolved and confirmed**: `where state not in ('merged', 'removed')`, already applied in
