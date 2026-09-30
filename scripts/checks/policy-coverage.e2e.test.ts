@@ -7,9 +7,10 @@ import { findUncoveredMutatingActions } from './policy-coverage.mjs';
 
 /**
  * `check:policy-coverage`'s real, live-database query (002 T031, SC-001, R-14), proven against a
- * real Postgres: `audit_entry` left-joined to `policy_decision` on `(tenant_id, action, target_id)`
- * — `policy_action.mutating` selects the rows that need a decision, and a consumed `ALLOW` is what
- * satisfies one.
+ * real Postgres. Matches a decision via `audit_entry.policy_decision_id` (not a target-ref/target-
+ * id cast — review finding, see policy-coverage.mjs's own header) and treats an `audit_entry`
+ * whose `action` has no matching `policy_action` row as its own violation category (review
+ * finding: an INNER join there would silently drop exactly the bypass this check exists to catch).
  */
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../prisma/migrations/', import.meta.url));
 
@@ -24,6 +25,8 @@ const TENANT_ID = '00000000-0000-0000-8000-0000000000f1';
 const TARGET_COVERED = '00000000-0000-0000-8000-0000000000f2';
 const TARGET_UNCOVERED = '00000000-0000-0000-8000-0000000000f3';
 const TARGET_READ_ONLY = '00000000-0000-0000-8000-0000000000f4';
+const TARGET_UNREGISTERED = '00000000-0000-0000-8000-0000000000f9';
+const DECISION_ID = '00000000-0000-0000-8000-0000000000f5';
 
 describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)', () => {
   let pg: StartedPostgres;
@@ -43,29 +46,33 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
          ('issue.view', 'read_only', false, '001', now())`,
     );
 
-    // Covered: a mutating action with a matching, consumed ALLOW decision behind it.
+    // Covered: a mutating action linked, via policy_decision_id, to a consumed ALLOW decision.
     await query(
       pg,
       `insert into "policy"."policy_decision"
          (id, tenant_id, action_key, target_ref, proposal_digest, decision_input, ruleset_version,
           outcome, ceiling_applied, budget_state, evaluated_at, consumed_at)
        values
-         ('00000000-0000-0000-8000-0000000000f5', '${TENANT_ID}', 'change.open_pull_request',
-          '${TARGET_COVERED}', 'digest-1', '{}', 1, 'allow', false, '{}', now(), now())`,
+         ('${DECISION_ID}', '${TENANT_ID}', 'change.open_pull_request', '${TARGET_COVERED}',
+          'digest-1', '{}', 1, 'allow', false, '{}', now(), now())`,
     );
 
     await query(
       pg,
       `insert into "audit"."audit_entry"
          (id, tenant_id, actor_type, actor_ref, action, target_type, target_id, reason,
-          evidence_ids, outcome)
+          evidence_ids, outcome, policy_decision_id)
        values
          ('00000000-0000-0000-8000-0000000000f6', '${TENANT_ID}', 'human', 'pavlo',
-          'change.open_pull_request', 'issue', '${TARGET_COVERED}', 'opened fix pr', '{}', 'ok'),
+          'change.open_pull_request', 'issue', '${TARGET_COVERED}', 'opened fix pr', '{}', 'ok',
+          '${DECISION_ID}'),
          ('00000000-0000-0000-8000-0000000000f7', '${TENANT_ID}', 'human', 'pavlo',
-          'change.open_pull_request', 'issue', '${TARGET_UNCOVERED}', 'opened fix pr', '{}', 'ok'),
+          'change.open_pull_request', 'issue', '${TARGET_UNCOVERED}', 'opened fix pr', '{}', 'ok',
+          null),
          ('00000000-0000-0000-8000-0000000000f8', '${TENANT_ID}', 'human', 'pavlo',
-          'issue.view', 'issue', '${TARGET_READ_ONLY}', 'viewed issue', '{}', 'ok')`,
+          'issue.view', 'issue', '${TARGET_READ_ONLY}', 'viewed issue', '{}', 'ok', null),
+         ('00000000-0000-0000-8000-0000000000fa', '${TENANT_ID}', 'human', 'pavlo',
+          'issue.close', 'issue', '${TARGET_UNREGISTERED}', 'closed issue', '{}', 'ok', null)`,
     );
 
     prisma = new PrismaClient({ datasourceUrl: pg.url });
@@ -76,11 +83,22 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
     await pg?.stop();
   });
 
-  it('flags only the mutating action with no consumed ALLOW behind it', async () => {
+  it('flags an unregistered action and a registered mutating action with no linked decision, nothing else', async () => {
     const violations = await findUncoveredMutatingActions(prisma);
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain('00000000-0000-0000-8000-0000000000f7');
-    expect(violations[0]).toContain('change.open_pull_request');
-    expect(violations[0]).toContain(TARGET_UNCOVERED);
+    expect(violations).toHaveLength(2);
+
+    const uncovered = violations.find((v) => v.includes('00000000-0000-0000-8000-0000000000f7'));
+    expect(uncovered).toBeDefined();
+    expect(uncovered).toContain('change.open_pull_request');
+    expect(uncovered).toContain(TARGET_UNCOVERED);
+    expect(uncovered).toContain('no consumed ALLOW decision linked');
+
+    const unregistered = violations.find((v) =>
+      v.includes('00000000-0000-0000-8000-0000000000fa'),
+    );
+    expect(unregistered).toBeDefined();
+    expect(unregistered).toContain('issue.close');
+    expect(unregistered).toContain(TARGET_UNREGISTERED);
+    expect(unregistered).toContain('not a registered policy_action.action_key');
   });
 });

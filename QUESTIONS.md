@@ -1408,3 +1408,29 @@ run — reconciling a spec doc against a shape that's still evolving (Phase 4-7 
 `DecisionInput` too, e.g. real `autonomy`/`budget` resolution) is better done once, after those
 phases land, than incrementally per-batch. Whoever does that pass should start from this entry and
 from `decisionInputSchema`'s actual code, not from the yaml.
+
+## 002 T031 — `check:policy-coverage` joins on `audit_entry.policy_decision_id`, not `target_ref`
+
+research.md R-14 names the conceptual join key `(tenant_id, action, target_id)` and explicitly
+discusses and rejects one alternative (`agent_run.policy_decision_id`, because it only sees agent-
+executed actions), but does not mention `audit_entry.policy_decision_id` — a column that already
+exists on the table R-14 itself joins from — as a candidate at all. The first implementation
+matched decisions by casting `audit_entry.target_id` to text against `policy_decision.target_ref`,
+which review found couldn't verify the Invariants section's `proposal_digest` requirement (no
+digest column on `audit_entry` to check it against) and rested on an unproven cast (`target_ref` is
+free text, not guaranteed UUID-shaped, with no real 008/010 executor yet to prove the two fields
+are ever populated from the same value).
+
+Switched the join to `audit_entry.policy_decision_id = policy_decision.id` instead. This sidesteps
+the cast entirely, and — since `ConsumeDecision` (T023) already enforces digest-match as a
+precondition of setting `consumed_at` — confirming the linked decision is a consumed `ALLOW`
+transitively carries the digest-match guarantee forward for free, closing the gap the target-ref
+approach couldn't. Not asking whether research.md should be updated to mention this column; noting
+it here since R-14 discusses the rejected alternative but not this one.
+
+Same pass also found, live in this codebase, that `audit_entry.action` being "a registered
+`policy_action.action_key`" is aspirational, not enforced: `close-issue.ts`'s `issue.close` and
+`prisma-evidence-retention-repository.ts`'s `evidence.retention_purge` are both source-commented as
+unregistered today. The check's `policy_action` join is `LEFT`, not `INNER`, because of this — an
+unregistered action is its own violation category, reported separately from "registered but
+uncovered," since an unregistered action's mutating-ness is unknown.
