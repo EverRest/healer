@@ -127,6 +127,30 @@ describe('validatePredicateShape (batch 9 I2, review finding)', () => {
     expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
   });
 
+  // Batch 9 follow-up review, round 3: the DTO's now-removed `VALUE_SCHEMA_BY_KIND_AND_OPERATOR`
+  // used `.strict()` on `QuantityValue`, which this function did not enforce — an in-process
+  // publish accepted an extra key over the same shape HTTP rejected. Removing the DTO's copy
+  // means this is now the only place that check can live.
+  it('rejects a quantity literal value carrying an extra key', () => {
+    const predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: { kind: 'literal', value: 50, extra: 'nope' },
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
+  it('rejects a quantity field-reference value carrying an extra key', () => {
+    const predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: { kind: 'field', field: 'budget.limit', extra: 'nope' },
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
   it('rejects an ordinal predicate whose value is not a number', () => {
     const predicate = {
       kind: 'ordinal',

@@ -270,6 +270,32 @@ describe('/policy (002 T027-T030, T032)', () => {
         .expect(422);
     });
 
+    it('422s a quantity field-reference value carrying an extra key (batch 9 follow-up review, round 3: confirmed disagreement — the DTO used to .strict()-check this, the domain validator did not)', async () => {
+      await request(app.getHttpServer())
+        .post(path('/policy/rulesets'))
+        .set('X-Tenant-Id', TENANT_ID)
+        .set('X-Actor-Id', 'pavlo')
+        .set('Idempotency-Key', randomUUID())
+        .send({
+          rules: [
+            {
+              ruleKey: 'bad-quantity-extra-key',
+              predicates: [
+                {
+                  field: 'budget.consumed',
+                  operator: 'atMost',
+                  value: { kind: 'field', field: 'budget.limit', extra: 'nope' },
+                },
+              ],
+              outcome: 'allow',
+              reasonCode: 'NO_ADOPTED_EXPECTATION',
+              note: '',
+            },
+          ],
+        })
+        .expect(422);
+    });
+
     it('422s an instant predicate with a literal that does not parse as a date (batch 9 I2, review finding)', async () => {
       await request(app.getHttpServer())
         .post(path('/policy/rulesets'))

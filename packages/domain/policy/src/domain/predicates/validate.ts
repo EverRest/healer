@@ -66,6 +66,15 @@ function wrongTypeMessage(field: string, operator: string): string {
   return `predicate value for field "${field}" operator "${operator}" has the wrong type`;
 }
 
+/** Exactly this set of own keys, no more, no less — the DTO's now-removed `VALUE_SCHEMA_BY_KIND_
+ *  AND_OPERATOR` used `.strict()` for this; `validateQuantityValue` below is the only remaining
+ *  place a `QuantityValue` gets checked at all (batch 9 follow-up review, round 3), so it takes
+ *  over the same "no extra keys" guarantee rather than silently loosening it. */
+function hasExactKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((k) => actual.includes(k));
+}
+
 /** `QuantityValue`'s own checks (batch 9 follow-up review, both independent Opus reviews):
  *  before this, `{kind:'field', field:'budget.degradationStep'}` passed for a `budget.consumed`
  *  predicate because both share the `budget.` string prefix — `budget.degradationStep` is an
@@ -80,10 +89,12 @@ function validateQuantityValue(field: string, operator: string, value: unknown):
   if (typeof value !== 'object' || value === null) return wrongTypeMessage(field, operator);
   const kind = (value as { readonly kind?: unknown }).kind;
   if (kind === 'literal') {
+    if (!hasExactKeys(value, ['kind', 'value'])) return wrongTypeMessage(field, operator);
     const literal = (value as { readonly value?: unknown }).value;
     return typeof literal === 'number' ? null : wrongTypeMessage(field, operator);
   }
   if (kind === 'field') {
+    if (!hasExactKeys(value, ['kind', 'field'])) return wrongTypeMessage(field, operator);
     const targetField = (value as { readonly field?: unknown }).field;
     if (typeof targetField !== 'string') return wrongTypeMessage(field, operator);
     if (fieldKindOf(targetField) !== 'quantity') {

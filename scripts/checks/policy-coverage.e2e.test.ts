@@ -28,6 +28,7 @@ const TARGET_COVERED = '00000000-0000-0000-8000-0000000000f2';
 const TARGET_UNCOVERED = '00000000-0000-0000-8000-0000000000f3';
 const TARGET_READ_ONLY = '00000000-0000-0000-8000-0000000000f4';
 const TARGET_UNREGISTERED = '00000000-0000-0000-8000-0000000000f9';
+const TARGET_WRONG_ACTION = '00000000-0000-0000-8000-0000000000fc';
 const DECISION_ID = '00000000-0000-0000-8000-0000000000f5';
 
 describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)', () => {
@@ -46,7 +47,8 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
        values
          ('change.open_pull_request', 'code_change', true, '008', now()),
          ('issue.view', 'read_only', false, '001', now()),
-         ('policy.publish_ruleset', 'read_only', false, '002', now())`,
+         ('policy.publish_ruleset', 'read_only', false, '002', now()),
+         ('deployment.rollback', 'reversible_remediation', true, '010', now())`,
     );
 
     // Covered: a mutating action linked, via policy_decision_id, to a consumed ALLOW decision.
@@ -75,7 +77,10 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
          ('00000000-0000-0000-8000-0000000000f8', '${TENANT_ID}', 'human', 'pavlo',
           'issue.view', 'issue', '${TARGET_READ_ONLY}', 'viewed issue', '{}', 'ok', null),
          ('00000000-0000-0000-8000-0000000000fa', '${TENANT_ID}', 'human', 'pavlo',
-          'issue.close', 'issue', '${TARGET_UNREGISTERED}', 'closed issue', '{}', 'ok', null)`,
+          'issue.close', 'issue', '${TARGET_UNREGISTERED}', 'closed issue', '{}', 'ok', null),
+         ('00000000-0000-0000-8000-0000000000fd', '${TENANT_ID}', 'human', 'pavlo',
+          'deployment.rollback', 'issue', '${TARGET_WRONG_ACTION}', 'rolled back deploy', '{}',
+          'ok', '${DECISION_ID}')`,
     );
 
     prisma = new PrismaClient({ datasourceUrl: pg.url });
@@ -88,7 +93,7 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
 
   it('flags an unregistered action and a registered mutating action with no linked decision, nothing else', async () => {
     const violations = await findUncoveredMutatingActions(prisma);
-    expect(violations).toHaveLength(2);
+    expect(violations).toHaveLength(3);
 
     const uncovered = violations.find((v) => v.includes('00000000-0000-0000-8000-0000000000f7'));
     expect(uncovered).toBeDefined();
@@ -103,6 +108,22 @@ describe('check:policy-coverage against a real Postgres (002 T031, SC-001, R-14)
     expect(unregistered).toContain('issue.close');
     expect(unregistered).toContain(TARGET_UNREGISTERED);
     expect(unregistered).toContain('not a registered policy_action.action_key');
+  });
+
+  // Batch 9 follow-up review, round 3: the join's `ON` clause also checks `pd.action_key =
+  // ae.action` (and `pd.tenant_id = ae.tenant_id`) — nothing exercised the negative case before
+  // this, so deleting either clause would not have failed any test. This audit_entry's
+  // `policy_decision_id` points at the real, consumed-ALLOW `change.open_pull_request` decision,
+  // but this entry's own `action` is `deployment.rollback` — a different action entirely. Without
+  // the `action_key` clause, the join would match on `policy_decision_id` alone and wrongly treat
+  // this as covered.
+  it("flags an audit_entry whose linked decision is for a different action key, even though the link itself resolves (proves the join's action_key/tenant_id clauses do real work)", async () => {
+    const violations = await findUncoveredMutatingActions(prisma);
+    const wrongAction = violations.find((v) => v.includes('00000000-0000-0000-8000-0000000000fd'));
+    expect(wrongAction).toBeDefined();
+    expect(wrongAction).toContain('deployment.rollback');
+    expect(wrongAction).toContain(TARGET_WRONG_ACTION);
+    expect(wrongAction).toContain('no consumed ALLOW decision linked');
   });
 
   // Batch 9 I1, review finding: `PublishRuleset` audits as `policy.publish_ruleset`, which was

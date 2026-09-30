@@ -78,7 +78,12 @@ function parseStoredDecisionInput(row: { readonly id: string; readonly decisionI
     return decisionInputSchema.parse(row.decisionInput);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`policy_decision ${row.id}: stored decision_input failed schema validation — ${message}`);
+    // `{ cause: error }` (batch 9 follow-up review, round 3): the original `ZodError`'s structured
+    // `issues` and stack are worth keeping for debugging, not just its flattened message text.
+    throw new Error(
+      `policy_decision ${row.id}: stored decision_input failed schema validation — ${message}`,
+      { cause: error },
+    );
   }
 }
 

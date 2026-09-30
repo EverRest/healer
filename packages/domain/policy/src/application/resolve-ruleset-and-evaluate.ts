@@ -14,11 +14,17 @@ import type { Rule } from '../domain/rule.js';
  *
  *  Extends `HealerError` (batch 9 follow-up review, both independent Opus reviews), not a plain
  *  `Error`, matching the rest of this package's error convention (`DecisionNotAllowedError`,
- *  `DuplicateRuleKeyError`, ...): today's one caller (`policy-evaluation.controller.ts`) catches
- *  this by name and maps it to 422, but a future caller that doesn't copy that exact
- *  `instanceof` check would otherwise let it surface as a generic 500. `VALIDATION` (422) is the
- *  same substitution `DuplicateRuleKeyError` already makes for a code this closed union has no
- *  dedicated entry for. */
+ *  `DuplicateRuleKeyError`, ...). `VALIDATION` (422) is the same substitution `DuplicateRuleKeyError`
+ *  already makes for a code this closed union has no dedicated entry for.
+ *
+ *  This repo has no global Nest exception filter (`@Catch`/`APP_FILTER`/`useGlobalFilters`) that
+ *  reads `HealerError.code` and maps it to an HTTP status — confirmed absent, not just unwired
+ *  (round 3 follow-up: an earlier version of this comment claimed a future caller "would
+ *  otherwise let it surface as a generic 500," which described a mechanism that does not exist).
+ *  Today's one caller (`policy-evaluation.controller.ts`) still has its own explicit `instanceof`
+ *  branch, unchanged by this — so right now this change is harmless and purely for convention
+ *  consistency, not yet a safety net for a future caller. It becomes one only if/when a global
+ *  filter is added; building that filter is out of scope here. */
 export class NoPublishedRulesetError extends HealerError {
   constructor() {
     super(

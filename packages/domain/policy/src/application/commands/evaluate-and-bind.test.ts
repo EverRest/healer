@@ -194,9 +194,10 @@ describe('evaluateAndBind (T021)', () => {
   });
 
   // Batch 9 follow-up review (both independent Opus reviews): NoPublishedRulesetError/
-  // UnregisteredActionError used to extend plain Error, so a future caller that doesn't copy
-  // policy-evaluation.controller.ts's exact instanceof check would let either surface as a
-  // generic 500 instead of a 422.
+  // UnregisteredActionError used to extend plain Error, unlike the rest of this package's error
+  // convention (DecisionNotAllowedError, DuplicateRuleKeyError, ...). No global exception filter
+  // reads HealerError.code today, so this is a convention fix, not yet a behavior change for any
+  // caller — see resolve-ruleset-and-evaluate.ts's own doc comment (round 3 correction).
   it('NoPublishedRulesetError is a HealerError with code VALIDATION', async () => {
     await expect(
       evaluateAndBind(

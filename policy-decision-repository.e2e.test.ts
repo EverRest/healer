@@ -370,6 +370,31 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
         );
       }));
 
+    it('the same error keeps the original ZodError as its cause, not only the flattened message (batch 9 follow-up review, round 3)', async () =>
+      withCorrelation('corr-read-7', async () => {
+        const { decision } = await evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions },
+          CONTEXT,
+          { decisionInput: buildDecisionInput() },
+        );
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('healer.privileged_write', 'on', true)`;
+          await tx.$executeRaw`
+            UPDATE "policy"."policy_decision" SET decision_input = '{}'::jsonb
+            WHERE id = ${decision.id}::uuid`;
+        });
+
+        let caught: unknown;
+        try {
+          await decisions.findById(scope(CONTEXT, { id: decision.id }));
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        expect((caught as { cause?: unknown }).cause).toBeDefined();
+        expect((caught as { cause?: { name?: string } }).cause?.name).toBe('ZodError');
+      }));
+
     it("list narrows by issueId, actionKey, outcome and since, and never returns another tenant's rows", async () =>
       withCorrelation('corr-read-4', async () => {
         const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fd');
