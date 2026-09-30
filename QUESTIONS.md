@@ -1354,3 +1354,24 @@ waiting on Pavlo": this is a sequencing fact (the referenced entities don't exis
 ambiguity — building stub grant/revoke/budget commands just to satisfy today's phase-3 task text
 would be doing Phase 4/6's work under a Phase 3 label, which the plan's own phase ordering (US2
 "with US1", US4 "alongside US3", both after Phase 3's checkpoint) doesn't ask for.
+
+## 002 batch 6 — `policy.policy_decision.issue_id` breaks 001's deletion-completeness gate
+
+001's `issue-deletion.e2e.test.ts` ("handles every column in the database that names an issue")
+scans the whole schema for any column literally named `issue_id`/`other_issue_id` and requires it
+to appear in `packages/domain/issues/src/infrastructure/prisma-issue-deletion.ts`'s closed
+`ISSUE_ID_COLUMNS` list — no exemption path exists. `policy.policy_decision.issue_id` (added in
+002's batch 5, T021–T023) isn't in that list, so the gate now fails: 371/372 e2e, one real,
+reachable, unexplained-by-load red.
+
+**Ruling:** null the column, don't delete the row, following the exact precedent already set for
+`agent_run.issue_id` (also a retained audit/cost record, also nulled rather than deleted on issue
+erasure) — a `policy_decision` is evidentiary (FR-017: "every decision explicable a year later";
+SC-001's reconciliation) and must survive its issue being erased, the same reason `agent_run`
+survives. This is safe against `policy_decision`'s own append-only trigger (which normally rejects
+any column but `consumed_at`/`invalidated_reason`) because the whole deletion transaction already
+runs under `withPrivilegedWrite`, the same bypass `agent_run`'s nulling already relies on — nothing
+new to build there, just one more statement inside the existing privileged transaction and one more
+entry in the closed list. Fixing this in-run (folded into batch 7) rather than deferring: it's the
+thing currently keeping the full e2e suite from being green, the fix is mechanical and
+precedent-following (not a new design decision), and 002 is what broke the gate.
