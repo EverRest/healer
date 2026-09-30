@@ -1457,6 +1457,23 @@ depended on a cooldown/rate-limit predicate cannot actually replay identically a
 table, or bounds embedded in the stored `decision_input` at decision time) rather than discovering
 it after replay already silently drifts.
 
+## 002 batch 9 — the ceiling is enforced for `actionClass`, not yet for `hasTestedUndo`/`autonomy.level`
+
+Batch 9 fixed `actionClass` being caller-supplied and unverified (C1(b) — the ceiling could be
+defeated by claiming a lower class). Both re-review passes independently flagged, correctly, that
+the same bug class still applies to two other `DecisionInput` fields that `ACTION_CEILING`
+consumes: **`reversibility.hasTestedUndo`** and **`autonomy.level`** are both still set directly by
+the caller, with nothing on the evaluate/bind/explain path resolving them from a source of truth.
+
+**Not a regression from this run, and not fixed here — legitimately out of scope**: resolving
+`hasTestedUndo` needs 010's remediation catalogue (T048, `RemediationCataloguePublished` consumer,
+Phase 5) and resolving `autonomy.level` needs `GrantAutonomy`/grant resolution (T039, Phase 4) —
+neither exists in this repo yet. tasks.md already names both tasks for exactly this reason.
+Recording explicitly so nobody reads C1(b)'s fix as having closed the whole "ceiling is
+un-exceedable" guarantee — it closed the `actionClass` half. The other two remain caller-supplied,
+hence unverified, until T039/T048 land. Any code comment claiming the ceiling is fully
+un-defeatable before then is overclaiming and should be corrected to name what's actually closed.
+
 ## 002 T031 — `check:policy-coverage` joins on `audit_entry.policy_decision_id`, not `target_ref`
 
 research.md R-14 names the conceptual join key `(tenant_id, action, target_id)` and explicitly
