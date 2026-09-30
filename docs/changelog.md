@@ -95,6 +95,45 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.45.0 — 2026-09-30
+
+**004 phases 1–2 (T001–T017)**: the architecture graph's foundation — `Component`, `DeploymentUnit`,
+`Repository`, the code/runtime/product graph layers, and discovery's boundary shapes. Built as five
+reviewed batches (Setup; the schema/provenance/versioning core; tenant context, the read envelope,
+outbox events and the `graph:confirm` capability gate; the boundary-contract discovery shapes), each
+with two independent reviewers before merge.
+
+- `packages/domain/architecture` and the `architecture` Postgres schema: `graph_node`/`graph_edge`
+  with `NOT NULL` provenance, strength and confidence enforced by database CHECK constraints, not
+  only by the repository — an element without provenance cannot be persisted, proven against a real
+  Postgres, not only by a type.
+- Graph versions are validity ranges (`valid_from_version`/`valid_to_version`), never snapshots; a
+  partial unique index makes two open rows for one logical edge a database-level impossibility,
+  proven with a held-transaction race test, not a happy-path insert.
+- `edge_provenance` is append-only (reusing 001's privileged-write trigger pattern), with
+  `graph_edge.strength`/`.confidence` maintained as a true `MAX()` over it — review caught and fixed
+  a version that silently rewrote closed/historical edge rows, which would have broken "a pinned
+  query is stable" (FR-014).
+- `packages/integrations/{gitlab,kubernetes,otel}`: frozen, immutable `DiscoveryAdapter` skeletons —
+  an adapter's provenance class is a runtime-enforced constant, not a value it can choose per
+  element.
+- The four discovery boundary shapes (`component_candidate`, `deployment_unit_candidate`,
+  `dependency_observation`, `repository_ref`) corrected in `packages/boundary-contract` — 012 had
+  pre-built placeholder versions with different fields than 004's contract actually specifies.
+- `graph:confirm` is a capability no agent or automation credential carries; a structural gate
+  (`gate-graph-confirm-capability`, now in `make ci`) catches an MCP tool, command or job handler
+  that would expose a confirm path without it — review found and closed several concrete bypasses
+  before this held (an inverted pass condition, an unscanned execution-plane surface, a
+  comment-stripper defeated by an ordinary string literal).
+- `make graph-fixtures`: three architecture fixtures (monolith, microservices, serverless) driving
+  one query set, proving Principle VII's "one model, any architecture" non-vacuously.
+
+Cross-cutting: extended 001's tenant-deletion completeness gate to cover the new
+`architecture.drift_finding.issue_id` column, exactly as that gate's own design intends for a new
+feature adding a table that names an issue. Open question for a human: `graph_edge` has no
+`actor_ref`/`observation_ref` columns at all, so a directly human-authored edge with no discovery
+observation behind it currently has nowhere to record its source — see `QUESTIONS.md`.
+
 ## 0.44.0 — 2026-09-28
 
 **001 phase 7 and phase 8 (T045–T055, T057)**: views, the data lifecycle and the human close. Built

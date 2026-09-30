@@ -119,6 +119,20 @@ did not build — nothing schedules the sweep or retention, a merged issue's lat
 issue, audit action keys wait on 002 — is indexed at the end of `QUESTIONS.md`. `make ci`: 408 unit
 + 332 e2e tests, all gates.
 
+**004 architecture-graph phases 1–2 landed 2026-09-30** (VERSION 0.45.0): the architecture graph's
+foundation, T001–T017 of the full spec. `Component`/`DeploymentUnit`/`Repository` over one
+`graph_node`/`graph_edge` pair, provenance and versioning enforced by database constraints and a
+partial unique index (not only by types), `edge_provenance` append-only with a true `MAX()`
+maintaining the edge's denormalised strength/confidence, the `gitlab`/`kubernetes`/`otel`
+`DiscoveryAdapter` skeletons, and the four discovery boundary shapes corrected in
+`packages/boundary-contract` (012 T040 had pre-built placeholder versions with different fields).
+Built as five reviewed batches, each with two independent reviewers before merge; review caught and
+fixed a trigger that would have silently rewritten closed/historical graph versions, a tenant-blind
+FK on all six attribute tables, and several concrete bypasses in the `graph:confirm` capability
+gate before it actually held. `make ci` green (the one flaky signal was 001's own previously-known
+load-sensitive replay test, confirmed transient by isolated retry). Phase 3 (US1, real discovery
+collection) not started.
+
 Next: **002 policy-and-autonomy** (phases 1–3 first: the closed input record, the `DENY`-seeded
 lattice, the pure evaluator, then US1) and, in parallel, **012 phase 6's deferred runner tasks**
 (T042, T045, T048–T051), which 001's repository/controller pattern has now unblocked, as have T080
