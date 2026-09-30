@@ -1331,3 +1331,26 @@ silent-failure-hunter) land, in case either surfaces a real defect rather than a
 Not added to "Decisions waiting on Pavlo" — none of these need a decision only Pavlo can make;
 they're implementation judgment calls on ambiguous spec prose, and two independent reviews are
 actively checking them against the actual test suite before this batch is called done.
+
+## 002 T032/T033 — text requires Phase 4/6 functionality that doesn't exist yet in this run's scope
+
+This run covers Phases 1–3 (T001–T033) only. Two of Phase 3's own tasks, read literally, need
+functionality from later phases that are out of scope here:
+
+- **T032** ("e2e isolation matrix: rule set, grant, decision, approval and budget reads all return
+  404 for another tenant") — `grant`, `approval` and `budget` reads don't exist yet
+  (`AutonomyGrant`/`ApprovalRequest`/`BudgetLimit` endpoints are Phase 4/6/7).
+- **T033** ("publish a rule set, change a budget, grant and revoke → four audit entries") — the
+  grant/revoke/budget-change commands (`GrantAutonomy`, `RevokeAutonomy`, a budget-write endpoint)
+  are Phase 4/6, not built here.
+
+**Ruling:** scope both to what actually exists at the end of this run — rule set and decision reads
+for T032's isolation matrix, `PublishRuleset`'s single audit entry for T033 (already proven by
+batch 5's audit-wiring fix). Mark both tasks with a note in `tasks.md` that the grant/approval/
+budget portions are deferred to whichever session implements Phase 4 (US2, autonomy grants) and
+Phase 6 (US4, budgets) — they should extend these same tests rather than writing new ones from
+scratch, per this repo's "consolidate, don't append" documentation rule. Not escalated to "Decisions
+waiting on Pavlo": this is a sequencing fact (the referenced entities don't exist yet), not a design
+ambiguity — building stub grant/revoke/budget commands just to satisfy today's phase-3 task text
+would be doing Phase 4/6's work under a Phase 3 label, which the plan's own phase ordering (US2
+"with US1", US4 "alongside US3", both after Phase 3's checkpoint) doesn't ask for.
