@@ -4,4 +4,5 @@ export * from './domain/provenance-strength.js';
 export * from './domain/node-identity.js';
 export * from './domain/graph-concurrency-error.js';
 export * from './domain/graph-node-repository.js';
+export * from './domain/read-envelope.js';
 export * from './infrastructure/prisma-graph-node-repository.js';
