@@ -19,7 +19,19 @@ const OPENAPI_PATH = fileURLToPath(new URL('../../apps/api/openapi.json', import
 // Paths that are not tenant-scoped by nature — the single authority for this exemption; a
 // route added here without also being genuinely tenant-free is a reviewable, visible line,
 // not a silent gap.
-const EXEMPT_PATHS = new Set(['/health', '/ready']);
+//
+// `/policy/actions` reads `policy_action`, which has no `tenant_id` at all (it is a product
+// fact — every 002 domain doc comment on that repository says so). `/policy/dry-run` writes
+// nothing (FR-004/FR-019) — none of the three isolation helpers fit a route with no resource to
+// create-and-read-back or marker to trace a landing tenant for; `apps/api/policy.e2e.test.ts`
+// instead asserts the real property directly (tenant A's dry-run resolves tenant A's own
+// published rule set, never tenant B's), just not through a gate-recognized call.
+const EXEMPT_PATHS = new Set([
+  '/health',
+  '/ready',
+  '/api/v1/policy/actions',
+  '/api/v1/policy/dry-run',
+]);
 
 const CALL_PATTERN =
   /assertTenant(?:Isolated|ScopedEnqueue|IsolatedList)\s*\(\s*[^,]+,\s*['"]([A-Z]+)['"]\s*,\s*['"]([^'"]+)['"]/g;
