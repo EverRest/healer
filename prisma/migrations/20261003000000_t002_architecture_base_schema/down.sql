@@ -14,22 +14,22 @@ ALTER TABLE "architecture"."discovery_draft" DROP CONSTRAINT "discovery_draft_ru
 ALTER TABLE "architecture"."discovery_source_outcome" DROP CONSTRAINT "discovery_source_outcome_run_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "architecture"."flow_attr" DROP CONSTRAINT "flow_attr_node_id_fkey";
+ALTER TABLE "architecture"."flow_attr" DROP CONSTRAINT "flow_attr_node_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "architecture"."feature_attr" DROP CONSTRAINT "feature_attr_node_id_fkey";
+ALTER TABLE "architecture"."feature_attr" DROP CONSTRAINT "feature_attr_node_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "architecture"."endpoint_attr" DROP CONSTRAINT "endpoint_attr_node_id_fkey";
+ALTER TABLE "architecture"."endpoint_attr" DROP CONSTRAINT "endpoint_attr_node_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "architecture"."repository_attr" DROP CONSTRAINT "repository_attr_node_id_fkey";
+ALTER TABLE "architecture"."repository_attr" DROP CONSTRAINT "repository_attr_node_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "architecture"."deployment_unit_attr" DROP CONSTRAINT "deployment_unit_attr_node_id_fkey";
+ALTER TABLE "architecture"."deployment_unit_attr" DROP CONSTRAINT "deployment_unit_attr_node_id_tenant_id_fkey";
 
 -- DropForeignKey
-ALTER TABLE "architecture"."component_attr" DROP CONSTRAINT "component_attr_node_id_fkey";
+ALTER TABLE "architecture"."component_attr" DROP CONSTRAINT "component_attr_node_id_tenant_id_fkey";
 
 -- DropForeignKey
 ALTER TABLE "architecture"."edge_provenance" DROP CONSTRAINT "edge_provenance_edge_id_tenant_id_fkey";
@@ -71,19 +71,37 @@ DROP INDEX "architecture"."discovery_run_tenant_id_started_at_idx";
 DROP INDEX "architecture"."flow_attr_tenant_id_idx";
 
 -- DropIndex
+DROP INDEX "architecture"."flow_attr_node_id_tenant_id_key";
+
+-- DropIndex
 DROP INDEX "architecture"."feature_attr_tenant_id_idx";
+
+-- DropIndex
+DROP INDEX "architecture"."feature_attr_node_id_tenant_id_key";
 
 -- DropIndex
 DROP INDEX "architecture"."endpoint_attr_tenant_id_idx";
 
 -- DropIndex
+DROP INDEX "architecture"."endpoint_attr_node_id_tenant_id_key";
+
+-- DropIndex
 DROP INDEX "architecture"."repository_attr_tenant_id_idx";
+
+-- DropIndex
+DROP INDEX "architecture"."repository_attr_node_id_tenant_id_key";
 
 -- DropIndex
 DROP INDEX "architecture"."deployment_unit_attr_tenant_id_idx";
 
 -- DropIndex
+DROP INDEX "architecture"."deployment_unit_attr_node_id_tenant_id_key";
+
+-- DropIndex
 DROP INDEX "architecture"."component_attr_tenant_id_idx";
+
+-- DropIndex
+DROP INDEX "architecture"."component_attr_node_id_tenant_id_key";
 
 -- DropIndex
 DROP INDEX "architecture"."edge_provenance_tenant_id_edge_id_idx";
@@ -204,3 +222,12 @@ DROP TYPE "architecture"."graph_layer";
 
 -- DropEnum
 DROP TYPE "architecture"."graph_node_kind";
+
+-- DropSchema
+-- Review fix (post-004 T002): this was missing — every other schema this migration set
+-- introduces (e.g. 20260927030000_outbox's "events") drops its own schema in down.sql, but T002
+-- never did for "architecture". A dropped-every-table-but-not-the-schema down.sql would still
+-- have passed prisma/migration.e2e.test.ts's old "leaving no table behind" check unnoticed — that
+-- assertion counts tables, and an empty undropped schema has none — so that test was extended
+-- with a direct pg_namespace check for "architecture" alongside this fix.
+DROP SCHEMA IF EXISTS "architecture";

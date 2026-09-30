@@ -301,19 +301,39 @@ CREATE UNIQUE INDEX "graph_edge_id_tenant_id_key" ON "architecture"."graph_edge"
 CREATE INDEX "edge_provenance_tenant_id_edge_id_idx" ON "architecture"."edge_provenance"("tenant_id", "edge_id");
 
 -- CreateIndex
+-- Backs the composite FK to graph_node(id, tenant_id) below — Prisma's one-to-one relation
+-- validity rule, same pattern as graph_node/graph_edge's own (id, tenant_id) unique.
+CREATE UNIQUE INDEX "component_attr_node_id_tenant_id_key" ON "architecture"."component_attr"("node_id", "tenant_id");
+
+-- CreateIndex
 CREATE INDEX "component_attr_tenant_id_idx" ON "architecture"."component_attr"("tenant_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "deployment_unit_attr_node_id_tenant_id_key" ON "architecture"."deployment_unit_attr"("node_id", "tenant_id");
 
 -- CreateIndex
 CREATE INDEX "deployment_unit_attr_tenant_id_idx" ON "architecture"."deployment_unit_attr"("tenant_id");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "repository_attr_node_id_tenant_id_key" ON "architecture"."repository_attr"("node_id", "tenant_id");
+
+-- CreateIndex
 CREATE INDEX "repository_attr_tenant_id_idx" ON "architecture"."repository_attr"("tenant_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "endpoint_attr_node_id_tenant_id_key" ON "architecture"."endpoint_attr"("node_id", "tenant_id");
 
 -- CreateIndex
 CREATE INDEX "endpoint_attr_tenant_id_idx" ON "architecture"."endpoint_attr"("tenant_id");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "feature_attr_node_id_tenant_id_key" ON "architecture"."feature_attr"("node_id", "tenant_id");
+
+-- CreateIndex
 CREATE INDEX "feature_attr_tenant_id_idx" ON "architecture"."feature_attr"("tenant_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "flow_attr_node_id_tenant_id_key" ON "architecture"."flow_attr"("node_id", "tenant_id");
 
 -- CreateIndex
 CREATE INDEX "flow_attr_tenant_id_idx" ON "architecture"."flow_attr"("tenant_id");
@@ -355,22 +375,29 @@ ALTER TABLE "architecture"."graph_edge" ADD CONSTRAINT "graph_edge_to_node_id_te
 ALTER TABLE "architecture"."edge_provenance" ADD CONSTRAINT "edge_provenance_edge_id_tenant_id_fkey" FOREIGN KEY ("edge_id", "tenant_id") REFERENCES "architecture"."graph_edge"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "architecture"."component_attr" ADD CONSTRAINT "component_attr_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "architecture"."graph_node"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+-- Review fix (post-004 T002): the six attr-table FKs below originally referenced
+-- graph_node("id") alone instead of the composite (id, tenant_id) every other child table in
+-- this migration uses (graph_edge, edge_provenance, discovery_source_outcome, discovery_draft,
+-- draft_item all reference their parent by (parent_id, tenant_id)). Reproduced against live
+-- Postgres: a component_attr row carrying tenant B's tenant_id but pointing node_id at tenant A's
+-- graph_node row was accepted — a structural cross-tenant leak (FR-024). Amending directly since
+-- this migration has not been pushed or shared (prisma-migrations.md).
+ALTER TABLE "architecture"."component_attr" ADD CONSTRAINT "component_attr_node_id_tenant_id_fkey" FOREIGN KEY ("node_id", "tenant_id") REFERENCES "architecture"."graph_node"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "architecture"."deployment_unit_attr" ADD CONSTRAINT "deployment_unit_attr_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "architecture"."graph_node"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "architecture"."deployment_unit_attr" ADD CONSTRAINT "deployment_unit_attr_node_id_tenant_id_fkey" FOREIGN KEY ("node_id", "tenant_id") REFERENCES "architecture"."graph_node"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "architecture"."repository_attr" ADD CONSTRAINT "repository_attr_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "architecture"."graph_node"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "architecture"."repository_attr" ADD CONSTRAINT "repository_attr_node_id_tenant_id_fkey" FOREIGN KEY ("node_id", "tenant_id") REFERENCES "architecture"."graph_node"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "architecture"."endpoint_attr" ADD CONSTRAINT "endpoint_attr_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "architecture"."graph_node"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "architecture"."endpoint_attr" ADD CONSTRAINT "endpoint_attr_node_id_tenant_id_fkey" FOREIGN KEY ("node_id", "tenant_id") REFERENCES "architecture"."graph_node"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "architecture"."feature_attr" ADD CONSTRAINT "feature_attr_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "architecture"."graph_node"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "architecture"."feature_attr" ADD CONSTRAINT "feature_attr_node_id_tenant_id_fkey" FOREIGN KEY ("node_id", "tenant_id") REFERENCES "architecture"."graph_node"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "architecture"."flow_attr" ADD CONSTRAINT "flow_attr_node_id_fkey" FOREIGN KEY ("node_id") REFERENCES "architecture"."graph_node"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "architecture"."flow_attr" ADD CONSTRAINT "flow_attr_node_id_tenant_id_fkey" FOREIGN KEY ("node_id", "tenant_id") REFERENCES "architecture"."graph_node"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "architecture"."discovery_source_outcome" ADD CONSTRAINT "discovery_source_outcome_run_id_tenant_id_fkey" FOREIGN KEY ("run_id", "tenant_id") REFERENCES "architecture"."discovery_run"("id", "tenant_id") ON DELETE RESTRICT ON UPDATE CASCADE;

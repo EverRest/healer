@@ -120,4 +120,56 @@ describe('architecture.graph_node / graph_edge provenance constraints (004 T005,
     );
     expect(stored).toBe('derived_from_code');
   });
+
+  /** `sqlOverrides` for graph_edge, same convention as `insertNode`. Seeds its own two nodes. */
+  const insertEdge = async (sqlOverrides: Partial<Record<string, string>> = {}) => {
+    const fromId = randomUUID();
+    const toId = randomUUID();
+    await insertNode(fromId);
+    await insertNode(toId);
+    const fields: Record<string, string> = {
+      id: `'${randomUUID()}'`,
+      tenant_id: `'${TENANT_ID}'`,
+      from_node_id: `'${fromId}'`,
+      to_node_id: `'${toId}'`,
+      edge_type: `'depends_on'`,
+      layer: `'code'`,
+      provenance: `'derived_from_code'`,
+      strength: '30',
+      confidence: '50',
+      state: `'proposed'`,
+      valid_from_version: '1',
+      ...sqlOverrides,
+    };
+    const columns = Object.keys(fields);
+    const values = columns.map((column) => fields[column]);
+    return query(
+      pg,
+      `insert into "architecture"."graph_edge" (${columns.join(', ')}) values (${values.join(', ')})`,
+    );
+  };
+
+  // Cheap insurance CHECKs (data-model.md describes confidence as "integer 0-100" and R-04's
+  // validity range only makes sense with from <= to; neither was ever a CHECK until this fix).
+  it('rejects a node confidence outside 0-100', async () => {
+    await expect(insertNode(randomUUID(), { confidence: '101' })).rejects.toThrow();
+    await expect(insertNode(randomUUID(), { confidence: '-1' })).rejects.toThrow();
+  });
+
+  it('rejects an edge confidence outside 0-100', async () => {
+    await expect(insertEdge({ confidence: '101' })).rejects.toThrow();
+    await expect(insertEdge({ confidence: '-1' })).rejects.toThrow();
+  });
+
+  it('rejects a node whose valid_from_version is after its valid_to_version', async () => {
+    await expect(
+      insertNode(randomUUID(), { valid_from_version: '5', valid_to_version: '4' }),
+    ).rejects.toThrow();
+  });
+
+  it('rejects an edge whose valid_from_version is after its valid_to_version', async () => {
+    await expect(
+      insertEdge({ valid_from_version: '5', valid_to_version: '4' }),
+    ).rejects.toThrow();
+  });
 });

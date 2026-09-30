@@ -21,9 +21,16 @@ export class PrismaGraphNodeRepository implements GraphNodeRepository {
 
             // R-12: rewrites natural_key on the SAME row — never delete+create. Guarded on the
             // natural_key just read (same technique as PrismaIssueRepository.transition(), 001
-            // T026 review) under SERIALIZABLE: a guarded UPDATE alone, even with the read inside
-            // the same transaction, measurably let two racing writers both through in this
-            // repository's own earlier testing there.
+            // T026 review), under SERIALIZABLE.
+            //
+            // Post-review note: for *this* race shape specifically (isolated testing against
+            // graph-node-rename-race.e2e.test.ts, not assumed from 001's transition() investigation
+            // of a different one), the guard alone and SERIALIZABLE alone were each independently
+            // sufficient to reject the loser every time; only removing both together reproduced a
+            // lost update. Both are kept anyway — doubly redundant costs nothing here, and this
+            // codebase has documented history (001's transition() investigation, QUESTIONS.md) of
+            // Postgres-serialization-conflict intermittency that too few trials can miss, so a
+            // claim about this specific interleaving is only as good as how many times it was run.
             const affected = await tx.$executeRaw`
               UPDATE "architecture"."graph_node"
               SET natural_key = ${newNaturalKey}

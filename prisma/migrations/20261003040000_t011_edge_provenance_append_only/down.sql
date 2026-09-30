@@ -1,3 +1,6 @@
+-- DropCheckConstraint
+ALTER TABLE "architecture"."edge_provenance" DROP CONSTRAINT "edge_provenance_observation_ref_check";
+
 -- DropTrigger
 DROP TRIGGER "edge_provenance_maintain_edge_max" ON "architecture"."edge_provenance";
 
