@@ -1653,3 +1653,11 @@ The full `make ci` run also found two failures in `issue-deletion.e2e.test.ts` (
   record) — R-14 says a drift finding exists only to raise the issue for adjudication, so it has no
   life apart from it. This is the one place this batch touched a fully-shipped 001 file, and only
   because 001's own gate is designed to require exactly this.
+
+A third `make ci` run (after the drift_finding fix) passed clean except for 001's own 12 000-signal
+replay test (`ingest-signal.e2e.test.ts`, already flagged in the Pavlo index above, item 9, as
+load-sensitive before 004 touched anything) — timed out at 322s standalone (found two stale leaked
+Docker containers, 7h/30h old, likely contributing background load; left them alone, not mine to
+clean up blind). Retried standalone once more: 59.6s total, 43.7s for the heavy test itself — matches
+001's own documented "~55s alone" baseline almost exactly. Confirmed transient, not a regression —
+every other test in the full suite, including everything 004 added, passed both full runs.
