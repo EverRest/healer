@@ -1448,6 +1448,11 @@ rather than reading the code alone. Results:
    `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
    reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this
    path yet.
+2. **`dependency_observation`'s `layer`/`provenance` enums are duplicated, not shared, between
+   `packages/boundary-contract` and `packages/domain/architecture`** — see "004 T016/T017" below. A
+   deliberate choice under a real constraint (boundary-contract has zero workspace deps by design),
+   not an oversight, but flagged since "closed list, one authority" is a named rule this both does and
+   doesn't follow (each copy is individually closed; there are two of them). Not blocking.
 
 ## 004 T012–T015 — judgment calls
 
@@ -1546,3 +1551,45 @@ so `payload.nodeId` would have been `undefined` against a consumer reading the c
 exists to type it against; `requireCorrelationId()` remains duplicated a third time across
 `domain/architecture`/`domain/evidence`/`domain/issues` — pre-existing pattern, not introduced by this
 diff, and consolidating it means touching two already-shipped 001 packages for a nit.
+
+## 004 T016/T017 — 012 had already pre-built the four discovery shapes, with the wrong fields
+
+**Cross-session finding, worth session B and Pavlo both seeing.** `packages/boundary-contract/src/index.ts`
+already had placeholder Zod schemas for all four shapes (`component_candidate`,
+`deployment_unit_candidate`, `dependency_observation`, `repository_ref`), and
+`contracts/runner-protocol.md` already had their table rows — built during 012 T040, presumably
+because 012's own "every fact family gets its own row" rule (C-20) meant 012 added rows for shapes it
+knew 004 would need before 004 existed to specify them precisely. Their fields were generic
+approximations (`identifier`/`type`/`source`, a `Record<string,string>` for characteristics, no
+`adapterKey`/`adapterVersion`, a single `window: string` instead of split timestamps) that didn't match
+`graph-contract.md` §3 at all. Confirmed nothing else in the repo depended on the old field names
+(only referenced inside `boundary-contract` itself, no dedicated test pinning them) before correcting
+them to the real spec — safe, pre-release, not a breaking change to anything running.
+
+Split into a new file, `packages/boundary-contract/src/discovery-shapes.ts` — not by choice:
+`index.ts` was already 445 lines (over the 400-line limit) before this task touched it. Verified
+disjoint from session B's concurrent edits to the same file (their `DirectiveEnvelope` block and
+`runner-registration.js` export sit in different line ranges) by diffing their branch's exact tip
+twice, once before and once after committing.
+
+**One judgment call worth your review, flagged by the implementing agent as the one it'd most want
+overridden if you disagree**: `dependency_observation`'s `layer`/`provenance` fields are `z.enum([...])`
+with values *copied* from `packages/domain/architecture/src/domain/provenance.ts`'s `GraphLayer`/
+`ProvenanceClass`, not imported from there — `packages/boundary-contract` has zero workspace
+dependencies by design (the execution boundary can't know about domain packages; the dependency runs
+the other way), so it can't import the domain's type. The alternative was `z.string()`, which would
+have silently widened these fields from a narrow closed set to any string the moment
+`discovery-adapter.ts` started importing the boundary-contract-inferred type instead of its own
+placeholder. Chose the enum-with-duplication over the string-with-silent-widening, on the reasoning
+that a closed list copied in two places (each individually still closed) is safer than one place that
+stopped being closed at all — but this is exactly the "a closed list has exactly one authority" rule's
+target case, and there's no cheap way to add a same-sync check (a test in `boundary-contract` importing
+from `domain-architecture` would itself be the package-direction cycle the split exists to avoid). If a
+future task adds a third copy of this list, that's the sign to solve it for real rather than duplicate
+again.
+
+Also not done, left as an accurately-updated comment rather than a silent gap: the three integration
+adapters' `collect()` still can't cross-check that a `dependency_observation`'s declared
+`layer`/`provenance` doesn't exceed the emitting adapter's own fixed constant — there's no ingestion
+code path to attach that check to yet (Phase 3/US1 isn't built, `collect()` only returns empty arrays).
+Comments updated to attribute this to Phase 3 rather than pointing at T017, which is now done.
