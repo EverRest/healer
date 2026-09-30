@@ -380,19 +380,23 @@ verify:**
   real Prisma file content remains anywhere — this is purely leftover symlink aliases with nothing
   behind them, not a functional leak. Not worth a third fix round; noted here in case a future
   `find -iname '*prisma*'`-style audit of the image is confused by it.
-- **`runner-image.e2e.test.ts`'s drain-timing bounds widened after two real, reproduced failures
-  under host contention** — final `make ci` before push: `elapsedSeconds` for the genuine-drain test
-  hit 40.094s against a 35s upper bound (and a 40s `waitForExit` poll ceiling) on the first failure,
-  then failed the same way again on an isolated retry with no competing processes from this session
-  (`ps aux` confirmed clean; host load avg was 6.75–7.71 with 14% CPU idle from *other* processes on
-  this shared machine — not something this session controls). The assertion's job is "prove this
-  isn't a hang," not "pin exact drain latency" (its own comment already said so before this change);
-  under real contention the actual DELAY_MS=4s+margin math (~6s expected) can genuinely take 35–40s+
-  wall-clock while still being a correct, bounded drain, not a hang. Widened: `waitForExit`'s poll
-  ceiling 40s→90s, the upper-bound assertion 35s→80s, the test's own outer timeout 90s→150s — still
-  bounded (a real hang is still caught), just no longer fragile at exactly this host's typical
-  contention level. Not a change to any production code, only to how much slack a timing proof
-  allows itself on a shared, contended machine.
+- **`runner-image.e2e.test.ts`'s hang detection was redesigned, not just given a bigger number,
+  after three reproduced failures under host contention (35→40.1s, then 35→90.1s after widening to
+  80, on two separate `make ci`/isolated runs, with no competing processes from this session each
+  time).** Root cause: `waitForExit`'s `elapsedSeconds` conflated two different things —
+  `waitFor` returns once its deadline passes *regardless of the predicate's final value*, so a
+  container that genuinely never exits and one that exits slowly under real host contention (other
+  processes on this shared machine, confirmed via `ps aux`/`top` each time, not this session's own
+  work) produced the *identical* observable shape: a large elapsed number. Every widening of the
+  upper bound was chasing a symptom a fixed timing assertion structurally cannot distinguish from
+  the real failure it exists to catch. Fixed properly: `waitForExit` now returns `{exited,
+  elapsedSeconds}` — `exited` (did the container actually leave `running` within a generous 120s
+  poll ceiling) is the real hang detector, asserted directly (`expect(exited).toBe(true)`, with the
+  elapsed time in the failure message for diagnosis); `elapsedSeconds` is kept only where it proves
+  something contention can't fake (`toBeGreaterThan(2)`, ruling out the pre-fix immediate,
+  un-drained exit) and dropped everywhere it was only ever asserting "not too slow today," which
+  contention can and did fake as "hung." No change to production code — only to what a timing-based
+  e2e assertion on a shared, contended machine is actually able to prove.
 
 ### T048 landed — `make runner-diagnostics`, the last deferred phase-6 task
 
