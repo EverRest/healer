@@ -1638,3 +1638,18 @@ Full `make ci` on the finished T001-T017 batch found two things:
   names T016/T017 just corrected. Updated to the real fields (`naturalKey`/`componentType`/etc.) —
   the only file outside 004's own packages this batch had to touch, and only because it tested a
   shape 004 owns.
+
+The full `make ci` run also found two failures in `issue-deletion.e2e.test.ts` (001, T053):
+- A test timed out at exactly 120000ms under the full suite's load. Re-ran the whole file alone —
+  all 43 tests passed, that one in 6.1s. Contention, not a regression (matches 001's own documented
+  history of this exact class of false failure under full-suite parallelism, and the Docker
+  contention session A/B flagged earlier in this run).
+- A real, deterministic failure: `architecture.drift_finding.issue_id` isn't in 001's
+  `ISSUE_ID_COLUMNS` completeness gate (`prisma-issue-deletion.ts`) — its own doc comment says
+  exactly this happens for "a feature that adds a table with an `issue_id`" and names 006/010 as the
+  expected future cases; 004 is now one too. **Decided, not escalated**: added the column to the list
+  and a `DELETE FROM architecture.drift_finding` to the cascade, alongside `evidence`/`issue_event`
+  (content about the issue) rather than nulled like `agent_run.issue_id` (an independent spend
+  record) — R-14 says a drift finding exists only to raise the issue for adjudication, so it has no
+  life apart from it. This is the one place this batch touched a fully-shipped 001 file, and only
+  because 001's own gate is designed to require exactly this.
