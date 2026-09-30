@@ -62,6 +62,7 @@ interface Seeded {
   readonly id: string;
   readonly evidenceIds: readonly [string, string];
   readonly runId: string;
+  readonly policyDecisionId: string;
   /** Strings that exist only in this issue's rows — none may appear in a tombstone. */
   readonly secrets: readonly string[];
 }
@@ -204,6 +205,7 @@ describe('tenant deletion of an issue (001 T053)', () => {
       ],
     });
     const runId = randomUUID();
+    const policyDecisionId = randomUUID();
     await query(
       pg,
       `insert into "workflow"."workflow_run"
@@ -219,9 +221,14 @@ describe('tenant deletion of an issue (001 T053)', () => {
          (id, tenant_id, issue_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
           input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
        values ('${randomUUID()}', '${tenantId}', '${id}', '${randomUUID()}', 'investigator',
-               '${promptVersionId}', 'm', 'anthropic', 10, 20, 0.5, '[]', 'ok', now())`,
+               '${promptVersionId}', 'm', 'anthropic', 10, 20, 0.5, '[]', 'ok', now());
+       insert into "policy"."policy_decision"
+         (id, tenant_id, issue_id, action_key, proposal_digest, decision_input, ruleset_version,
+          matched_rule_keys, outcome, reason_codes, ceiling_applied, budget_state, evaluated_at)
+       values ('${policyDecisionId}', '${tenantId}', '${id}', 'change.open_pull_request', 'digest-1',
+               '{}', 1, '{}', 'allow', '{}', false, '{}', now())`,
     );
-    return { id, evidenceIds, runId, secrets };
+    return { id, evidenceIds, runId, policyDecisionId, secrets };
   }
 
   const inScopeSeed = (context: TenantContext = CONTEXT) => inScope(() => seed(context));
@@ -441,6 +448,7 @@ describe('tenant deletion of an issue (001 T053)', () => {
           'issue.issue',
           'issue.issue_event',
           'issue.issue_relationship',
+          'policy.policy_decision',
           'workflow.workflow_callback',
           'workflow.workflow_run',
           'workflow.workflow_transition',
@@ -500,6 +508,20 @@ describe('tenant deletion of an issue (001 T053)', () => {
             `select issue_id is null || '|' || cost from "agent"."agent_run" where id = '${runs}'`,
           ),
         ).toBe('true|0.500000');
+      }));
+
+    it('keeps the policy decision — evidentiary record (002 FR-017) — and only forgets which issue it was for', () =>
+      inScope(async () => {
+        const seeded = await seed();
+
+        await del(seeded.id);
+
+        expect(
+          await query(
+            pg,
+            `select issue_id is null from "policy"."policy_decision" where id = '${seeded.policyDecisionId}'`,
+          ),
+        ).toBe('t');
       }));
 
     it('removes an issue’s relationships in both directions, but not the other issue’s own rows', () =>

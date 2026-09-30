@@ -33,6 +33,7 @@ export const ISSUE_ID_COLUMNS = [
   'issue.issue_event.issue_id',
   'issue.issue_relationship.issue_id',
   'issue.issue_relationship.other_issue_id',
+  'policy.policy_decision.issue_id',
   'workflow.workflow_run.issue_id',
 ] as const;
 
@@ -307,6 +308,13 @@ async function deleteDerivedRows(
   // content; only its pointer at the issue goes.
   await tx.$executeRaw`
     UPDATE "agent"."agent_run" SET issue_id = NULL WHERE tenant_id = ${t}::uuid AND issue_id = ${id}::uuid`;
+  // Same precedent as `agent_run` above: a `policy_decision` is evidentiary (002 FR-017, "every
+  // decision explicable a year later") and must survive its issue being erased, not be deleted
+  // with it. Its own append-only trigger (`policy_decision_append_only`) would normally reject any
+  // column but `consumed_at`/`invalidated_reason` — safe here only because this whole transaction
+  // already runs under `withPrivilegedWrite` (QUESTIONS.md "002 batch 6").
+  await tx.$executeRaw`
+    UPDATE "policy"."policy_decision" SET issue_id = NULL WHERE tenant_id = ${t}::uuid AND issue_id = ${id}::uuid`;
 }
 
 function toTombstone(row: {
