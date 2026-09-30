@@ -2,7 +2,7 @@ import { currentCorrelationId, NotFoundError, type TenantScoped } from '@healer/
 import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import { policyDecisionRecordedEvent } from '../domain/events.js';
-import { decisionInputSchema } from '../domain/decision-input.js';
+import { decisionInputSchema, type DecisionInput } from '../domain/decision-input.js';
 import type { BudgetState } from '../domain/evaluate.js';
 import type { Outcome } from '../domain/outcome-lattice.js';
 import {
@@ -67,6 +67,21 @@ interface StoredDecisionRow extends DecisionRow {
   readonly invalidatedReason: string | null;
 }
 
+/** Batch 9 C2 parses `decision_input` through `decisionInputSchema` instead of a raw cast; batch 9
+ *  follow-up review (both independent Opus reviews) flagged that a bare `.parse()` throws a
+ *  generic `ZodError` with no decision id in it — a single non-conforming stored row (increasingly
+ *  likely once Phase 4+ adds fields to `DecisionInput`) turns `GET /policy/decisions` into a 500
+ *  with no way to tell which row is bad. Wraps and rethrows with the id included, so a caller (or
+ *  whoever reads the log) at least knows which row to look at. */
+function parseStoredDecisionInput(row: { readonly id: string; readonly decisionInput: unknown }): DecisionInput {
+  try {
+    return decisionInputSchema.parse(row.decisionInput);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`policy_decision ${row.id}: stored decision_input failed schema validation — ${message}`);
+  }
+}
+
 function toStoredDomain(row: StoredDecisionRow): StoredDecision {
   return {
     ...toDomain(row),
@@ -76,12 +91,7 @@ function toStoredDomain(row: StoredDecisionRow): StoredDecision {
     ...(row.workflowState !== null ? { workflowState: row.workflowState } : {}),
     ...(row.targetRef !== null ? { targetRef: row.targetRef } : {}),
     ...(row.fingerprint !== null ? { fingerprint: row.fingerprint } : {}),
-    // Parsed through `decisionInputSchema`, not a raw cast (batch 9 C2, review finding):
-    // `decision_input` is JSONB, so `evaluatedAt` round-trips as a string — every reader of a
-    // stored decision (replay, `findById`, `list`) needs a properly-typed `DecisionInput` back,
-    // with `evaluatedAt` coerced to a real `Date`, not just the one caller that happened to hit
-    // the crash first (`matchesInstant`'s `.getTime()` on a string).
-    decisionInput: decisionInputSchema.parse(row.decisionInput),
+    decisionInput: parseStoredDecisionInput(row),
     budgetState: row.budgetState as unknown as BudgetState,
     ...(row.consumedAt !== null ? { consumedAt: row.consumedAt } : {}),
     ...(row.invalidatedReason !== null ? { invalidatedReason: row.invalidatedReason } : {}),

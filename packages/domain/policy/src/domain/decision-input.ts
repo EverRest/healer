@@ -105,14 +105,21 @@ export const decisionInputSchema = z
         attemptCount: z.number().int().nonnegative(),
       })
       .strict(),
-    // `z.coerce.date()`, not `z.date()` (batch 9 C2, review finding): `decision_input` round-trips
-    // through JSONB, which has no `Date` type — `evaluatedAt` comes back a string, and
-    // `matchesInstant`'s `.getTime()` throws on a string. Coercing here means every reader that
-    // parses stored JSONB through this schema (`toStoredDomain`, below) gets a real `Date` back,
-    // not only the one caller (replay) that happened to hit the crash first. A string that does
-    // not parse to a valid date still fails validation — `z.coerce.date()` rejects an `Invalid
-    // Date` the same as `z.date()` rejects a non-Date value.
-    evaluatedAt: z.coerce.date(),
+    // Not `z.date()` alone (batch 9 C2, review finding): `decision_input` round-trips through
+    // JSONB, which has no `Date` type — `evaluatedAt` comes back a string, and `matchesInstant`'s
+    // `.getTime()` throws on a string. Coercing here means every reader that parses stored JSONB
+    // through this schema (`toStoredDomain`, below) gets a real `Date` back, not only the one
+    // caller (replay) that happened to hit the crash first.
+    //
+    // Not bare `z.coerce.date()` either (follow-up review finding): `z.coerce.date()` calls
+    // `new Date(x)` on *any* input, so `null` -> 1970-01-01, `true`/a bare number also silently
+    // become dates — exactly the class of caller mistake `z.date()` used to reject outright. The
+    // union restricts coercion to the two shapes that should ever produce a date here: an actual
+    // `Date` (a same-process caller) or a proper ISO datetime string (JSONB's round-trip, and
+    // `dry-run.dto.ts`'s HTTP body) — `z.string().datetime({ offset: true })` rejects anything
+    // that isn't a real ISO 8601 datetime before coercion ever runs, so `null`/`true`/a bare
+    // number are refused exactly as they were under `z.date()`, and a real value still coerces.
+    evaluatedAt: z.union([z.date(), z.string().datetime({ offset: true })]).pipe(z.coerce.date()),
   })
   .strict();
 

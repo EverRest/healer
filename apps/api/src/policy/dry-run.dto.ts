@@ -7,21 +7,18 @@ import { decisionInputSchema, type DecisionInput } from '@healer/domain-policy';
  * confidence field exists" (R-03) and this endpoint proves the same rejection T007 already proved
  * in-process now happens over HTTP too.
  *
- * One adaptation only: JSON has no `Date` type, so `evaluatedAt` arrives as an ISO string and is
- * parsed before `decisionInputSchema.strict()` ever sees it — the schema itself is untouched.
+ * No adaptation needed for `evaluatedAt` (removed batch 9 follow-up review): JSON has no `Date`
+ * type, so it arrives as a string, but `decisionInputSchema`'s `evaluatedAt` now accepts a proper
+ * ISO datetime string directly (`z.string().datetime({ offset: true })`) as well as a `Date` —
+ * this used to pre-parse the string with a bare `new Date(...)` before handing it to the schema,
+ * which was *looser* than what the schema itself now enforces (a permissive `Date` constructor
+ * accepts many non-ISO formats `z.string().datetime()` correctly rejects), so removing it tightens
+ * this endpoint's validation rather than weakening it.
  */
 export function parseDryRunRequest(
   body: unknown,
 ): ReturnType<typeof decisionInputSchema.safeParse> {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    return decisionInputSchema.safeParse(body);
-  }
-  const withDate: Record<string, unknown> = { ...(body as Record<string, unknown>) };
-  if (typeof withDate.evaluatedAt === 'string') {
-    const parsed = new Date(withDate.evaluatedAt);
-    if (!Number.isNaN(parsed.getTime())) withDate.evaluatedAt = parsed;
-  }
-  return decisionInputSchema.safeParse(withDate);
+  return decisionInputSchema.safeParse(body);
 }
 
 export type { DecisionInput };

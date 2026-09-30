@@ -193,6 +193,25 @@ describe('evaluateAndBind (T021)', () => {
     ).rejects.toThrow(NoPublishedRulesetError);
   });
 
+  // Batch 9 follow-up review (both independent Opus reviews): NoPublishedRulesetError/
+  // UnregisteredActionError used to extend plain Error, so a future caller that doesn't copy
+  // policy-evaluation.controller.ts's exact instanceof check would let either surface as a
+  // generic 500 instead of a 422.
+  it('NoPublishedRulesetError is a HealerError with code VALIDATION', async () => {
+    await expect(
+      evaluateAndBind(
+        {
+          rulesets: new FakeRulesetRepo(null),
+          decisions: new FakeDecisionRepo(),
+          autonomyEpochs: new FakeEpochRepo(0n),
+          actions: new FakeActionRepo(),
+        },
+        CONTEXT,
+        { decisionInput: buildDecisionInput() },
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
   it('two structurally identical proposals evaluated separately get the same proposal digest', async () => {
     const decisions = new FakeDecisionRepo();
     const repos = {
@@ -266,5 +285,24 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
         },
       ),
     ).rejects.toThrow(UnregisteredActionError);
+  });
+
+  it('UnregisteredActionError is a HealerError with code VALIDATION', async () => {
+    await expect(
+      evaluateAndBind(
+        {
+          rulesets: new FakeRulesetRepo(published()),
+          decisions: new FakeDecisionRepo(),
+          autonomyEpochs: new FakeEpochRepo(0n),
+          actions: new FakeActionRepo(new Map()),
+        },
+        CONTEXT,
+        {
+          decisionInput: buildDecisionInput({
+            action: { actionKey: 'nobody.registered.this', actionClass: 'read_only' },
+          }),
+        },
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
   });
 });

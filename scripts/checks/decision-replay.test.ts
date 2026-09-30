@@ -136,4 +136,15 @@ describe('replayOne (002 T030, FR-002, SC-002; batch 9 C2)', () => {
     };
     await expect(replayOne(new FakeRulesetRepo(instantRuleset), row)).resolves.toBeNull();
   });
+
+  // Batch 9 follow-up review (both independent Opus reviews): the schema parse used to run
+  // outside replayOne's try, so one non-conforming stored row crashed the whole gate instead of
+  // being reported as that row's own violation — exactly the "crashes instead of reporting the
+  // row" failure C2 was about, recurring one layer up.
+  it('reports a row whose stored decision_input fails schema validation as that row\'s own violation, naming its id, instead of throwing', async () => {
+    const row = { ...ROW_BASE, id: 'd6', decisionInput: { not: 'a valid DecisionInput' } };
+    const violation = await replayOne(new FakeRulesetRepo(RULESET), row);
+    expect(violation).toContain('d6');
+    expect(violation).toContain('could not be replayed');
+  });
 });

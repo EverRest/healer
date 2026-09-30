@@ -347,6 +347,29 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
         expect(await decisions.findById(scope(CONTEXT, { id: 'not-a-uuid' }))).toBeNull();
       }));
 
+    it('findById on a row whose stored decision_input fails schema validation names the decision id in the error, rather than a generic ZodError (batch 9 follow-up review)', async () =>
+      withCorrelation('corr-read-6', async () => {
+        const { decision } = await evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions },
+          CONTEXT,
+          { decisionInput: buildDecisionInput() },
+        );
+
+        // No application command produces a non-conforming decision_input today — the privileged
+        // bypass is the only honest way to reproduce a row that pre-dates a schema change or was
+        // corrupted, same mechanism the terminal-state and replay e2e tests already rely on.
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('healer.privileged_write', 'on', true)`;
+          await tx.$executeRaw`
+            UPDATE "policy"."policy_decision" SET decision_input = '{}'::jsonb
+            WHERE id = ${decision.id}::uuid`;
+        });
+
+        await expect(decisions.findById(scope(CONTEXT, { id: decision.id }))).rejects.toThrow(
+          new RegExp(decision.id),
+        );
+      }));
+
     it("list narrows by issueId, actionKey, outcome and since, and never returns another tenant's rows", async () =>
       withCorrelation('corr-read-4', async () => {
         const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fd');

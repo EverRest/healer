@@ -1,4 +1,4 @@
-import { scope, type TenantContext } from '@healer/shared';
+import { HealerError, scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../domain/decision-input.js';
 import { evaluate, type Decision, type EvaluationTrace } from '../domain/evaluate.js';
 import type { PolicyActionRepository } from '../domain/policy-action-repository.js';
@@ -10,20 +10,32 @@ import type { Rule } from '../domain/rule.js';
  *  `policy_decision.ruleset_version` to resolve to a real `policy_ruleset`, so this refuses
  *  rather than fabricating a phantom version 0 to evaluate against. Shared by both callers: a
  *  tenant with no published ruleset gets the same refusal whether they're binding a decision or
- *  only asking what one would be. */
-export class NoPublishedRulesetError extends Error {
+ *  only asking what one would be.
+ *
+ *  Extends `HealerError` (batch 9 follow-up review, both independent Opus reviews), not a plain
+ *  `Error`, matching the rest of this package's error convention (`DecisionNotAllowedError`,
+ *  `DuplicateRuleKeyError`, ...): today's one caller (`policy-evaluation.controller.ts`) catches
+ *  this by name and maps it to 422, but a future caller that doesn't copy that exact
+ *  `instanceof` check would otherwise let it surface as a generic 500. `VALIDATION` (422) is the
+ *  same substitution `DuplicateRuleKeyError` already makes for a code this closed union has no
+ *  dedicated entry for. */
+export class NoPublishedRulesetError extends HealerError {
   constructor() {
-    super('no policy_ruleset has been published for this tenant — PublishRuleset must run first');
+    super(
+      'VALIDATION',
+      'no policy_ruleset has been published for this tenant — PublishRuleset must run first',
+    );
     this.name = 'NoPublishedRulesetError';
   }
 }
 
 /** `input.action.actionKey` is not a registered `policy_action.action_key` (batch 9 C1(b),
  *  review finding): there is no `ALLOW` possible for an action nobody registered, so this refuses
- *  rather than evaluating against whatever the caller happened to claim. */
-export class UnregisteredActionError extends Error {
+ *  rather than evaluating against whatever the caller happened to claim. `HealerError`/
+ *  `VALIDATION` for the same reason as `NoPublishedRulesetError` above. */
+export class UnregisteredActionError extends HealerError {
   constructor(readonly actionKey: string) {
-    super(`action key "${actionKey}" is not registered in policy_action`);
+    super('VALIDATION', `action key "${actionKey}" is not registered in policy_action`);
     this.name = 'UnregisteredActionError';
   }
 }

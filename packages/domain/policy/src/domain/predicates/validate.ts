@@ -58,10 +58,98 @@ function quantityGroup(field: string): string {
   return dot === -1 ? field : field.slice(0, dot);
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+function wrongTypeMessage(field: string, operator: string): string {
+  return `predicate value for field "${field}" operator "${operator}" has the wrong type`;
+}
+
+/** `QuantityValue`'s own checks (batch 9 follow-up review, both independent Opus reviews):
+ *  before this, `{kind:'field', field:'budget.degradationStep'}` passed for a `budget.consumed`
+ *  predicate because both share the `budget.` string prefix — `budget.degradationStep` is an
+ *  *ordinal* field, not a quantity one, and reached `evaluate()` unrejected, where it threw
+ *  `unreachable field`. A bogus field name or an unrecognized `value.kind` (anything but
+ *  `'literal'`/`'field'`) passed the same way — nothing checked `value` was even an object.
+ *  `predicate.value`'s static type is the two-member `QuantityValue` union, but this function's
+ *  whole job is validating callers that never went through `tsc` (JSON off the wire, a hand-built
+ *  object in a script), so every branch here is a runtime check of a shape TypeScript alone
+ *  cannot enforce for such a caller. */
+function validateQuantityValue(field: string, operator: string, value: unknown): string | null {
+  if (typeof value !== 'object' || value === null) return wrongTypeMessage(field, operator);
+  const kind = (value as { readonly kind?: unknown }).kind;
+  if (kind === 'literal') {
+    const literal = (value as { readonly value?: unknown }).value;
+    return typeof literal === 'number' ? null : wrongTypeMessage(field, operator);
+  }
+  if (kind === 'field') {
+    const targetField = (value as { readonly field?: unknown }).field;
+    if (typeof targetField !== 'string') return wrongTypeMessage(field, operator);
+    if (fieldKindOf(targetField) !== 'quantity') {
+      return `quantity field "${field}" cannot be compared against "${targetField}" — "${targetField}" is not a quantity field`;
+    }
+    if (quantityGroup(field) !== quantityGroup(targetField)) {
+      return `quantity field "${field}" cannot be compared against "${targetField}" — they are not in the same group`;
+    }
+    return null;
+  }
+  return `quantity value for field "${field}" has an unrecognized kind "${String(kind)}"`;
+}
+
+function validateSetOrScalarValue(
+  field: string,
+  operator: string,
+  value: unknown,
+): string | null {
+  const isSet = operator === 'in' || operator === 'notIn';
+  const valid = isSet ? isStringArray(value) : typeof value === 'string';
+  return valid ? null : wrongTypeMessage(field, operator);
+}
+
+function validateInstantValue(field: string, operator: string, value: unknown): string | null {
+  if (typeof value !== 'string') return wrongTypeMessage(field, operator);
+  return Number.isNaN(new Date(value).getTime())
+    ? `instant literal "${value}" for field "${field}" does not parse as a date`
+    : null;
+}
+
+function validateClosureValue(field: string, operator: string, value: unknown): string | null {
+  const isBound = operator === 'sizeAtMost' || operator === 'maxDepthAtMost';
+  const valid = isBound ? typeof value === 'number' : isStringArray(value);
+  return valid ? null : wrongTypeMessage(field, operator);
+}
+
+/** The value-shape half of `validatePredicateShape`, split out to keep both functions under the
+ *  repo's complexity limit — one branch per predicate kind, each delegating to its own small
+ *  checker rather than inlining the logic here. */
+function validateValueType(predicate: Predicate): string | null {
+  switch (predicate.kind) {
+    case 'enumerated':
+    case 'identifier':
+      return validateSetOrScalarValue(predicate.field, predicate.operator, predicate.value);
+    // Boolean predicates carry no `value` in the domain shape (`predicates/types.ts`) — nothing
+    // to type-check.
+    case 'boolean':
+      return null;
+    case 'ordinal':
+      return typeof predicate.value === 'number'
+        ? null
+        : wrongTypeMessage(predicate.field, predicate.operator);
+    case 'quantity':
+      return validateQuantityValue(predicate.field, predicate.operator, predicate.value);
+    case 'instant':
+      return validateInstantValue(predicate.field, predicate.operator, predicate.value);
+    case 'closure':
+      return validateClosureValue(predicate.field, predicate.operator, predicate.value);
+  }
+}
+
 /**
  * A predicate that is internally inconsistent — tagged with the wrong `kind` for its `field`, an
- * operator outside that kind's domain, an instant literal that will never parse, or a quantity
- * comparison across groups — would make `evaluate()` throw (`unreachable()`) or silently
+ * operator outside that kind's domain, a value of the wrong runtime type for its operator, an
+ * instant literal that will never parse, or a quantity comparison against a non-quantity field or
+ * one in a different group — would make `evaluate()` throw (`unreachable()`) or silently
  * misbehave at evaluation time, not at publish time, which is exactly what contracts/
  * evaluation.md's "a rule set that can fail to evaluate is not deterministic" rules out. Returns
  * the violation message, or `null` when the predicate is valid; never throws, so callers (the
@@ -76,16 +164,5 @@ export function validatePredicateShape(predicate: Predicate): string | null {
   if (!OPERATORS_BY_KIND[kind].includes(predicate.operator)) {
     return `operator "${predicate.operator}" is outside the domain of field "${predicate.field}"`;
   }
-  if (predicate.kind === 'instant' && Number.isNaN(new Date(predicate.value).getTime())) {
-    return `instant literal "${predicate.value}" for field "${predicate.field}" does not parse as a date`;
-  }
-  if (predicate.kind === 'quantity' && predicate.value.kind === 'field') {
-    if (quantityGroup(predicate.field) !== quantityGroup(predicate.value.field)) {
-      return (
-        `quantity field "${predicate.field}" cannot be compared against ` +
-        `"${predicate.value.field}" — they are not in the same group`
-      );
-    }
-  }
-  return null;
+  return validateValueType(predicate);
 }

@@ -31,6 +31,13 @@
 //    matching on it sidesteps the cast entirely — plus `ConsumeDecision` (T023) already enforces
 //    digest-match as a precondition of setting `consumed_at`, so "linked decision is a consumed
 //    ALLOW" transitively carries the digest-match guarantee forward with no new column needed.
+//
+// 3. (batch 9 follow-up review, defense-in-depth) The join's `ON` clause also checks
+//    `pd.tenant_id = ae.tenant_id AND pd.action_key = ae.action`, not only `pd.id =
+//    ae.policy_decision_id` — nothing can produce a mismatch on either today (no real executor
+//    exists to set `policy_decision_id` to a decision for a different tenant or action), but this
+//    is the same "enforce twice" pattern the ceiling and the FK on `policy_decision.action_key`
+//    both already follow, two lines to add now rather than a gap to find later.
 import { PrismaClient } from '../../prisma/generated/client/index.js';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
@@ -47,6 +54,8 @@ export async function findUncoveredMutatingActions(prisma) {
     LEFT JOIN "policy"."policy_action" pa ON pa.action_key = ae.action
     LEFT JOIN "policy"."policy_decision" pd
       ON pd.id = ae.policy_decision_id
+     AND pd.tenant_id = ae.tenant_id
+     AND pd.action_key = ae.action
      AND pd.outcome = 'allow'
      AND pd.consumed_at IS NOT NULL
     WHERE pa.action_key IS NULL

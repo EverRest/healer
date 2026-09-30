@@ -115,6 +115,9 @@ autonomyEpoch)` and is valid for exactly one execution:
 - the executor presents the decision identifier and the digest of what it is about to do; a mismatch
   is `DIGEST_MISMATCH` and the action is refused;
 - a second execution against the same decision is `DECISION_ALREADY_CONSUMED`;
+- a decision whose own `outcome` is not `allow`, or one since invalidated, is never consumable —
+  `DECISION_NOT_ALLOWED`, checked before the digest comparison, inside the same lock as the
+  single-use check;
 - **a decision is never carried across a wait.** Evaluation happens inside the job that performs the
   action, immediately before it, which is how a revoked grant takes effect at the next guarded step
   with no push mechanism (R-07, and the same instinct as 010 FR-004 for preconditions).
@@ -166,7 +169,7 @@ substrate rather than a copy of it.
 ## Error codes
 
 `RULESET_INVALID` · `CEILING_EXCEEDED` · `UNDO_NOT_ATTESTED` · `DECISION_ALREADY_CONSUMED` ·
-`DIGEST_MISMATCH` · `STALE_AUTONOMY_EPOCH` · `APPROVAL_NOT_PENDING` · `BUDGET_EXHAUSTED` ·
-`RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` ·
+`DECISION_NOT_ALLOWED` · `DIGEST_MISMATCH` · `STALE_AUTONOMY_EPOCH` · `APPROVAL_NOT_PENDING` ·
+`BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` ·
 `NO_MATCHING_RULE` (the reason code accompanying the default `DENY`, so that "no rule matched" is a
 recorded fact rather than an absence).

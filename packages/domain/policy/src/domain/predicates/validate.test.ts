@@ -73,6 +73,100 @@ describe('validatePredicateShape (batch 9 I2, review finding)', () => {
     expect(validatePredicateShape(predicate)).toBeNull();
   });
 
+  // Batch 9 follow-up review (both independent Opus reviews, reproduced live): the "same group"
+  // check alone let a quantity predicate compare against a field that merely shares its string
+  // prefix but is a different kind entirely — `budget.degradationStep` is `ordinal`, not
+  // `quantity` — which reached `evaluate()` unrejected and threw `unreachable field`.
+  it('rejects a quantity comparison against a same-prefix field that is not itself a quantity field', () => {
+    const predicate: Predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: { kind: 'field', field: 'budget.degradationStep' as never },
+    };
+    expect(validatePredicateShape(predicate)).toMatch(/is not a quantity field/);
+  });
+
+  it('rejects a quantity value.field that is not a registered field at all', () => {
+    const predicate: Predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: { kind: 'field', field: 'budget.bogus' as never },
+    };
+    expect(validatePredicateShape(predicate)).toMatch(/is not a quantity field/);
+  });
+
+  it('rejects a quantity value with an unrecognized kind', () => {
+    const predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: { kind: 'computed', expression: '1 + 1' },
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/unrecognized kind/);
+  });
+
+  it('rejects a quantity value that is not an object at all', () => {
+    const predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: 5,
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
+  it('rejects a quantity literal whose value is not a number', () => {
+    const predicate = {
+      kind: 'quantity',
+      field: 'budget.consumed',
+      operator: 'atMost',
+      value: { kind: 'literal', value: 'fifty' },
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
+  it('rejects an ordinal predicate whose value is not a number', () => {
+    const predicate = {
+      kind: 'ordinal',
+      field: 'autonomy.level',
+      operator: 'atLeast',
+      value: '2',
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
+  it('rejects an instant predicate whose value is a number, not a string (would otherwise parse as epoch millis)', () => {
+    const predicate = {
+      kind: 'instant',
+      field: 'evaluatedAt',
+      operator: 'before',
+      value: 1700000000000,
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
+  it('rejects an enumerated "in" predicate whose value is a single string, not an array', () => {
+    const predicate = {
+      kind: 'enumerated',
+      field: 'target.environment',
+      operator: 'in',
+      value: 'production',
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
+  it('rejects a closure sizeAtMost predicate whose value is not a number', () => {
+    const predicate = {
+      kind: 'closure',
+      field: 'impact.closure',
+      operator: 'sizeAtMost',
+      value: ['a', 'b'],
+    } as unknown as Predicate;
+    expect(validatePredicateShape(predicate)).toMatch(/wrong type/);
+  });
+
   it('rejects an instant literal that does not parse as a date', () => {
     const predicate: Predicate = {
       kind: 'instant',

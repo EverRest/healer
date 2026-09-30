@@ -47,4 +47,35 @@ describe('decisionInputSchema', () => {
     const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: 'not-a-date' });
     expect(result.success).toBe(false);
   });
+
+  // Batch 9 follow-up review (both independent Opus reviews): a bare `z.coerce.date()` calls
+  // `new Date(x)` on *any* input, so `null` -> 1970-01-01 and a number/boolean silently become
+  // dates too — a caller mistake `z.date()` used to reject outright before this schema coerced at
+  // all. The fix restricts coercion to an actual `Date` or a proper ISO datetime string.
+  it.each([null, true, 12345, {}, []])('rejects a non-date, non-ISO-string evaluatedAt: %j', (bad) => {
+    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: bad });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-ISO date-like string that a bare `new Date(...)` would have silently accepted', () => {
+    // `new Date('2026/01/01')` parses successfully (locale-dependent, non-ISO) — the old
+    // `dry-run.dto.ts` preprocessing plus a bare `z.coerce.date()` would have accepted it.
+    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: '2026/01/01' });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts a real Date instance unchanged', () => {
+    const date = new Date('2026-06-15T12:00:00.000Z');
+    const result = decisionInputSchema.safeParse({ ...buildDecisionInput(), evaluatedAt: date });
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.evaluatedAt.getTime()).toBe(date.getTime());
+  });
+
+  it('accepts an ISO datetime string with a non-Z numeric offset', () => {
+    const result = decisionInputSchema.safeParse({
+      ...buildDecisionInput(),
+      evaluatedAt: '2026-01-01T00:00:00.000+02:00',
+    });
+    expect(result.success).toBe(true);
+  });
 });

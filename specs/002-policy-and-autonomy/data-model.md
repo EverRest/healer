@@ -103,7 +103,7 @@ write that makes revocation immediate.
 | issue_id | uuid? | |
 | workflow_run_id | uuid? | 012 — the run this decision is bound to |
 | workflow_state | text? | the guarded step |
-| action_key | text | |
+| action_key | text | FK `policy_action` (batch 9 C1(b) — a decision recorded against an action key the registry does not have is unrepresentable) |
 | target_ref | text? | the target the action was proposed against — the limit scope (C-11) |
 | fingerprint | text? | the issue fingerprint (001 FR-002) — the other half of the limit scope |
 | proposal_digest | text | canonical hash of the `DecisionInput`; a decision is valid for this digest only |
@@ -209,7 +209,9 @@ budget scope:     within ──soft threshold crossed──▶ degraded(step n),
   `consumed_at` set, whose `proposal_digest` equals the digest of what executed. Verified by
   continuous reconciliation against `audit_entry`, not only in tests (SC-001, R-14).
 - A decision is consumed at most once. A second execution against the same decision is refused with
-  `DECISION_ALREADY_CONSUMED`.
+  `DECISION_ALREADY_CONSUMED`. Consumption is refused with `DECISION_NOT_ALLOWED` when the decision's
+  own `outcome` is not `allow`, or when its `invalidated_reason` is set — a `deny`/`require_approval`
+  decision, or one since invalidated, never becomes consumable (batch 9 C1(a)).
 - `evaluate(ruleset_version, decision_input) = (outcome, matched_rule_keys)` replays identically for
   every stored decision. A nightly replay over a sample is the check (FR-002, SC-002).
 - `DecisionInput` contains no field derived from model output other than structured proposals whose

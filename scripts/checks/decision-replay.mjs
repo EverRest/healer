@@ -46,15 +46,21 @@ function formatMismatch(row, replayed) {
  * @returns {Promise<string | null>} a violation message, or null when the replay agrees with history
  */
 export async function replayOne(rulesets, row) {
-  const context = TenantContext.forTrustedInternalUse(row.tenantId);
-  // This query reads `decision_input` straight off the row (not through
-  // `PrismaPolicyDecisionRepository.findById`/`list`, which already parse it) — batch 9 C2's
-  // reproduction: JSONB round-trips `evaluatedAt` as a string, and `evaluate()`'s instant
-  // predicates call `.getTime()` on it. `decisionInputSchema` is the one place that coercion is
-  // defined; every reader of stored `decision_input` parses through it rather than trusting the
-  // raw cast.
-  const decisionInput = decisionInputSchema.parse(row.decisionInput);
+  // Everything below — including the schema parse — is inside this try (batch 9 follow-up
+  // review, both independent Opus reviews): a bare `.parse()` outside the try used to throw
+  // uncaught on any non-conforming stored row, crashing the whole gate instead of reporting just
+  // that row as a violation — exactly the "crashes instead of reporting the row" failure C2 was
+  // about, recurring one layer up. Any error here becomes that row's own violation message, with
+  // the row's id, so one bad row never hides the rest of the sample.
   try {
+    const context = TenantContext.forTrustedInternalUse(row.tenantId);
+    // This query reads `decision_input` straight off the row (not through
+    // `PrismaPolicyDecisionRepository.findById`/`list`, which already parse it) — batch 9 C2's
+    // reproduction: JSONB round-trips `evaluatedAt` as a string, and `evaluate()`'s instant
+    // predicates call `.getTime()` on it. `decisionInputSchema` is the one place that coercion is
+    // defined; every reader of stored `decision_input` parses through it rather than trusting the
+    // raw cast.
+    const decisionInput = decisionInputSchema.parse(row.decisionInput);
     const { identical, replayed } = await replayDecision({ rulesets }, context, {
       decisionInput,
       rulesetVersion: row.rulesetVersion,
@@ -66,7 +72,8 @@ export async function replayOne(rulesets, row) {
     if (error instanceof RulesetVersionNotFoundError) {
       return `decision ${row.id}: ruleset version ${row.rulesetVersion} no longer resolves for its tenant (violates SC-003)`;
     }
-    throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    return `decision ${row.id}: could not be replayed — ${message}`;
   }
 }
 
