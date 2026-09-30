@@ -21,6 +21,14 @@ import {
   PrismaEvidenceRepository,
   type EvidenceRepository,
 } from '@healer/domain-evidence';
+import {
+  PrismaPolicyActionRepository,
+  PrismaPolicyDecisionRepository,
+  PrismaPolicyRulesetRepository,
+  type PolicyActionRepository,
+  type PolicyDecisionRepository,
+  type PolicyRulesetRepository,
+} from '@healer/domain-policy';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import {
@@ -89,6 +97,9 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaAuditRepository(prisma),
       new PrismaTimelineRepository(prisma),
       new PrismaEvidenceGraphRepository(prisma),
+      new PrismaPolicyRulesetRepository(prisma),
+      new PrismaPolicyDecisionRepository(prisma),
+      new PrismaPolicyActionRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -351,6 +362,23 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     listByTarget: () => Promise.resolve([]),
     resolveAgentRunFacts: () => Promise.resolve(null),
   };
+  const noopPolicyRulesets: PolicyRulesetRepository = {
+    findByDigest: () => Promise.resolve(null),
+    findLatest: () => Promise.resolve(null),
+    findByVersion: () => Promise.resolve(null),
+    list: () => Promise.resolve([]),
+    publish: () => Promise.reject(new Error('not implemented in this test')),
+  };
+  const noopPolicyDecisions: PolicyDecisionRepository = {
+    record: () => Promise.reject(new Error('not implemented in this test')),
+    consume: () => Promise.reject(new Error('not implemented in this test')),
+    findById: () => Promise.resolve(null),
+    list: () => Promise.resolve([]),
+  };
+  const noopPolicyActions: PolicyActionRepository = {
+    findByKey: () => Promise.resolve(null),
+    list: () => Promise.resolve([]),
+  };
 
   beforeAll(async () => {
     const queue = new BullmqSignalQueue({ url: 'redis://127.0.0.1:6399' });
@@ -363,6 +391,9 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopAudit,
       { forIssue: () => Promise.resolve([]) },
       { forIssue: () => Promise.resolve({ nodes: [], edges: [] }) },
+      noopPolicyRulesets,
+      noopPolicyDecisions,
+      noopPolicyActions,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -206,6 +206,147 @@
         },
         "tags": ["Issues"]
       }
+    },
+    "/api/v1/policy/rulesets": {
+      "get": {
+        "operationId": "PolicyRulesetsController_list",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyRulesets"]
+      },
+      "post": {
+        "operationId": "PolicyRulesetsController_publish",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-actor-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "201": { "description": "" } },
+        "tags": ["PolicyRulesets"]
+      }
+    },
+    "/api/v1/policy/rulesets/{version}": {
+      "get": {
+        "operationId": "PolicyRulesetsController_getOne",
+        "parameters": [
+          {
+            "name": "version",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyRulesets"]
+      }
+    },
+    "/api/v1/policy/decisions": {
+      "get": {
+        "operationId": "PolicyDecisionsController_list",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyDecisions"]
+      }
+    },
+    "/api/v1/policy/decisions/{decisionId}": {
+      "get": {
+        "operationId": "PolicyDecisionsController_getOne",
+        "parameters": [
+          {
+            "name": "decisionId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyDecisions"]
+      }
+    },
+    "/api/v1/policy/decisions/{decisionId}/replay": {
+      "post": {
+        "operationId": "PolicyDecisionsController_replay",
+        "parameters": [
+          {
+            "name": "decisionId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyDecisions"]
+      }
+    },
+    "/api/v1/policy/dry-run": {
+      "post": {
+        "operationId": "PolicyEvaluationController_dryRun",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyEvaluation"]
+      }
+    },
+    "/api/v1/policy/actions": {
+      "get": {
+        "operationId": "PolicyEvaluationController_list",
+        "parameters": [],
+        "responses": { "200": { "description": "" } },
+        "tags": ["PolicyEvaluation"]
+      }
     }
   },
   "info": {

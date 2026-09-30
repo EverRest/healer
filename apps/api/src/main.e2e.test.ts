@@ -9,6 +9,11 @@ import type {
   SignalQueue,
 } from '@healer/domain-issues';
 import type { EvidenceRepository } from '@healer/domain-evidence';
+import type {
+  PolicyActionRepository,
+  PolicyDecisionRepository,
+  PolicyRulesetRepository,
+} from '@healer/domain-policy';
 import { configureApiPrefix, createApiModule } from './main.js';
 
 const noopSignalQueue: SignalQueue = { enqueueBatch: () => Promise.resolve() };
@@ -41,6 +46,23 @@ const noopAudit: AuditRepository = {
   listByTarget: () => Promise.resolve([]),
   resolveAgentRunFacts: () => Promise.resolve(null),
 };
+const noopPolicyRulesets: PolicyRulesetRepository = {
+  findByDigest: () => Promise.resolve(null),
+  findLatest: () => Promise.resolve(null),
+  findByVersion: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  publish: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopPolicyDecisions: PolicyDecisionRepository = {
+  record: () => Promise.reject(new Error('not implemented in this test')),
+  consume: () => Promise.reject(new Error('not implemented in this test')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+};
+const noopPolicyActions: PolicyActionRepository = {
+  findByKey: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -68,6 +90,9 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopAudit,
       { forIssue: () => Promise.resolve([]) },
       { forIssue: () => Promise.resolve({ nodes: [], edges: [] }) },
+      noopPolicyRulesets,
+      noopPolicyDecisions,
+      noopPolicyActions,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

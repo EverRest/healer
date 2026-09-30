@@ -21,6 +21,14 @@ import {
   type EvidenceGraphRepository,
   type EvidenceRepository,
 } from '@healer/domain-evidence';
+import {
+  PrismaPolicyActionRepository,
+  PrismaPolicyDecisionRepository,
+  PrismaPolicyRulesetRepository,
+  type PolicyActionRepository,
+  type PolicyDecisionRepository,
+  type PolicyRulesetRepository,
+} from '@healer/domain-policy';
 import { createPrismaClient } from './infrastructure/prisma.js';
 import { HEALTH_META, HealthController, type HealthMeta } from './health/health.controller.js';
 import {
@@ -36,6 +44,18 @@ import {
   IssuesController,
   TIMELINE_REPOSITORY,
 } from './issues/issues.controller.js';
+import {
+  POLICY_RULESET_REPOSITORY,
+  PolicyRulesetsController,
+} from './policy/policy-rulesets.controller.js';
+import {
+  POLICY_DECISION_REPOSITORY,
+  PolicyDecisionsController,
+} from './policy/policy-decisions.controller.js';
+import {
+  POLICY_ACTION_REPOSITORY,
+  PolicyEvaluationController,
+} from './policy/policy-evaluation.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -79,9 +99,19 @@ export function createApiModule(
   audit: AuditRepository,
   timeline: TimelineRepository,
   evidenceGraph: EvidenceGraphRepository,
+  policyRulesets: PolicyRulesetRepository,
+  policyDecisions: PolicyDecisionRepository,
+  policyActions: PolicyActionRepository,
 ): Type<unknown> {
   @Module({
-    controllers: [HealthController, IngestController, IssuesController],
+    controllers: [
+      HealthController,
+      IngestController,
+      IssuesController,
+      PolicyRulesetsController,
+      PolicyDecisionsController,
+      PolicyEvaluationController,
+    ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
       { provide: SIGNAL_QUEUE, useValue: signalQueue },
@@ -91,6 +121,9 @@ export function createApiModule(
       { provide: AUDIT_REPOSITORY, useValue: audit },
       { provide: TIMELINE_REPOSITORY, useValue: timeline },
       { provide: EVIDENCE_GRAPH_REPOSITORY, useValue: evidenceGraph },
+      { provide: POLICY_RULESET_REPOSITORY, useValue: policyRulesets },
+      { provide: POLICY_DECISION_REPOSITORY, useValue: policyDecisions },
+      { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
     ],
   })
   class ApiModule {}
@@ -117,6 +150,9 @@ export async function bootstrap(): Promise<void> {
     new PrismaAuditRepository(prisma),
     new PrismaTimelineRepository(prisma),
     new PrismaEvidenceGraphRepository(prisma),
+    new PrismaPolicyRulesetRepository(prisma),
+    new PrismaPolicyDecisionRepository(prisma),
+    new PrismaPolicyActionRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

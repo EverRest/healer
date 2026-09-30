@@ -9,6 +9,11 @@ import type {
   TimelineRepository,
 } from '@healer/domain-issues';
 import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
+import type {
+  PolicyActionRepository,
+  PolicyDecisionRepository,
+  PolicyRulesetRepository,
+} from '@healer/domain-policy';
 import { configureApiPrefix, createApiModule } from './main.js';
 
 // Route shape only — none of these are ever called, contract generation never sends a request.
@@ -48,6 +53,23 @@ const noopTimeline: TimelineRepository = { forIssue: () => Promise.resolve([]) }
 const noopEvidenceGraph: EvidenceGraphRepository = {
   forIssue: () => Promise.resolve({ nodes: [], edges: [] }),
 };
+const noopPolicyRulesets: PolicyRulesetRepository = {
+  findByDigest: () => Promise.resolve(null),
+  findLatest: () => Promise.resolve(null),
+  findByVersion: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  publish: () => Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopPolicyDecisions: PolicyDecisionRepository = {
+  record: () => Promise.reject(new Error('not implemented for contract generation')),
+  consume: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+};
+const noopPolicyActions: PolicyActionRepository = {
+  findByKey: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -71,6 +93,9 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopAudit,
     noopTimeline,
     noopEvidenceGraph,
+    noopPolicyRulesets,
+    noopPolicyDecisions,
+    noopPolicyActions,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

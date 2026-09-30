@@ -18,6 +18,11 @@ import {
   PrismaEvidenceRepository,
   type NewEvidence,
 } from '@healer/domain-evidence';
+import {
+  PrismaPolicyActionRepository,
+  PrismaPolicyDecisionRepository,
+  PrismaPolicyRulesetRepository,
+} from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, scope, withCorrelation, withStep } from '@healer/shared';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantIsolated } from '../../test/tenant-isolation.js';
@@ -89,6 +94,9 @@ describe('close, timeline and evidence graph (001 T057/T048)', () => {
       audit,
       new PrismaTimelineRepository(prisma),
       new PrismaEvidenceGraphRepository(prisma),
+      new PrismaPolicyRulesetRepository(prisma),
+      new PrismaPolicyDecisionRepository(prisma),
+      new PrismaPolicyActionRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
