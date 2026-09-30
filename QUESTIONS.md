@@ -1625,3 +1625,16 @@ also fixed a wrong comment claiming a circular import that doesn't exist (only `
   fixed "with no field to say otherwise" vs. the same section's own table putting a free `provenance`
   field on every `dependency_observation`) — already tracked above as the reason the three adapters'
   comments defer the adapter-vs-observation cross-check to Phase 3. Not new, not re-litigated here.
+
+## `make ci` — one downstream break, fixed
+
+Full `make ci` on the finished T001-T017 batch found two things:
+- 11 files needed `prettier --write` (none of eslint/typecheck/the gates catch formatting — a
+  separate check). Trivial, fixed; one of prettier's own reflows moved a `@ts-expect-error` off the
+  line it was suppressing in `read-envelope.test.ts` (TS2578/TS2345) — fixed by pulling the object
+  literal into a local `const` so the flagged call stays on one line.
+- `packages/domain/evidence/src/application/commands/record-evidence.test.ts` (owned by **001**, not
+  004) had its own FR-007a test exercising the four discovery shapes with the *old* placeholder field
+  names T016/T017 just corrected. Updated to the real fields (`naturalKey`/`componentType`/etc.) —
+  the only file outside 004's own packages this batch had to touch, and only because it tested a
+  shape 004 owns.
