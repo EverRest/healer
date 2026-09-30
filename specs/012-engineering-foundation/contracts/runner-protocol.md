@@ -51,10 +51,10 @@ this list is not transmitted.
 | `file_path` | repository-relative path — not file content |
 | `tool_output_summary` | tool name, outcome, structured fields declared by that tool |
 | `collection_gap` | what was not collected, why, and whether it was withheld by redaction (R-05) |
-| `component_candidate` | discovered component: identifier, type, characteristics, source of the observation (004) |
-| `deployment_unit_candidate` | discovered deployment unit: identifier, version, component references |
-| `dependency_observation` | observed edge: from, to, kind, provenance, observation count and window |
-| `repository_ref` | repository identifier, default branch, component mapping — not contents |
+| `component_candidate` | discovered component: natural key, name, component type, characteristics, owner reference, repository-relative source paths, adapter key and version — not source content (004) |
+| `deployment_unit_candidate` | discovered deployment unit: natural key, environment, runtime kind, runtime reference, current version, last-deployed time (004) |
+| `dependency_observation` | observed edge: from and to natural keys, edge type, layer, provenance, observation count, first- and last-observed time, window in seconds (004) |
+| `repository_ref` | project reference, default branch, head SHA, component natural keys it maps to — not contents (004) |
 | `pull_request_ref` | pull request identifier, source and target branch, state, review state, author handle, time, changed paths — not description text, not comment bodies, not diff content (008) |
 | `config_key_ref` | configuration key path, the declaring component, environment, value **presence and shape only** (`present` · `absent`, type, length class) — never a value (003) |
 | `knowledge_ref` | document identifier, repository-relative path, section anchor, content digest, revision, authorship class (`human` · `machine` · `machine_adopted`), observed-at — not document text (005) |

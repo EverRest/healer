@@ -1,4 +1,15 @@
+import type {
+  ComponentCandidate,
+  DeploymentUnitCandidate,
+  DependencyObservation,
+  RepositoryRef,
+} from '@healer/boundary-contract';
 import type { GraphLayer, ProvenanceClass } from './provenance.js';
+
+// T017: the four discovery shapes are the types inferred from the closed Zod schemas in
+// @healer/boundary-contract (FR-021, R-11, contracts/graph-contract.md §3) — this file no longer
+// declares its own placeholders, so there is exactly one definition of each shape.
+export type { ComponentCandidate, DeploymentUnitCandidate, DependencyObservation, RepositoryRef };
 
 export interface DiscoveryScope {
   readonly tenantId: string;
@@ -7,48 +18,6 @@ export interface DiscoveryScope {
   // (graph-contract.md §3) — the shape had no way to signal cancellation until an adapter
   // needed one. Optional so every existing caller is unaffected.
   readonly signal?: AbortSignal;
-}
-
-// T017 replaces these four shapes with the types inferred from the closed Zod schemas
-// added to @healer/boundary-contract (FR-021, R-11) — kept here only until that lands,
-// so this file is the single place both are reconciled.
-export interface ComponentCandidate {
-  readonly naturalKey: string;
-  readonly name: string;
-  readonly componentType: string;
-  readonly characteristics: readonly string[];
-  readonly ownerRef?: string;
-  readonly sourcePaths: readonly string[];
-  readonly adapterKey: string;
-  readonly adapterVersion: string;
-}
-
-export interface DeploymentUnitCandidate {
-  readonly naturalKey: string;
-  readonly environment: string;
-  readonly runtimeKind: string;
-  readonly runtimeRef: string;
-  readonly currentVersion: string;
-  readonly lastDeployedAt?: string;
-}
-
-export interface DependencyObservation {
-  readonly fromNaturalKey: string;
-  readonly toNaturalKey: string;
-  readonly edgeType: string;
-  readonly layer: GraphLayer;
-  readonly provenance: ProvenanceClass;
-  readonly observationCount: number;
-  readonly firstObservedAt: string;
-  readonly lastObservedAt: string;
-  readonly windowSeconds: number;
-}
-
-export interface RepositoryRef {
-  readonly projectRef: string;
-  readonly defaultBranch: string;
-  readonly headSha: string;
-  readonly componentNaturalKeys: readonly string[];
 }
 
 export interface DiscoveryFacts {

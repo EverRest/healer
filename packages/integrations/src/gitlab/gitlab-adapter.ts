@@ -14,11 +14,12 @@ const EMPTY_FACTS: DiscoveryFacts = Object.freeze({
  * runtime, so this adapter has no way to claim a stronger class for itself (FR-020,
  * contracts/graph-contract.md §3).
  *
- * Known gap, not fixed here: `DependencyObservation` (discovery-adapter.ts) still carries its own
- * free per-element `provenance`/`layer` — a placeholder shape the file's own comment says T017
- * replaces with boundary-contract Zod-inferred types. T017 must close that gap (drop the field and
- * stamp it from the adapter, or validate it against the adapter at ingest); nothing exploits it
- * today because `collect` below only ever returns empty arrays.
+ * Known gap, not fixed here: T017 landed the boundary-contract Zod-inferred `DependencyObservation`
+ * (graph-contract.md §3 declares `layer`/`provenance` as per-observation wire fields, so the shape
+ * still carries them declared, not derived), but nothing yet checks that a given observation's
+ * declared `layer`/`provenance` doesn't exceed the collecting adapter's own fixed constants below —
+ * that validation belongs to the ingestion step Phase 3 (US1) adds, not to the schema. Nothing
+ * exploits the gap today because `collect` below only ever returns empty arrays.
  *
  * Skeleton for T003 — real collection is Phase 3 (US1). `collect` is read-only, bounded and
  * cancellable in shape only: it honours `scope.signal` and returns the empty envelope. The
