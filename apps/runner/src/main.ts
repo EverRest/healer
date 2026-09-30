@@ -8,6 +8,7 @@ import {
 import type { ControlPlaneDirective } from '@healer/boundary-contract';
 import {
   buildHeartbeatPayload,
+  computeHeartbeatTimeoutMs,
   sendHeartbeat,
   type HeartbeatResponse,
 } from './heartbeat-client.js';
@@ -104,16 +105,22 @@ export interface RunnerHandle {
   readonly close: () => Promise<void>;
 }
 
-/** Bounds how long `close()` waits for an in-flight tick before giving up and returning anyway —
- *  an upgrade must still complete even if a single heartbeat cycle is unexpectedly hung, since
- *  `sendHeartbeat` already has its own timeout (`HEARTBEAT_TIMEOUT_FRACTION`) shorter than this. */
-const DRAIN_TIMEOUT_MS = 10_000;
+/** Extra time `close()` allows beyond `sendHeartbeat`'s own abort timeout, so the rest of a cycle
+ *  already past the network call (JSON parsing, directive dispatch) has a chance to finish too. */
+const DRAIN_SAFETY_MARGIN_MS = 2_000;
 
 export function start(): RunnerHandle {
   const config = loadRunnerConfig();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-runner' });
   const seen = new BoundedSeenSet(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE);
   const handle = createLoggingDirectiveHandler(logger);
+
+  // Derived from `sendHeartbeat`'s own abort timeout for *this* config, not a fixed constant
+  // (012 T050 review): a fixed 10s bound was actually *shorter* than the default heartbeat
+  // interval's own 15s abort timeout, so `close()` could give up and let the process exit before
+  // an in-flight request even reached its own timeout — not a real drain at the default setting.
+  const drainTimeoutMs =
+    computeHeartbeatTimeoutMs(config.RUNNER_HEARTBEAT_INTERVAL_MS) + DRAIN_SAFETY_MARGIN_MS;
 
   // Tracks the currently in-flight tick (if any) so `close()` can await it instead of cutting it
   // off mid-request — a heartbeat cycle is a single outbound POST (sub-second in practice), but
@@ -139,7 +146,7 @@ export function start(): RunnerHandle {
   return {
     close: async () => {
       clearInterval(interval); // no new tick starts after this
-      const timeout = new Promise<void>((resolve) => setTimeout(resolve, DRAIN_TIMEOUT_MS));
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, drainTimeoutMs));
       await Promise.race([inFlight, timeout]);
     },
   };
@@ -147,7 +154,11 @@ export function start(): RunnerHandle {
 
 if (process.argv[1]?.endsWith('main.js')) {
   const handle = start();
-  const stop = (): void => void handle.close().then(() => process.exit(0));
+  const stop = (): void => {
+    void handle.close().then(() => {
+      process.exit(0);
+    });
+  };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
 }

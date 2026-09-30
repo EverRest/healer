@@ -11,7 +11,7 @@
 // digest is a legitimate no-op and is allowed; the *existing* tagged image is never disturbed on a
 // refusal — the candidate is discarded and the real tag is never touched.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMainModule } from './lib/harness.mjs';
@@ -48,6 +48,17 @@ export function assertNotRebuildInPlace(tag, previousDigest, newDigest) {
   }
 }
 
+/**
+ * The only stderr shape that legitimately means "no local image at this tag" (012 T050 review: the
+ * previous version treated *every* `docker image inspect` failure — a daemon hiccup, a permission
+ * error, the wrong Docker context — identically to "absent", which let the whole FR-017 guard
+ * silently skip itself whenever the inspect call failed for an unrelated reason).
+ * @param {string} stderr
+ */
+export function isImageAbsentError(stderr) {
+  return /no such image/i.test(stderr);
+}
+
 /* v8 ignore start -- real docker/fs calls; decision logic above is unit tested directly */
 function tryInspectDigest(tag, repoRoot) {
   try {
@@ -55,9 +66,33 @@ function tryInspectDigest(tag, repoRoot) {
       cwd: repoRoot,
       encoding: 'utf8',
     }).trim();
-  } catch {
-    return undefined; // no local image at this tag
+  } catch (error) {
+    const stderr = typeof error?.stderr === 'string' ? error.stderr : '';
+    if (isImageAbsentError(stderr)) return undefined; // genuinely absent
+    // A real failure must not look like "absent" — that would silently skip the FR-017 guard.
+    throw new Error(
+      `docker image inspect ${tag} failed for a reason other than "no such image": ` +
+        `${stderr || (error instanceof Error ? error.message : String(error))}`,
+    );
   }
+}
+
+function removeImageBestEffort(tag, repoRoot) {
+  try {
+    execFileSync('docker', ['rmi', tag], { cwd: repoRoot, stdio: 'ignore' });
+  } catch {
+    // Best-effort cleanup of a throwaway candidate tag — must never mask whatever error (if any)
+    // is already propagating out of the caller's try/finally.
+  }
+}
+
+/** Temp-file-then-rename so a crash or a full disk mid-write can never leave a corrupt or
+ *  half-written stamp file behind — `rename` on the same filesystem is atomic. */
+function writeStampAtomically(stampPath, data) {
+  mkdirSync(dirname(stampPath), { recursive: true });
+  const tmpPath = `${stampPath}.tmp-${process.pid}-${Date.now()}`;
+  writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`);
+  renameSync(tmpPath, stampPath);
 }
 
 /**
@@ -73,29 +108,44 @@ export function runnerBuild(version, options = {}) {
   const tag = `healer-runner:${version}`;
   const candidateTag = `${tag}--candidate-${process.pid}-${Date.now()}`;
 
-  const previousDigest = tryInspectDigest(tag, repoRoot);
   execFileSync('docker', ['build', '-t', candidateTag, '-f', DOCKERFILE, '.'], {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  const newDigest = tryInspectDigest(candidateTag, repoRoot);
-  if (newDigest === undefined) {
-    throw new Error(`docker build reported success but ${candidateTag} cannot be inspected`);
+
+  let newDigest;
+  try {
+    newDigest = tryInspectDigest(candidateTag, repoRoot);
+    if (newDigest === undefined) {
+      throw new Error(`docker build reported success but ${candidateTag} cannot be inspected`);
+    }
+
+    // Read *now* — immediately before the compare-and-move — not before the ~60s `docker build`
+    // that already ran above: shrinks the window in which a second, concurrent `make runner-build`
+    // at the same version could move the tag between this read and this process's own move from
+    // ~60s down to milliseconds (012 T050 review; this machine already runs concurrent agent
+    // worktrees, so two builds at once is a real scenario, not a hypothetical one).
+    const previousDigest = tryInspectDigest(tag, repoRoot);
+    assertNotRebuildInPlace(tag, previousDigest, newDigest);
+
+    // Safe: either the tag is new, or this rebuild reproduced the same digest already at `tag`.
+    execFileSync('docker', ['tag', candidateTag, tag], { cwd: repoRoot, stdio: 'ignore' });
+  } finally {
+    // The candidate alias is always throwaway — drop it on every exit path (success, refusal, or
+    // any other failure). 012 T050 review: two branches used to leak this image with no cleanup.
+    removeImageBestEffort(candidateTag, repoRoot);
   }
 
   try {
-    assertNotRebuildInPlace(tag, previousDigest, newDigest);
+    writeStampAtomically(stampPath, { version, digest: newDigest });
   } catch (error) {
-    execFileSync('docker', ['rmi', candidateTag], { cwd: repoRoot, stdio: 'ignore' });
-    throw error;
+    // `docker tag` above already moved the real tag — say so explicitly, rather than letting
+    // "runner-build failed" be misread as "nothing changed" (012 T050 review).
+    throw new Error(
+      `${tag} now points at ${newDigest} (the tag move already happened) but writing the stamp ` +
+        `file failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-
-  // Safe: either the tag is new, or this rebuild reproduced the same digest already at `tag`.
-  execFileSync('docker', ['tag', candidateTag, tag], { cwd: repoRoot, stdio: 'ignore' });
-  execFileSync('docker', ['rmi', candidateTag], { cwd: repoRoot, stdio: 'ignore' });
-
-  mkdirSync(dirname(stampPath), { recursive: true });
-  writeFileSync(stampPath, `${JSON.stringify({ version, digest: newDigest }, null, 2)}\n`);
 
   return { version, tag, digest: newDigest };
 }

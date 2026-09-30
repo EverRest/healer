@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertNotRebuildInPlace, readRunnerVersion } from './runner-build.mjs';
+import { assertNotRebuildInPlace, isImageAbsentError, readRunnerVersion } from './runner-build.mjs';
 
 describe('runner-build: version from apps/runner/package.json (012 T049/T050, FR-017)', () => {
   it('reads the version field', () => {
@@ -38,5 +38,27 @@ describe('runner-build: refuses to rebuild a published tag in place (FR-017, ADR
     expect(() =>
       assertNotRebuildInPlace('healer-runner:0.5.0', 'sha256:old', 'sha256:new'),
     ).toThrow(/healer-runner:0\.5\.0.*sha256:old.*sha256:new/s);
+  });
+});
+
+describe('runner-build: isImageAbsentError — only "no such image" means absent (012 T050 review)', () => {
+  it('recognises the real Docker "no such image" stderr', () => {
+    expect(
+      isImageAbsentError('Error response from daemon: No such image: healer-runner:0.5.0\n'),
+    ).toBe(true);
+  });
+
+  it("is case-insensitive (Docker's own casing has varied across versions)", () => {
+    expect(isImageAbsentError('no such image: healer-runner:0.5.0')).toBe(true);
+  });
+
+  it('does not treat an unrelated daemon failure as "absent" — the fail-open bug this exists to close', () => {
+    expect(
+      isImageAbsentError('Cannot connect to the Docker daemon at unix:///var/run/docker.sock'),
+    ).toBe(false);
+    expect(
+      isImageAbsentError('permission denied while trying to connect to the Docker daemon socket'),
+    ).toBe(false);
+    expect(isImageAbsentError('')).toBe(false);
   });
 });

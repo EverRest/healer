@@ -29,21 +29,29 @@ FROM base AS build
 COPY . .
 RUN pnpm install --frozen-lockfile --filter "@healer/runner..." --filter "{.}"
 RUN pnpm exec tsc --build apps/runner/tsconfig.json
+# `tsconfig.json`'s own `include: ["src/**/*"]` compiles test files too (needed so `pnpm run
+# typecheck` actually checks them) — strip their compiled output before it ships in an image
+# nothing runs tests from (012 T050 review).
+RUN find apps/runner/dist packages/boundary-contract/dist packages/shared/dist -name '*.test.*' -delete
 
 # ---- prod-deps: same scoped filter, production dependencies only ----
 FROM base AS prod-deps
 COPY . .
 RUN pnpm install --frozen-lockfile --prod --filter "@healer/runner..."
+# `pnpm install --filter "@healer/runner..."` still populates the shared pnpm store with the
+# *entire* transitive closure of the workspace root's own `dependencies` (@prisma/client,
+# supertest — confirmed empirically across three different pnpm invocations; see
+# scripts/prune-runner-store.mjs's own doc comment for the full account). Delete everything from
+# the store that apps/runner's real dependency graph does not actually reach (012 T050 review).
+RUN node scripts/prune-runner-store.mjs
 
 # ---- runtime: only what `node dist/main.js` needs — no devDependencies, no other apps' source ----
-# Only `node_modules/.pnpm` (pnpm's content-addressed virtual store) is copied from the root, not
-# the whole `/repo/node_modules` — that top level also carries symlinks for the *workspace root's
-# own* `dependencies` (this repo's root package.json lists @prisma/client, supertest; confirmed
-# empirically that `pnpm install --filter "@healer/runner..."` still installs those, even though
-# `pnpm list` with the same filter excludes root — a pnpm quirk, not something this image needs).
-# Nothing apps/runner imports is a direct root dependency, and each package below already has its
-# own local `node_modules` of real symlinks into the store, so the unwanted top-level ones are
-# simply never copied rather than fought with a pnpm flag.
+# Two layers against the root-dependency leak explained above `prune-runner-store.mjs`'s call:
+# (1) that script has already deleted everything unreachable from the store by this point, and
+# (2) only `node_modules/.pnpm` itself is copied here, never the top-level `/repo/node_modules`
+# (which also carries the workspace root's own hoisted symlinks — irrelevant to apps/runner either
+# way, and simply never copied). Verified by `runner-image.e2e.test.ts`: the built image's
+# `node_modules/.pnpm` contains nothing under `@prisma/` or `prisma@`.
 FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production

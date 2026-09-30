@@ -60,6 +60,21 @@ const HEARTBEAT_TIMEOUT_FRACTION = 0.5;
 const MIN_HEARTBEAT_TIMEOUT_MS = 1_000;
 
 /**
+ * The one authority for how long a single heartbeat POST is allowed to run — exported so
+ * `main.ts`'s shutdown drain bound (`DRAIN_TIMEOUT_MS`) can be derived from the exact same number
+ * instead of a second, independently-chosen constant that a config change could silently make
+ * wrong (012 T050 review: an earlier version claimed in a comment that the drain bound was longer
+ * than this timeout without actually deriving one from the other, and at the *default* heartbeat
+ * interval it was not — the claim was false at the very setting most deployments would run with).
+ */
+export function computeHeartbeatTimeoutMs(heartbeatIntervalMs: number): number {
+  return Math.max(
+    MIN_HEARTBEAT_TIMEOUT_MS,
+    Math.floor(heartbeatIntervalMs * HEARTBEAT_TIMEOUT_FRACTION),
+  );
+}
+
+/**
  * POSTs one heartbeat. Never opens a listening socket — this function only ever initiates an
  * outbound request; there is nothing here for the customer's network to connect into. `fetchImpl`
  * defaults to the platform's native `fetch` (no new HTTP client dependency) and is a parameter
@@ -70,10 +85,7 @@ export async function sendHeartbeat(
   payload: HeartbeatRequestBody,
   fetchImpl: typeof fetch = fetch,
 ): Promise<HeartbeatResponse> {
-  const timeoutMs = Math.max(
-    MIN_HEARTBEAT_TIMEOUT_MS,
-    Math.floor(config.RUNNER_HEARTBEAT_INTERVAL_MS * HEARTBEAT_TIMEOUT_FRACTION),
-  );
+  const timeoutMs = computeHeartbeatTimeoutMs(config.RUNNER_HEARTBEAT_INTERVAL_MS);
   let response: Response;
   try {
     response = await fetchImpl(`${config.RUNNER_CONTROL_PLANE_URL}/runners/heartbeat`, {

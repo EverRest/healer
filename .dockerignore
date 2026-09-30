@@ -1,9 +1,17 @@
-node_modules/
+# Recursive (`**/`) patterns — an unanchored pattern like `dist/` only matches at the repo root in
+# Docker's .dockerignore matching, not at every depth (unlike a real .gitignore). Confirmed
+# empirically (012 T050 review): a stale nested apps/runner/dist/ (including a leftover
+# runner-release.json from a previous local build) and nested node_modules/ were both entering the
+# build context via `COPY . .` and getting baked into the image, making every `runner-build` rerun
+# non-deterministic relative to the last one — exactly what ADR 0014's "same digest is a legitimate
+# no-op" depends on not happening.
+**/node_modules
 .git/
-dist/
-coverage/
-*.log
-.env
-.env.*
+**/dist
+**/coverage
+**/*.log
+**/.env
+**/.env.*
+**/*.tsbuildinfo
 Dockerfile*
 .dockerignore

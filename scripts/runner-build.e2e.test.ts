@@ -32,6 +32,7 @@ const originalSource = readFileSync(MUTATED_FILE, 'utf8');
 
 const VERSION_A = '0.0.0-e2e-refuse-test';
 const VERSION_B = '0.0.0-e2e-refuse-test-2';
+const VERSION_NOOP = '0.0.0-e2e-noop-test';
 const scratchDir = mkdtempSync(join(tmpdir(), 'runner-build-e2e-'));
 
 function removeTag(tag: string) {
@@ -46,6 +47,7 @@ afterAll(() => {
   writeFileSync(MUTATED_FILE, originalSource);
   removeTag(`healer-runner:${VERSION_A}`);
   removeTag(`healer-runner:${VERSION_B}`);
+  removeTag(`healer-runner:${VERSION_NOOP}`);
   rmSync(scratchDir, { recursive: true, force: true });
 }, 30_000);
 
@@ -96,5 +98,28 @@ describe('runner-build: refuses to rebuild a published tag in place (012 T049, F
     // concurrently (the environment's own caveat) — a shared build-cache eviction from an unrelated
     // process can force a full cold rebuild mid-test. 600s (Bash's own maximum single-command
     // timeout) gives real headroom over the ~50-90s a single cold build takes in isolation.
+  }, 600_000);
+
+  /**
+   * The other half of ADR 0014's own words: "a rebuild that reproduces the same digest is a
+   * legitimate no-op, not a violation." A real regression here (012 T050 review, reproduced): a
+   * stale nested apps/runner/dist/ (including a leftover runner-release.json from a previous local
+   * build) and nested node_modules/ were entering the build context via `COPY . .` because
+   * `.dockerignore`'s `node_modules/`/`dist/` patterns only matched at the repo root, not at every
+   * depth — every rebuild picked up whatever was sitting in the previous build's local dist/, so
+   * even a zero-source-change rebuild produced a different digest and was wrongly refused.
+   */
+  it('a rebuild with zero source changes reproduces the same digest and succeeds as a no-op', () => {
+    const stampPath1 = join(scratchDir, 'release-noop-1.json');
+    const first = runnerBuild(VERSION_NOOP, { repoRoot: REPO_ROOT, stampPath: stampPath1 });
+
+    const stampPath2 = join(scratchDir, 'release-noop-2.json');
+    const second = runnerBuild(VERSION_NOOP, { repoRoot: REPO_ROOT, stampPath: stampPath2 });
+
+    expect(second.digest).toBe(first.digest);
+    expect(JSON.parse(readFileSync(stampPath2, 'utf8'))).toEqual({
+      version: VERSION_NOOP,
+      digest: first.digest,
+    });
   }, 600_000);
 });
