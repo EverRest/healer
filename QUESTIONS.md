@@ -380,6 +380,19 @@ verify:**
   real Prisma file content remains anywhere — this is purely leftover symlink aliases with nothing
   behind them, not a functional leak. Not worth a third fix round; noted here in case a future
   `find -iname '*prisma*'`-style audit of the image is confused by it.
+- **`runner-image.e2e.test.ts`'s drain-timing bounds widened after two real, reproduced failures
+  under host contention** — final `make ci` before push: `elapsedSeconds` for the genuine-drain test
+  hit 40.094s against a 35s upper bound (and a 40s `waitForExit` poll ceiling) on the first failure,
+  then failed the same way again on an isolated retry with no competing processes from this session
+  (`ps aux` confirmed clean; host load avg was 6.75–7.71 with 14% CPU idle from *other* processes on
+  this shared machine — not something this session controls). The assertion's job is "prove this
+  isn't a hang," not "pin exact drain latency" (its own comment already said so before this change);
+  under real contention the actual DELAY_MS=4s+margin math (~6s expected) can genuinely take 35–40s+
+  wall-clock while still being a correct, bounded drain, not a hang. Widened: `waitForExit`'s poll
+  ceiling 40s→90s, the upper-bound assertion 35s→80s, the test's own outer timeout 90s→150s — still
+  bounded (a real hang is still caught), just no longer fragile at exactly this host's typical
+  contention level. Not a change to any production code, only to how much slack a timing proof
+  allows itself on a shared, contended machine.
 
 ### T048 landed — `make runner-diagnostics`, the last deferred phase-6 task
 
