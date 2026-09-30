@@ -42,6 +42,10 @@ gate-ceiling      no autonomy grant exceeds ACTION_CEILING for its class, and no
 gate-evidence     no conclusion type can be persisted without an evidence reference
 gate-architecture-agnostic   no domain or agent package names a concrete architecture style,
                   runtime or vendor; those names appear only under integrations and adapters
+gate-graph-confirm-capability   no MCP tool, worker job or API route exposes a graph
+                  confirmation path; no agent or runner package references the graph:confirm
+                  capability at all; a command or architecture infrastructure handler that does
+                  expose one references the capability constant (004 FR-010, R-09)
 gate-no-send      no package imports an outbound mail, SMS, chat or HTTP-client module except
                   the named egress allowlist, which contains no support package (009)
 gate-agent-scope  an agent-authored change set touches no protected path and no pre-existing test
@@ -59,8 +63,8 @@ Each is callable alone for iteration and is also called by `ci`:
 
 `secret-scan` · `deps-check` · `db-check` · `format-check` · `lint` · `typecheck` · `build` ·
 `test-unit` · `gate-coverage-completeness` · `test-e2e` · `contracts-check` · `gate-data-model` ·
-`gate-isolation` · `gate-undo` · `gate-ceiling` · `gate-evidence` · `gate-agent-scope` ·
-`gate-red-first`
+`gate-isolation` · `gate-undo` · `gate-ceiling` · `gate-evidence` · `gate-graph-confirm-capability` ·
+`gate-agent-scope` · `gate-red-first`
 
 ## Gate semantics
 
@@ -78,6 +82,7 @@ passes when confused produces a false record of compliance, which is worse than 
 | `gate-ceiling` | an `autonomy_grant` exceeds `ACTION_CEILING` for its class, or a `reversible_remediation` grant exists for an action whose undo is unattested (002 SC-004, C-18) — **or** the diff raises a ceiling level and cites no resolvable `threshold_derivation` artifact. The first two are checks on data against the ceiling function; the third is a check on an edit **to** the function, which no data check can see, and it resolves a committed artifact rather than the control-plane database, so the gate needs no credentials and cannot fail on a database outage (002 FR-008a, 011 FR-021c) |
 | `gate-evidence` | a persisted conclusion type lacks a non-nullable evidence reference — the rule is **001 FR-009**; this feature owns only its enforcement (FR-016a) |
 | `gate-architecture-agnostic` | a domain or agent package references a concrete architecture style, runtime or vendor by name — the rule is **constitution VII** (004 SC-008, FR-016a) |
+| `gate-graph-confirm-capability` | an MCP tool, worker job or API route contains anything shaped like a graph confirmation/rejection path; an agent (`packages/agents`) or runner (`apps/runner`) package references the `graph:confirm` capability at all; or a command (`**/application/commands/**`) or architecture infrastructure handler exposes a confirm-shaped path without referencing the capability constant. A structural drift detector, not the real boundary — the rule is **004 FR-010, R-09** |
 | `gate-no-send` | any package outside the egress allowlist imports an outbound mail, SMS, chat or HTTP-client module. Scoped **monorepo-wide, not to the support packages** — 009's adapters live under `integrations/` by design, so a support-send adapter added there would otherwise trip nothing (009 SC-005) |
 | `lint` (never-wait) | a processor contains a sleep, a poll loop, or awaits external completion (R-02) |
 | `lint` (boundaries) | a cross-module infrastructure import, a provider SDK outside its adapter, `@prisma/client` or `process.env` outside their permitted paths (R-01) |
