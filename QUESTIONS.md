@@ -454,6 +454,39 @@ which may simply not share this machine's contention profile at all.
    001/012 phase-8 index above) — `make runner-build` stops at a local tagged image; pushing it
    anywhere is a manual, undecided step.
 
+### Second rebase (onto 51d78e8, 002-policy) — a real regression found and fixed, not the known flake
+
+Rebasing this branch onto master after 002-policy landed (which independently added its own
+`createApiModule` parameters — three policy repositories) surfaced a genuine bug the rebase itself
+introduced, distinct from the already-documented flaky Docker test above:
+
+- **`apps/api/runners.e2e.test.ts`'s `createApiModule(...)` call silently passed
+  `runnerRegistrations` into the `policyRulesets` parameter slot** — every `POST /runners/heartbeat`
+  request 500'd. Root cause: this file exists only on the 012-runner side of the rebase (002-policy
+  never touched or created it), so git carried it through both rebases with zero conflict markers —
+  nothing flagged it for a human to reconcile, even though the shared `createApiModule` signature it
+  calls had grown three new required parameters on the other side. A missing-argument call like this
+  would normally be a TypeScript error, but `apps/api/tsconfig.json`'s `include: ["src/**/*"]` does
+  not cover this file (it lives at `apps/api/runners.e2e.test.ts`, not under `src/`) — the same is
+  true of every other root-level `*.e2e.test.ts` file in this app, so none of them are type-checked
+  by `pnpm run typecheck` at all; only actually running them catches a signature drift like this one.
+  Fixed by adding the three `PrismaPolicyRulesetRepository`/`PrismaPolicyDecisionRepository`/
+  `PrismaPolicyActionRepository` imports and instances in the correct position, matching the pattern
+  every other real-Postgres e2e file in this app already uses. Verified: 11/11 tests pass afterward,
+  and a full `e2e` project run found no other file with the same gap.
+- **Separately discovered, not fixed**: `@healer/domain-policy` is imported by `apps/api/src/main.ts`
+  (and by several e2e test files) but is not declared in `apps/api/package.json`'s `dependencies` or
+  `apps/api/tsconfig.json`'s project `references` — it resolves today only via pnpm's workspace
+  hoisting, not an explicit dependency edge. Works, but is exactly the "phantom dependency" pnpm's
+  own strict-mode isolation exists to prevent; worth a real fix (add the declared dependency and
+  tsconfig reference) whenever 002-policy's own follow-up work touches this app's manifest, not
+  invented as a scope-creeping fix here.
+- **Also seen during the full `e2e` project run, confirmed as the already-known flake, not new**:
+  `apps/api/issue-close-and-views.e2e.test.ts`'s two `/audit`/`/timeline` assertions failed once
+  under the full suite's combined load, then passed cleanly in isolation both times re-run — matches
+  004's own roadmap note ("the one flaky signal was 001's own previously-known load-sensitive replay
+  test, confirmed transient by isolated retry"), not a new regression from this rebase.
+
 ### T048 landed — `make runner-diagnostics`, the last deferred phase-6 task
 
 `packages/boundary-contract/src/diagnostics.ts` (pure bundle shape + assembler),

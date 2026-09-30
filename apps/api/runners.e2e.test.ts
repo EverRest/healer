@@ -13,6 +13,11 @@ import {
   PrismaTimelineRepository,
 } from '@healer/domain-issues';
 import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer/domain-evidence';
+import {
+  PrismaPolicyActionRepository,
+  PrismaPolicyDecisionRepository,
+  PrismaPolicyRulesetRepository,
+} from '@healer/domain-policy';
 import { findStaleRunners, CURRENT_PROTOCOL_VERSION } from '@healer/boundary-contract';
 import { TenantContext, scope } from '@healer/shared';
 import { PrismaClient } from '@healer/prisma-client';
@@ -84,6 +89,9 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
       new PrismaAuditRepository(prisma),
       new PrismaTimelineRepository(prisma),
       new PrismaEvidenceGraphRepository(prisma),
+      new PrismaPolicyRulesetRepository(prisma),
+      new PrismaPolicyDecisionRepository(prisma),
+      new PrismaPolicyActionRepository(prisma),
       runnerRegistrations,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
