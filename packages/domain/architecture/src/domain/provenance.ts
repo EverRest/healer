@@ -1,11 +1,13 @@
-/** Closed provenance set (FR-005). Strength ordinals and confidence scoring are T007/R-15's job. */
-export type ProvenanceClass =
-  | 'human_authored'
-  | 'human_confirmed'
-  | 'derived_from_trace'
-  | 'derived_from_runtime'
-  | 'derived_from_code'
-  | 'derived_from_config'
-  | 'inferred_from_convention';
+import type { DependencyObservation } from '@healer/boundary-contract';
 
-export type GraphLayer = 'code' | 'runtime' | 'product';
+/**
+ * Closed provenance set (FR-005), derived from the wire schema rather than duplicated —
+ * `packages/boundary-contract` has zero workspace dependencies by design (ADR 0001, the execution
+ * boundary must not know about domain packages), so it cannot depend on this package; this package
+ * already depends on `@healer/boundary-contract`, so deriving here is what keeps the closed list to
+ * exactly one authority (AGENTS.md) instead of two hand-kept-in-sync copies. Strength ordinals and
+ * confidence scoring are T007/R-15's job.
+ */
+export type ProvenanceClass = DependencyObservation['provenance'];
+
+export type GraphLayer = DependencyObservation['layer'];

@@ -7,18 +7,18 @@ import { z } from 'zod';
  * `index.ts` — an unknown key is a validation failure, not a passthrough.
  */
 
-// Duplicated from index.ts rather than imported: this module and index.ts import each other
-// (index.ts assembles `RunnerEvidence` from these), so importing index.ts's `path`/`isoTimestamp`
-// here would be a circular import evaluated at module load time — zod schema construction runs
+// Duplicated from index.ts rather than imported: index.ts imports this module (it assembles
+// `RunnerEvidence` from these schemas), so this module importing index.ts's `path`/`isoTimestamp`
+// back would be a circular import evaluated at module load time — zod schema construction runs
 // immediately at the top level, so the imported const would still be in its temporal dead zone.
 const path = z.string().min(1);
 const isoTimestamp = z.string().datetime({ offset: true });
 
-// Mirrors packages/domain/architecture/src/domain/provenance.ts's `GraphLayer`/`ProvenanceClass`
-// (FR-004, FR-005). boundary-contract has zero workspace dependencies by design (ADR 0001 — the
-// execution boundary must not know about domain packages), so it cannot import that type; this is
-// a deliberate, hand-kept-in-sync duplicate of the same closed list, not a second list meant to
-// drift from it.
+// The authority for FR-004/FR-005's closed `GraphLayer`/`ProvenanceClass` lists — boundary-contract
+// has zero workspace dependencies by design (ADR 0001), so it cannot import them from
+// packages/domain/architecture. That package already depends on this one, so it derives its
+// `ProvenanceClass`/`GraphLayer` types from `DependencyObservation` below instead of this module
+// duplicating them — keeping the closed list to exactly one authority (AGENTS.md).
 const GRAPH_LAYERS = ['code', 'runtime', 'product'] as const;
 const PROVENANCE_CLASSES = [
   'human_authored',
