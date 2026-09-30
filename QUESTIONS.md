@@ -1409,6 +1409,54 @@ run — reconciling a spec doc against a shape that's still evolving (Phase 4-7 
 phases land, than incrementally per-batch. Whoever does that pass should start from this entry and
 from `decisionInputSchema`'s actual code, not from the yaml.
 
+## 002 — final whole-branch review: three spec deviations never formally logged
+
+Surfaced by the final review across the whole T001–T033 diff; each was mentioned in a batch
+hand-back but never got its own QUESTIONS.md entry — recording now per AGENTS.md ("if a document
+and the code disagree, say so and ask which is stale").
+
+1. **`policy_decision` isn't bound to `autonomyEpoch`.** T021 and `contracts/evaluation.md` both
+   name the epoch as one of five things a decision binds to (`workflowRunId`, `workflowState`,
+   `proposalDigest`, `rulesetVersion`, `autonomyEpoch`); `data-model.md`'s own `policy_decision`
+   field list has no epoch column. Batch 5's ruling (read the tenant's epoch, return it in the
+   result, don't persist it) stands — nothing in this run's scope (T001–T033) needs the epoch
+   pinned to the row; Phase 4 (revocation, the epoch's actual purpose) will need to add the column
+   deliberately alongside the grant/revoke mechanism.
+2. **A digest mismatch doesn't invalidate the decision** — `consumeDecision` refuses execution
+   (`DIGEST_MISMATCH`) but leaves `invalidated_reason` null and the row otherwise untouched, so a
+   second attempt with the correct digest could still succeed. `data-model.md`'s state-transition
+   diagram shows `issued ──digest mismatch──▶ invalidated` as a terminal transition. Pinned by an
+   existing e2e test (`policy-decision-repository.e2e.test.ts`), so this is the code's actual,
+   deliberate behavior, not an oversight — but the diagram says otherwise and nobody decided which
+   is right. Open: does a digest mismatch mean "wrong attempt, try again with what you actually
+   meant to execute" (current code) or "this decision is now burned, re-evaluate from scratch"
+   (the diagram)? Needs a decision before Phase 4/8/10 build real executors against this contract.
+3. **Decisions write no `audit_entry`.** FR-017 says every decision goes to the audit trail;
+   `PolicyDecisionRecorded` is the outbox event the contract names as "001 (audit link)" — nothing
+   in this run consumes that event or writes an audit row for a plain evaluate-and-bind. Ruling so
+   far (undocumented until now): a `policy_decision` row IS itself the auditable record — it's
+   append-only, immutable, and already carries actor-equivalent context (the caller, the ruleset
+   version, the trace) — a *separate* `audit_entry` would duplicate it. Worth confirming this
+   reading is actually what FR-017 means, since "written to the audit trail" could mean
+   `audit_entry` specifically, not "is itself an audit-grade record."
+
+Not elevated to "Decisions waiting on Pavlo" yet — (1) is settled (Phase 4's problem), (2) and (3)
+are real open questions but don't block T001-T033's own scope; flagging here so whoever builds
+Phase 4/8/10 sees them before assuming either reading.
+
+## 002 — forward risk for Phase 5: `cooldownBounds` has no versioning, replay may not reproduce it
+
+Batch 3 invented a `cooldownBounds` shape on `ResolvedRuleset` ahead of T054 (`action_limit`,
+Phase 5). `action_limit` as specified in `data-model.md` is a plain mutable table — no version
+column, no append-only guarantee. `check:decision-replay`/`replayDecision` (batch 7) re-run
+`evaluate()` against a decision's stored `decision_input` and historical `ruleset_version` and
+expect the same outcome forever (FR-002) — but if cooldown bounds are read live from a mutable
+`action_limit` at replay time rather than from something versioned, a decision whose outcome
+depended on a cooldown/rate-limit predicate cannot actually replay identically after
+`action_limit` changes. Recording now so whoever builds T054 designs for it (a versioned bounds
+table, or bounds embedded in the stored `decision_input` at decision time) rather than discovering
+it after replay already silently drifts.
+
 ## 002 T031 — `check:policy-coverage` joins on `audit_entry.policy_decision_id`, not `target_ref`
 
 research.md R-14 names the conceptual join key `(tenant_id, action, target_id)` and explicitly
