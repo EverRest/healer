@@ -50,11 +50,26 @@ function docker(args: string[]) {
 /** Polls instead of a fixed sleep — this machine also runs other Docker/network workloads
  *  concurrently (the environment's own caveat), and how long a DNS failure, a container's first
  *  log line, or its own exit takes varies with that load, not with this feature's own correctness. */
-function waitFor(predicate: () => boolean, timeoutMs: number, intervalMs = 250): boolean {
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Async, not `spawnSync('sleep', ...)` in a tight loop (012 T050 review, third round): the
+ * synchronous version blocked Node's event loop for the *entire* interval on every single poll —
+ * for a 120s timeout at a 200ms interval, that's up to 600 fully-blocking child-process spawns
+ * back to back, leaving vitest's own worker-to-main-process RPC no window to run in. That
+ * self-inflicted starvation, not (only) real host contention, is what an intermittent
+ * `[vitest-worker]: Timeout calling "onTaskUpdate"` alongside this exact test was actually
+ * reporting — the poll loop itself, not the container, was the thing not yielding.
+ */
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs: number,
+  intervalMs = 250,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
-    spawnSync('sleep', [String(intervalMs / 1000)]);
+    await sleep(intervalMs);
   }
   return predicate();
 }
@@ -82,12 +97,12 @@ function containerStatus(container: string): string {
  * magic-number upper bound that a real hang and mere host slowness could equally violate. `exited`
  * is the actual hang detector now; `elapsedSeconds` is diagnostic context, not a pass/fail gate.
  */
-function waitForExit(
+async function waitForExit(
   container: string,
   timeoutMs: number,
-): { readonly exited: boolean; readonly elapsedSeconds: number } {
+): Promise<{ readonly exited: boolean; readonly elapsedSeconds: number }> {
   const start = Date.now();
-  const exited = waitFor(() => containerStatus(container) !== 'running', timeoutMs, 200);
+  const exited = await waitFor(() => containerStatus(container) !== 'running', timeoutMs, 200);
   return { exited, elapsedSeconds: (Date.now() - start) / 1000 };
 }
 
@@ -115,7 +130,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
     docker(['rmi', IMAGE]);
   }, 30_000);
 
-  it('boots, resolves every module, and exits cleanly within the bounded grace period on SIGTERM', () => {
+  it('boots, resolves every module, and exits cleanly within the bounded grace period on SIGTERM', async () => {
     const run = docker([
       'run',
       '-d',
@@ -141,7 +156,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
     // assumed a near-instant DNS failure, which this machine's actual resolver did not always
     // deliver under concurrent load — a timing assumption, not a product bug).
     let logs = { stdout: '', stderr: '' };
-    const sawFailure = waitFor(() => {
+    const sawFailure = await waitFor(() => {
       logs = docker(['logs', CONTAINER]);
       return /heartbeat POST failed/.test(logs.stdout + logs.stderr);
     }, 20_000);
@@ -149,7 +164,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
 
     const sig = sendSigterm(CONTAINER);
     expect(sig.status, sig.stderr).toBe(0);
-    const { exited, elapsedSeconds } = waitForExit(CONTAINER, 20_000);
+    const { exited, elapsedSeconds } = await waitForExit(CONTAINER, 20_000);
 
     // The real hang detector: did it actually leave `running` within the bound — not a timing
     // assertion a slow-but-successful exit could equally fail (012 T050 review, second round).
@@ -194,7 +209,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
    * sidecar container solves it directly) that sleeps for `DELAY_MS` before responding, so the
    * runner's first heartbeat is still genuinely awaiting a response when SIGTERM is sent.
    */
-  it('genuinely drains an in-flight heartbeat before exiting on SIGTERM', () => {
+  it('genuinely drains an in-flight heartbeat before exiting on SIGTERM', async () => {
     const DELAY_MS = 4_000;
     const scratchDir = mkdtempSync(join(tmpdir(), 'runner-slow-server-'));
     const serverScript = join(scratchDir, 'slow-server.mjs');
@@ -235,7 +250,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
       // the sidecar is really listening, that request fails immediately instead of genuinely
       // hanging for DELAY_MS, and the next tick would not fire for another
       // RUNNER_HEARTBEAT_INTERVAL_MS, well past this test's own window.
-      const sidecarReady = waitFor(() => {
+      const sidecarReady = await waitFor(() => {
         const probe = docker([
           'run',
           '--rm',
@@ -285,7 +300,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
 
       // Let the runner's first tick actually reach the slow server and start waiting on its
       // response — genuinely in flight, not merely sent-and-still-in-the-TCP-stack.
-      spawnSync('sleep', ['1']);
+      await sleep(1_000);
 
       const sig = sendSigterm(CONTAINER_SLOW);
       expect(sig.status, sig.stderr).toBe(0);
@@ -298,7 +313,7 @@ describe('apps/runner/Dockerfile — build, run, SIGTERM drain (012 T050, FR-019
       // 90.1s once, both under different concurrent Docker load on this shared machine). `exited`
       // below is the actual hang detector now; this ceiling only needs to be far past any realistic
       // drain time, not tightly calibrated to one.
-      const { exited, elapsedSeconds } = waitForExit(CONTAINER_SLOW, 120_000);
+      const { exited, elapsedSeconds } = await waitForExit(CONTAINER_SLOW, 120_000);
 
       expect(
         exited,

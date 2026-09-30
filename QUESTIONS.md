@@ -398,6 +398,62 @@ verify:**
   contention can and did fake as "hung." No change to production code — only to what a timing-based
   e2e assertion on a shared, contended machine is actually able to prove.
 
+**Still flaky after the redesign above — open issue, not silenced.** The boolean `exited` check
+itself then failed twice more (once at the 120s poll ceiling with `exited: false`, once again after
+a further fix below), each time paired with `[vitest-worker]: Timeout calling "onTaskUpdate"` — a
+symptom of the *test runner's own* coordination channel starving, not obviously the container
+itself. Investigating that symptom found a real, separate bug: `waitFor`'s poll loop called
+`spawnSync('sleep', ...)` — synchronous, blocking Node's entire event loop for the full interval on
+every single poll (up to ~600 back-to-back blocking spawns at a 120s/200ms budget), which plausibly
+starves vitest's own RPC regardless of host load. Fixed: `waitFor`/`waitForExit` are now `async`,
+sleeping via a non-blocking `setTimeout` instead of `spawnSync`. This is a genuine, real fix — but
+re-verification failed a **fifth** time with the identical symptom, meaning `spawnSync` inside
+`docker()` itself (still used for every actual `docker inspect`/`exec` call, not just the sleep) can
+still block the event loop for however long a contended Docker daemon takes to respond, which the
+async sleep fix does not touch.
+
+**Decision (with Pavlo, 2026-09-30): stop iterating locally, push now, add real CI separately.**
+Five fix attempts across four genuinely different, defensible causes (widen bounds ×2, redesign the
+assertion from timing to a boolean, fix real event-loop starvation) each addressed something real
+without resolving the flakiness — strong evidence this is this shared, contended dev machine, not
+a logic bug in the runner or an easy test mistake. The drain mechanism itself already has
+independent proof: a fast, deterministic unit test (`apps/runner/src/main.test.ts`, no Docker,
+runs in milliseconds) exercises the same `close()` logic directly, plus multiple manual `docker
+exec`/`docker inspect` verifications earlier in this phase's work all showed correct ~2-6s exits.
+Proceeding with the rebase and push now rather than continuing to guess; a GitHub Actions workflow
+(a genuinely new pattern for this repo — needs its own ADR before or alongside it) running the full
+`make ci` on push/PR is the next piece of work, on a GitHub-hosted runner with its own Docker,
+which may simply not share this machine's contention profile at all.
+
+**Fix options for the still-open flakiness (not yet chosen, listed for when this is revisited)**:
+
+1. Make the `docker()` helper itself fully async (`execFile`-based, not `spawnSync`) everywhere in
+   this file, not just in the poll loop's sleep — addresses the actual remaining blocking-call
+   surface the event-loop fix above didn't reach.
+2. Replace polling `docker inspect` with `docker events --filter container=<id> --filter event=die`
+   — reacts to the real OS-level event instead of repeatedly asking, removing the poll loop (and
+   its blocking-call risk) entirely. More correct, larger rewrite.
+3. Wrap just this one test in vitest's per-test `retry` option — honest for "infra-flaky, not a
+   logic bug," but does not fix the root cause and could still fail if contention outlasts the
+   retry budget (this machine has shown contention lasting minutes at a time).
+4. Remove the sidecar slow-HTTP-server container from this test's critical path (simulate the delay
+   some other way) — fewer Docker operations in flight, smaller contention surface, but doesn't
+   eliminate it.
+5. Move this specific test out of `make ci`'s default path into an opt-in/manual target — the drain
+   property already has independent proof (the unit test + prior manual verification above), so
+   losing this one e2e as a default gate is a real but bounded loss, not the only proof left.
+
+## Decisions waiting on Pavlo — 012 phase 6 (index; detail in the named sections above)
+
+1. **`runner-image.e2e.test.ts`'s "genuinely drains an in-flight heartbeat" test is flaky on this
+   shared dev machine** — five fix attempts (two bound widenings, a timing-to-boolean redesign, a
+   real event-loop-starvation fix) each addressed something genuine without resolving it. Decided
+   2026-09-30: not blocking this push; five fix options are listed above, none chosen yet. Revisit
+   once real CI exists and can show whether it reproduces there too.
+2. **No registry or hosting is provisioned for the runner image** (unchanged from item 14 in the
+   001/012 phase-8 index above) — `make runner-build` stops at a local tagged image; pushing it
+   anywhere is a manual, undecided step.
+
 ### T048 landed — `make runner-diagnostics`, the last deferred phase-6 task
 
 `packages/boundary-contract/src/diagnostics.ts` (pure bundle shape + assembler),
