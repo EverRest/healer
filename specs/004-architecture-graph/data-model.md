@@ -251,3 +251,41 @@ system cannot know which sequence of calls a human considers one journey.
   a property test over generated graphs, not only by example (SC-004).
 - Every read is constrained by `tenant_id` from the authenticated context; a foreign identifier
   returns not-found (FR-024, SC-009).
+
+## T002 implementation notes (deviations from the field lists above)
+
+- **Every attr table carries `tenant_id`.** The per-table field lists above key `component_attr`,
+  `deployment_unit_attr`, `repository_attr`, `endpoint_attr`, `feature_attr` and `flow_attr` purely
+  by `node_id`. `prisma-migrations.md`'s inviolable rule ("every tenant-scoped table has
+  `tenant_id` and a leading index"), enforced continuously by `prisma/migration.e2e.test.ts`,
+  applies to these tables too — a table missing it fails `make db-check`. `tenant_id` is
+  denormalized onto all six, each with its own leading `(tenant_id)` index. **Review fix:** the
+  six FKs to `graph_node` originally referenced `graph_node(id)` alone rather than the composite
+  `(id, tenant_id)` every other child table in this migration uses — reproduced against live
+  Postgres (a `component_attr` row naming one tenant while pointing `node_id` at another tenant's
+  `graph_node` row was accepted). Fixed to `FOREIGN KEY (node_id, tenant_id) REFERENCES
+  graph_node(id, tenant_id)` on all six, which required adding `@@unique([nodeId, tenantId])` to
+  each attr model (Prisma's one-to-one relation validity rule) even though `node_id` alone is
+  already the primary key — same redundant-but-required shape as `graph_node`/`graph_edge`'s own
+  `@@unique([id, tenantId])` alongside their single-column `@id`.
+- **`discovery_source_outcome` carries `tenant_id`.** Its own field list above omits it, unlike
+  `discovery_draft`'s and `draft_item`'s, which both list `tenant_id` explicitly next to their
+  `run_id`/`draft_id` — the omission reads as an oversight rather than a decision. Added for the
+  same inviolable-rule reason as above, with a leading `(tenant_id, run_id)` index.
+- **`graph_edge` gets two interim tenant-leading indexes at T002**: `(tenant_id, from_node_id)`
+  and `(tenant_id, to_node_id)`, satisfying the same rule before `valid_from_version`/
+  `valid_to_version` exist. T008 drops both and replaces them with the version-aware composite
+  indexes this document already specifies as the traversal's real access paths.
+- **`discovery_draft`'s SC-006a columns are named here for the first time**: `proposals_count`,
+  `accepted_unchanged_count`, alongside `review_seconds`. The prose above names the concepts
+  ("the proposal and accepted-unchanged counts it is reported with") without naming columns.
+- **`proposal_rejection`'s primary key is the composite `(tenant_id, proposal_digest)`** rather
+  than a surrogate `id` — that pair is already the table's one required uniqueness and every
+  lookup is by it.
+- **`edge_provenance` has no `actor_ref` column**, matching this document's field list for that
+  table exactly — but that list also has no field at all for naming a human actor, unlike
+  `graph_node`/`graph_edge`'s explicit `actor_ref`. A `human_authored`/`human_confirmed`
+  `edge_provenance` row (if one is ever written — humans normally author `graph_node`/`graph_edge`
+  directly, not through discovery's per-observation path) would carry neither an observation nor
+  an actor. Flagged for review rather than resolved unilaterally; `observation_ref` is nullable to
+  avoid blocking on it.

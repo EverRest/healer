@@ -1514,3 +1514,374 @@ Same pass also found, live in this codebase, that `audit_entry.action` being "a 
 unregistered today. The check's `policy_action` join is `LEFT`, not `INNER`, because of this — an
 unregistered action is its own violation category, reported separately from "registered but
 uncovered," since an unregistered action's mutating-ness is unknown.
+
+## 004 T001 — `DiscoveryAdapter`/`ProvenanceClass` live in `packages/domain/architecture`, not `packages/integrations`
+
+**Decided, not deferred.** `plan.md`'s Project Structure puts adapters in `packages/integrations/*`
+implementing `DiscoveryAdapter`, but doesn't say which package owns the interface itself. Put it in
+`packages/domain/architecture/src/domain/discovery-adapter.ts` (the domain owns the port, adapters
+are the implementations — ADR 0005's shape) and had `packages/integrations` take a new `workspace:*`
+dependency on `@healer/domain-architecture` to import it. This is the first adapter package to depend
+on a domain package; no lint rule forbids it.
+
+## 004 T002/T005–T011 boundary — which guarantees T002's first migration does NOT yet enforce
+
+**Decided, not deferred.** T002 ("Prisma models... first migration") creates every table in
+data-model.md, but deliberately leaves nullable / unindexed exactly the guarantees T005/T006/T008/T009
+individually own and must prove via their own red-then-green test: `graph_node`/`graph_edge`'s
+`provenance`/`strength`/`confidence` NOT NULL and the two CHECK constraints (T006, proven by T005's
+failing test), `valid_from_version`/`valid_to_version` plus the `graph_version` table (T008), the
+partial unique index over open edge rows (T009), and `edge_provenance`'s append-only triggers (T011).
+Otherwise a later "tightening" migration would have nothing to tighten and T005/T009's failing tests
+would never have been red. See the relevant task's own commit for what it added.
+
+## 004 T003 — per-element `provenance`/`layer` on `DependencyObservation` isn't constrained to its adapter's fixed constant
+
+**Not decided, flagged for T017.** Review of T003 found that while `DiscoveryAdapter.provenance` and
+`.layer` are fixed per adapter (frozen, `as const`), the wire shape `DependencyObservation` a `collect()`
+returns has its *own* free `provenance`/`layer` fields — nothing stops an adapter's `collect()` from
+emitting an observation whose `provenance` is stronger than the adapter's own constant. Not exploited
+today (every adapter returns an empty array), and the shape itself is a placeholder — this file's own
+comment already says T017 replaces it with the boundary-contract Zod-inferred type. **When T017 builds
+the real `dependency_observation` schema**: prefer removing `provenance`/`layer` from the wire shape
+entirely and having the discovery ingest step stamp both from the emitting adapter's fixed constant
+(makes the unsafe state unrepresentable, per this repo's own pattern) over accepting the field on the
+wire and validating it matches at ingest — the latter is a check that can be forgotten at a second call
+site; the former has no second call site to forget it at.
+
+## 004 T002/T005–T011 — schema build-out: judgment calls
+
+Foundational (T002, T005–T011) is done: 5 migrations (`20261003000000`–`20261003040000`), all
+round-trip-verified (forward, `down.sql` reverse, re-apply) against a real disposable Postgres, plus
+the repo's own `prisma/migration.e2e.test.ts` "reverses every migration cleanly" test across full
+history. 48/48 new+existing tests pass, `db-check` clean, no schema/migration drift.
+
+- **Tenant scoping added beyond data-model.md's literal field lists**: all six attr tables
+  (`component_attr`, `deployment_unit_attr`, `repository_attr`, `endpoint_attr`, `feature_attr`,
+  `flow_attr`) and `discovery_source_outcome` got `tenant_id` + a leading index, though the doc keys
+  the attr tables purely by `node_id` and omits `tenant_id` from `discovery_source_outcome`'s field
+  list. **Decided, not deferred**: `.claude/rules/prisma-migrations.md`'s inviolable rule ("every
+  tenant-scoped table has `tenant_id` and a leading index") isn't optional, and the repo's own
+  `db-check` gate caught the omission live. `data-model.md` now has a "T002 implementation notes"
+  section recording this. `discovery_source_outcome`'s sibling tables (`discovery_draft`, `draft_item`)
+  already listed `tenant_id` explicitly, so the omission reads as a doc oversight, not a decision to
+  revisit.
+- **`graph_edge` had two interim plain tenant-leading indexes at T002** (`(tenant_id, from_node_id)`,
+  `(tenant_id, to_node_id)`) to satisfy `db-check` before versioning existed; T008 drops both,
+  replacing them with the version-aware composites data-model.md specifies. No action needed — this
+  is expected T002→T008 churn, not a leftover.
+- **`discovery_draft`'s SC-006a columns are named for the first time**: `proposals_count`,
+  `accepted_unchanged_count` (alongside `review_seconds`) — data-model.md names the concepts, not
+  columns. Naming decided, not escalated.
+- **`proposal_rejection`** uses composite PK `(tenant_id, proposal_digest)` rather than a surrogate
+  `id` — matches how the table is actually looked up (FR-011's dedup check), no surrogate needed.
+- **`edge_provenance` has no `actor_ref` column, so it cannot name a human for a
+  `human_authored`/`human_confirmed` row** — data-model.md's literal field list omits it, unlike
+  `graph_node`/`graph_edge` which both have `actor_ref`. **Decided, not escalated**: `edge_provenance`
+  exists to keep *discovery's* contributing observations inspectable when several sources produce the
+  same edge (FR-008) — it is not where a human confirmation or manual edit is recorded (that's
+  `graph_edge.state`/`.provenance` directly, audited via `audit_entry` per FR-025). In practice
+  `edge_provenance.provenance` will only ever hold a `derived_from_*`/`inferred_from_convention`
+  value; reusing the full `ProvenanceClass` enum on the column is for type consistency, not because a
+  human row is expected there. `observation_ref` stays nullable so this doesn't block anything.
+  Revisit if a later task actually needs to write a human-provenance `edge_provenance` row.
+- **T006's CHECK constraints apply only to `graph_node`**, not `graph_edge` — `graph_edge` has no
+  `observation_ref`/`actor_ref` columns in data-model.md's field list at all, so the two CHECKs
+  (which reference those columns) can't apply there. Only the `NOT NULL`s on
+  `provenance`/`strength`/`confidence`/`layer` apply to both tables.
+- **T011's max-maintenance mechanism**: an `AFTER INSERT` trigger on `edge_provenance` running
+  `UPDATE graph_edge SET strength = GREATEST(strength, NEW.strength), confidence =
+  GREATEST(confidence, NEW.confidence) WHERE id = NEW.edge_id AND tenant_id = NEW.tenant_id` —
+  incremental `GREATEST` against the current column, not a full `MAX()` re-aggregation over every
+  `edge_provenance` row on each insert. Correct because `edge_provenance` is insert-only, so the
+  running value is always already the max of everything inserted so far; cheaper than re-aggregating.
+- **FK policy**: composite tenant-safe FKs only on the "hard" structural relationships data-model.md
+  states explicitly (`graph_edge`→`graph_node` both ends, `edge_provenance`→`graph_edge`, attr
+  tables→`graph_node`, `discovery_draft`/`discovery_source_outcome`→`discovery_run`,
+  `draft_item`→`discovery_draft`). Left as plain scalar columns, no FK: `graph_node.discoveryRunId`,
+  `graph_node.observationRef`, `edge_provenance.observationRef`/`discoveryRunId`,
+  `draft_item.targetNodeId`/`targetEdgeId`, `drift_finding.issueId` — mirrors this repo's existing
+  convention (`Issue.componentId`, `Evidence.producedByStep` also have no FK).
+
+## Review of T002/T005–T011 — 2 findings fixed, 1 spec gap escalated, 1 noted for T040
+
+Two independent reviews (code-reviewer, silent-failure-hunter) ran real fault-injection against a live
+Postgres — reverted a guard, confirmed the test actually goes red for the right reason, restored it —
+rather than reading the code alone. Results:
+
+**Fixed** (see the commit that follows this entry):
+- The `edge_provenance` max-maintenance trigger mutated `graph_edge` rows with no
+  `valid_to_version` filter, silently rewriting **closed/historical** edge versions — reproduced: an
+  edge closed at `valid_to_version = 1` changed after a later `edge_provenance` insert, which breaks
+  FR-014/SC-005 ("a pinned query is stable"). Fixed to filter to the open row only and to recompute
+  via a real `MAX()` aggregate over `edge_provenance` rather than an incremental `GREATEST` against
+  the edge's own current value (the incremental form could be inflated by the edge's own founding
+  value if that value were ever set independently of an `edge_provenance` row).
+- The six attribute tables' FKs referenced `graph_node(id)` alone rather than the composite
+  `(id, tenant_id)` every other child table in this migration uses — reproduced: a `component_attr`
+  row with tenant B's `tenant_id` pointing at tenant A's node was accepted. Fixed by amending T002's
+  migration directly (not yet pushed/shared, so amending is allowed per `prisma-migrations.md`) to the
+  composite FK, plus the supporting unique constraint on `graph_node(id, tenant_id)`.
+- `edge_provenance` had no CHECK requiring `observation_ref` for a non-human provenance class,
+  unlike `graph_node` — added, mirroring `graph_node`'s rule.
+- Added `CHECK (confidence BETWEEN 0 AND 100)` on `graph_node`/`graph_edge` (data-model.md's own
+  field description, just not previously a CHECK) and `CHECK (valid_from_version <=
+  valid_to_version)` on both — cheap, unambiguous structural invariants.
+- `prisma/migration.e2e.test.ts`'s reversal check didn't cover the `architecture` schema at all (a
+  hardcoded schema list predating 004), and T002's `down.sql` never dropped it — both fixed; the test
+  was confirmed to go red first when `DROP SCHEMA` was missing, then green after adding it.
+- `graph-node-rename-race.e2e.test.ts`'s inline comment paraphrased 001's `transition()` investigation
+  ("SERIALIZABLE + a guarded UPDATE, either alone, measurably let both writers through") as if it were
+  established for this code — 23 trials with the guard removed (isolation still SERIALIZABLE) and 11
+  with isolation dropped (guard still present) both passed clean for this specific race shape; only
+  removing both reproduced a real lost update. The comment overclaimed what's been verified *here*.
+  Softened the comment to what's actually shown, and added repeated trials to the race test itself —
+  given 001's own history of this exact class of Postgres-serialization-conflict intermittency taking
+  150+ trials to characterize (`QUESTIONS.md` "Residual, investigated, not resolved" era), a single
+  green run is weak evidence, so the test now runs the race several times rather than once.
+
+**Noted, no fix needed now** (explicitly future work, tracked by an existing task):
+- Nothing yet enforces that a `graph_edge`'s founding `strength`/`confidence` (set at the edge's own
+  INSERT) is backed by a corresponding `edge_provenance` row — the T011 trigger only *raises* the
+  value when a provenance row arrives, it doesn't require one to exist. This becomes exploitable only
+  once a real "create graph_edge" command exists (Phase 3+, out of this batch's scope), and
+  `tasks.md`/`quickstart.md` already name the compensating continuous check (`check:edge-strength-max`,
+  task **T040** — not yet implemented). Flagging here so it isn't lost by the time T040's owner looks
+  for what it's supposed to catch.
+
+**Escalated — added to the Pavlo index below, not decided here:**
+- `graph_edge` has no `actor_ref` or `observation_ref` column at all (unlike `graph_node`, which has
+  both), so a directly human-authored or human-confirmed edge — one that doesn't arrive through
+  discovery's `edge_provenance` — has nowhere to record who asserted it or what it's based on. This
+  is tangled with a second gap: `research.md`'s R-04a says `edge_provenance` rows carry their own
+  `valid_from`/`valid_to` range and "surviving provenance is copied forward" when an edge mutates, but
+  `data-model.md`'s literal `edge_provenance` field list has no range columns, and what got built
+  matches `data-model.md` (no versioning on `edge_provenance`). Per AGENTS.md's own rule ("if a
+  document and the code disagree, say which is stale, don't pick the convenient one"), this needs a
+  call: is R-04a aspirational text `data-model.md` correctly simplified away from, or does
+  `edge_provenance` need both a version range and a way to name a human actor, with `data-model.md`
+  the one that's incomplete? Nothing currently in T001–T017's scope needs a human-authored edge with
+  no discovery observation behind it, so this doesn't block the batch — but the checkpoint's "an
+  element without provenance cannot be persisted" is only fully proven for the shapes the schema can
+  currently express, and a human-direct edge currently can't be expressed at all.
+
+## Decisions waiting on Pavlo — 004 (index; detail in the named sections above)
+
+1. **Can a human directly author or confirm a `graph_edge` with no discovery observation behind it?**
+   Today the schema has no column to record that on the edge itself, and `research.md` (R-04a) and
+   `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
+   reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this
+   path yet.
+2. ~~`dependency_observation`'s `layer`/`provenance` enums duplicated between `boundary-contract` and
+   `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
+   found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
+   instead of duplicating, since the dependency already runs that direction). No longer open.
+
+## 004 T012–T015 — judgment calls
+
+- **T012 was already satisfied** by the Foundational work: the only repository that exists,
+  `GraphNodeRepository.renameNaturalKey`, already takes `TenantScoped<{id}>`. No query/read
+  repository exists yet (correctly out of scope — that's Phase 3+). Added only the missing
+  compile-proof test (`graph-node-repository.test.ts`, mirroring `domain/issues`'s
+  `@ts-expect-error`/`expectTypeOf` pattern).
+- **T013/T014 have no consumer yet** — the read envelope and the four outbox event builders are
+  established shapes with no caller, same as 001's own precedent (`QUESTIONS.md`'s "seven of the
+  eleven contract events have no publisher yet" — normal for this repo's build order, not a gap).
+- **T015 — no capability/credential registry exists anywhere in the repo yet** (002-policy hasn't
+  built one, and it's out of bounds regardless). Decided, not escalated: built a textual structural
+  gate (`scripts/gates/graph-confirm-capability.mjs`, same shape as the existing
+  `gate-architecture-agnostic`) that scans for anything shaped like a confirm path in
+  `apps/mcp-server`/`apps/worker`/`apps/api`/`**/application/commands/**` and fails if it doesn't also
+  reference the new `GRAPH_CONFIRM_CAPABILITY` constant. Necessarily vacuous today (nothing to catch
+  yet — Phase 3 adds `ConfirmDraftItems`), proven to actually catch a fixture violation. Textual, not
+  AST-based — same honesty level as `gate-architecture-agnostic` already has, flagged as a future
+  hardening if it proves too weak once a real confirm command exists.
+- **The new gate is runnable (`pnpm run gate-graph-confirm-capability`) but deliberately not wired
+  into `make ci` or `specs/012-engineering-foundation/contracts/make-targets.md`** — that file is
+  explicitly normative and owned by 012, out of this session's scope to edit unilaterally. Whoever
+  owns 012's contract (or picks up 004's next phase) should add the one-line wiring once they've
+  looked at it.
+
+**Superseded by review** (see next entry): the gate is now wired into `make ci` and has a row in
+`specs/012-engineering-foundation/contracts/make-targets.md`, following the precedent that
+`gate-architecture-agnostic` — also 004-owned — already has one there. The caution above turned out
+to be more conservative than necessary once that precedent was checked.
+
+## Review of T012–T015 — the T015 gate was genuinely too weak, now substantially hardened
+
+Two independent reviews found the initial `gate-graph-confirm-capability` had real, reproduced
+bypasses, not just style nits — worth recording in detail since this is a security-relevant gate
+(R-09's "withheld by default" guarantee) and the failure mode (a check that *looks* like enforcement
+but isn't) is exactly what this repo's own patterns warn against.
+
+**Fixed**:
+- The pass condition was backwards for `apps/mcp-server`/`apps/worker`/`apps/api`: mentioning
+  `GRAPH_CONFIRM_CAPABILITY` passed the gate even when that mention *granted* the capability (e.g. a
+  tool declaring `requires: [GRAPH_CONFIRM_CAPABILITY]`). Now those three app roots fail on any
+  confirm-shaped match, no escape hatch; "must reference the constant" is scoped to
+  `**/application/commands/**` and `packages/domain/architecture/src/infrastructure/**` only, where
+  a real capability check is a legitimate thing to see.
+- `apps/runner/src` and `packages/agents` — exactly where the Change Agent/Verifier execute per ADR
+  0010 — weren't scanned at all. Now scanned, and `GRAPH_CONFIRM_CAPABILITY`/`'graph:confirm'` must
+  not appear there at all (that surface should never reference the capability — only a future
+  credential-issuing layer decides what a credential carries, and it isn't this).
+- The shared `scripts/lib/strip-comments.mjs` (also used by `gate-architecture-agnostic`,
+  `gate-isolation`, `gate-coverage-completeness`) did a naive `.replace(/\/\/.*$/gm, '')` — reproduced:
+  a line building a `"https://..."` string and registering a confirm-shaped tool in the same statement
+  made the tool registration invisible, with zero capability check, and this is common style, not a
+  contrived edge case. Rewritten on `ts.createScanner` (TypeScript's already a dependency, nothing new
+  added). **While rewriting it, a second, independent bug was found and fixed in the same pass**: the
+  scanner didn't know how to resume a template literal after a `${...}` interpolation closes, which
+  silently corrupted every token afterward — this actually broke `gate-architecture-agnostic` against
+  a real file (`packages/domain/evidence/src/domain/evidence-required.ts`, a "Prisma" mention inside a
+  doc comment after an earlier interpolated template) the moment the rewrite first landed. Fixed by
+  tracking template brace-depth and calling `reScanTemplateToken()`. All four affected gates re-verified
+  passing after both fixes.
+- Pattern was simultaneously too loose (missed `RejectDraftItems`/`approveDraftItems`/`acceptDraft` —
+  the spec's own language uses "accepted") and too narrow (only scanned `application/commands/**`,
+  missed `infrastructure/**`) and prone to false positives (would have flagged this same batch's own
+  `confirmationState` field). Fixed: word-bounded `reject|approve|accept` added, `confirmationState`
+  masked out, `infrastructure/**` now scanned, every issue reports `path:line` matching
+  `gate-architecture-agnostic`'s convention.
+- Not wired into the Makefile (`.PHONY`/target/`ci:` recipe) despite having its own CLI entry point —
+  fixed, matching `gate-architecture-agnostic`'s exact shape, plus the make-targets.md row noted above.
+
+**Accepted, not fixed — a documented, honest limit, not a gap someone missed**: a factory/loop tool
+registration pattern with a dynamically-constructed name (`'graph_' + 'confirm' + '_draft'`, or
+`[...].join('_')`) defeats the gate entirely — no glob or regex catches it, short of real static
+analysis this gate deliberately isn't. The gate's own header comment now says this plainly, and a test
+documents the gap as `KNOWN GAP` rather than pretending to catch it. **This is why the gate is framed
+as a best-effort structural drift detector, not the actual security boundary** — the real guarantee
+R-09 needs (no agent/automation credential ever carries `graph:confirm`) has to come from whatever
+eventually mints those credentials (002-policy's territory, not built yet) simply never including it
+in a closed capability list, the same "closed list, one authority" principle this repo already applies
+elsewhere. Nothing to escalate here — this is an engineering limitation everyone would agree on, not
+a decision.
+
+**Also fixed**: `ReadEnvelope.confirmationState` was a free parameter that could contradict its own
+`coverage` counts and, being a plain interface, was constructible without going through
+`toReadEnvelope`'s checks at all — now derived inside the constructor from `coverage` plus a
+`discovered: boolean` input, making the contradiction unrepresentable rather than merely unchecked.
+`graph-event-publisher.ts` (T014's four `publishX` wrappers) was deleted — no precedent anywhere in
+the repo (every existing emitter calls `enqueue(...)` directly at the mutation site) and zero real
+callers. `GraphElementStale`'s payload now carries `nodeId` (was only on the envelope's `subjectId`,
+so `payload.nodeId` would have been `undefined` against a consumer reading the contract literally).
+`GraphVersionPublishedPayload` is now a discriminated union on `mintedBy`: `'confirmation'`/
+`'drift_resolution'` require `actorRef` (FR-010), the other two leave it optional.
+
+**Deferred, noted, not fixed** (explicitly lower-value / expands blast radius for little gain):
+`changedElementCounts: Record<string, number>` stays loosely typed until a real consumer (006/008/011)
+exists to type it against; `requireCorrelationId()` remains duplicated a third time across
+`domain/architecture`/`domain/evidence`/`domain/issues` — pre-existing pattern, not introduced by this
+diff, and consolidating it means touching two already-shipped 001 packages for a nit.
+
+## 004 T016/T017 — 012 had already pre-built the four discovery shapes, with the wrong fields
+
+**Cross-session finding, worth session B and Pavlo both seeing.** `packages/boundary-contract/src/index.ts`
+already had placeholder Zod schemas for all four shapes (`component_candidate`,
+`deployment_unit_candidate`, `dependency_observation`, `repository_ref`), and
+`contracts/runner-protocol.md` already had their table rows — built during 012 T040, presumably
+because 012's own "every fact family gets its own row" rule (C-20) meant 012 added rows for shapes it
+knew 004 would need before 004 existed to specify them precisely. Their fields were generic
+approximations (`identifier`/`type`/`source`, a `Record<string,string>` for characteristics, no
+`adapterKey`/`adapterVersion`, a single `window: string` instead of split timestamps) that didn't match
+`graph-contract.md` §3 at all. Confirmed nothing else in the repo depended on the old field names
+(only referenced inside `boundary-contract` itself, no dedicated test pinning them) before correcting
+them to the real spec — safe, pre-release, not a breaking change to anything running.
+
+Split into a new file, `packages/boundary-contract/src/discovery-shapes.ts` — not by choice:
+`index.ts` was already 445 lines (over the 400-line limit) before this task touched it. Verified
+disjoint from session B's concurrent edits to the same file (their `DirectiveEnvelope` block and
+`runner-registration.js` export sit in different line ranges) by diffing their branch's exact tip
+twice, once before and once after committing.
+
+**One judgment call worth your review, flagged by the implementing agent as the one it'd most want
+overridden if you disagree**: `dependency_observation`'s `layer`/`provenance` fields are `z.enum([...])`
+with values *copied* from `packages/domain/architecture/src/domain/provenance.ts`'s `GraphLayer`/
+`ProvenanceClass`, not imported from there — `packages/boundary-contract` has zero workspace
+dependencies by design (the execution boundary can't know about domain packages; the dependency runs
+the other way), so it can't import the domain's type. The alternative was `z.string()`, which would
+have silently widened these fields from a narrow closed set to any string the moment
+`discovery-adapter.ts` started importing the boundary-contract-inferred type instead of its own
+placeholder. Chose the enum-with-duplication over the string-with-silent-widening, on the reasoning
+that a closed list copied in two places (each individually still closed) is safer than one place that
+stopped being closed at all — but this is exactly the "a closed list has exactly one authority" rule's
+target case, and there's no cheap way to add a same-sync check (a test in `boundary-contract` importing
+from `domain-architecture` would itself be the package-direction cycle the split exists to avoid). If a
+future task adds a third copy of this list, that's the sign to solve it for real rather than duplicate
+again.
+
+Also not done, left as an accurately-updated comment rather than a silent gap: the three integration
+adapters' `collect()` still can't cross-check that a `dependency_observation`'s declared
+`layer`/`provenance` doesn't exceed the emitting adapter's own fixed constant — there's no ingestion
+code path to attach that check to yet (Phase 3/US1 isn't built, `collect()` only returns empty arrays).
+Comments updated to attribute this to Phase 3 rather than pointing at T017, which is now done.
+
+## Review of T016/T017 — the enum duplication resolved, everything else checked out clean
+
+Both reviews mutation-tested the actual guarantees rather than reading the diff (removed `.strict()`
+and confirmed T016's test goes red; stripped required fields from each of the four T017 sample
+payloads one at a time and confirmed each failure) and independently converged on the same single
+real finding: the `layer`/`provenance` duplication flagged as a judgment call above had a real fix,
+not just a documented tradeoff. `packages/domain/architecture` already depends on
+`@healer/boundary-contract` (the dependency direction I'd initially assumed only ran the other way
+when weighing the tradeoff) — so `ProvenanceClass`/`GraphLayer` now derive from
+`DependencyObservation['provenance']`/`['layer']` instead of being hand-copied, closing the gap to
+exactly one authority. Fixed directly (small, well-specified, no need for another agent round-trip);
+also fixed a wrong comment claiming a circular import that doesn't exist (only `index.ts` imports
+`discovery-shapes.ts`, never the reverse).
+
+**Noted, not fixed** (both reviews agree these are fine to leave):
+- Field-by-field accuracy, `.strict()` closure, the type re-exports into `discovery-adapter.ts`, and
+  the `runner-protocol.md` row updates were all independently verified correct by both reviews — no
+  further changes needed there.
+- The four types now carry a required `kind: '<shape>'` literal discriminant (needed because they're
+  `z.infer` members of `RunnerEvidence`'s discriminated union) that the old placeholder interfaces
+  didn't have — couples `DiscoveryFacts` (a domain-internal shape) to the wire-evidence tag. Not a bug
+  today (nothing constructs these objects yet, every adapter returns `EMPTY_FACTS`), but the Phase 3
+  implementer building real collection will need to stamp `kind` even before serializing as evidence —
+  flagged so it isn't a surprise, not something to pre-fix against an interface nobody's implemented
+  yet.
+- No protocol version bump for what is, in the abstract, a breaking wire-shape rename — correctly
+  harmless since nothing emits these shapes for real yet (every `collect()` returns empty arrays), so
+  bumping now would be premature.
+- graph-contract.md §3 itself says two things that pull against each other (an adapter's provenance is
+  fixed "with no field to say otherwise" vs. the same section's own table putting a free `provenance`
+  field on every `dependency_observation`) — already tracked above as the reason the three adapters'
+  comments defer the adapter-vs-observation cross-check to Phase 3. Not new, not re-litigated here.
+
+## `make ci` — one downstream break, fixed
+
+Full `make ci` on the finished T001-T017 batch found two things:
+- 11 files needed `prettier --write` (none of eslint/typecheck/the gates catch formatting — a
+  separate check). Trivial, fixed; one of prettier's own reflows moved a `@ts-expect-error` off the
+  line it was suppressing in `read-envelope.test.ts` (TS2578/TS2345) — fixed by pulling the object
+  literal into a local `const` so the flagged call stays on one line.
+- `packages/domain/evidence/src/application/commands/record-evidence.test.ts` (owned by **001**, not
+  004) had its own FR-007a test exercising the four discovery shapes with the *old* placeholder field
+  names T016/T017 just corrected. Updated to the real fields (`naturalKey`/`componentType`/etc.) —
+  the only file outside 004's own packages this batch had to touch, and only because it tested a
+  shape 004 owns.
+
+The full `make ci` run also found two failures in `issue-deletion.e2e.test.ts` (001, T053):
+- A test timed out at exactly 120000ms under the full suite's load. Re-ran the whole file alone —
+  all 43 tests passed, that one in 6.1s. Contention, not a regression (matches 001's own documented
+  history of this exact class of false failure under full-suite parallelism, and the Docker
+  contention session A/B flagged earlier in this run).
+- A real, deterministic failure: `architecture.drift_finding.issue_id` isn't in 001's
+  `ISSUE_ID_COLUMNS` completeness gate (`prisma-issue-deletion.ts`) — its own doc comment says
+  exactly this happens for "a feature that adds a table with an `issue_id`" and names 006/010 as the
+  expected future cases; 004 is now one too. **Decided, not escalated**: added the column to the list
+  and a `DELETE FROM architecture.drift_finding` to the cascade, alongside `evidence`/`issue_event`
+  (content about the issue) rather than nulled like `agent_run.issue_id` (an independent spend
+  record) — R-14 says a drift finding exists only to raise the issue for adjudication, so it has no
+  life apart from it. This is the one place this batch touched a fully-shipped 001 file, and only
+  because 001's own gate is designed to require exactly this.
+
+A third `make ci` run (after the drift_finding fix) passed clean except for 001's own 12 000-signal
+replay test (`ingest-signal.e2e.test.ts`, already flagged in the Pavlo index above, item 9, as
+load-sensitive before 004 touched anything) — timed out at 322s standalone (found two stale leaked
+Docker containers, 7h/30h old, likely contributing background load; left them alone, not mine to
+clean up blind). Retried standalone once more: 59.6s total, 43.7s for the heavy test itself — matches
+001's own documented "~55s alone" baseline almost exactly. Confirmed transient, not a regression —
+every other test in the full suite, including everything 004 added, passed both full runs.

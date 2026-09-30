@@ -7,8 +7,8 @@
 # failure aborts immediately regardless of `-j` — prerequisite order is not guaranteed under
 # parallel make, but a single recipe's command lines always run in sequence.
 
-.PHONY: help bootstrap ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
-	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-no-send \
+.PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
+	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
 	gate-coverage-completeness
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
@@ -23,6 +23,9 @@ bootstrap: ## Install, start Postgres + Redis, migrate, seed — one command, no
 	docker compose -f docker/docker-compose.yml up -d --wait
 	pnpm exec prisma migrate deploy --schema prisma/schema.prisma
 	pnpm run db-seed
+
+graph-fixtures: ## Load the monolith, microservice and serverless architecture fixtures (004 SC-008)
+	pnpm run graph-fixtures
 
 ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) secret-scan
@@ -41,6 +44,7 @@ ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) gate-undo
 	$(MAKE) gate-evidence
 	$(MAKE) gate-architecture-agnostic
+	$(MAKE) gate-graph-confirm-capability
 	$(MAKE) gate-no-send
 
 secret-scan: ## No secret material and no committed environment file (FR-008, FR-042)
@@ -90,6 +94,9 @@ gate-evidence: ## No persisted conclusion type has a nullable evidence reference
 
 gate-architecture-agnostic: ## No domain/agent package names a customer architecture style (004 SC-008)
 	pnpm run gate-architecture-agnostic
+
+gate-graph-confirm-capability: ## No MCP tool/job/route exposes graph confirm; no agent/runner carries the capability (004 FR-010)
+	pnpm run gate-graph-confirm-capability
 
 gate-no-send: ## No package outside the egress allowlist imports an outbound mail/SMS/chat module (009 SC-005)
 	pnpm run gate-no-send

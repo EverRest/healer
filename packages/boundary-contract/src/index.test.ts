@@ -24,6 +24,22 @@ describe('RunnerEvidence — the closed evidence shape set (012 T040, R-04)', ()
     expect(() => RunnerEvidence.parse({ kind: 'raw_log_body', text: 'anything' })).toThrow();
   });
 
+  it('rejects a free-form field added to a discovery shape (T016) — the schema set stays closed', () => {
+    expect(() =>
+      RunnerEvidence.parse({
+        kind: 'component_candidate',
+        naturalKey: 'svc:api',
+        name: 'api',
+        componentType: 'service',
+        characteristics: [],
+        sourcePaths: ['api/'],
+        adapterKey: 'gitlab',
+        adapterVersion: '0.1.0',
+        notes: 'anything',
+      }),
+    ).toThrow();
+  });
+
   it('rejects a tool_output_summary field value that smuggles a raw log body under a plausible key', () => {
     expect(() =>
       RunnerEvidence.parse({
@@ -82,26 +98,42 @@ describe('RunnerEvidence — the closed evidence shape set (012 T040, R-04)', ()
       { kind: 'collection_gap', what: 'log body', why: 'unredactable', withheldByRedaction: true },
       {
         kind: 'component_candidate',
-        identifier: 'c1',
-        type: 'service',
-        characteristics: {},
-        source: 'discovery',
+        naturalKey: 'svc:api',
+        name: 'api',
+        componentType: 'service',
+        characteristics: ['stateful', 'public_contract'],
+        ownerRef: 'team-platform',
+        sourcePaths: ['api/'],
+        adapterKey: 'gitlab',
+        adapterVersion: '0.1.0',
       },
-      { kind: 'deployment_unit_candidate', identifier: 'd1', version: '1', componentRefs: ['c1'] },
+      {
+        kind: 'deployment_unit_candidate',
+        naturalKey: 'deploy:api-prod',
+        environment: 'production',
+        runtimeKind: 'kubernetes',
+        runtimeRef: 'deployment/api',
+        currentVersion: '1.2.3',
+        lastDeployedAt: '2026-01-01T00:00:00Z',
+      },
       {
         kind: 'dependency_observation',
-        from: 'a',
-        to: 'b',
-        edgeKind: 'calls',
-        provenance: 'trace',
+        fromNaturalKey: 'svc:api',
+        toNaturalKey: 'svc:billing',
+        edgeType: 'calls',
+        layer: 'runtime',
+        provenance: 'derived_from_trace',
         observationCount: 5,
-        window: '1h',
+        firstObservedAt: '2026-01-01T00:00:00Z',
+        lastObservedAt: '2026-01-02T00:00:00Z',
+        windowSeconds: 3600,
       },
       {
         kind: 'repository_ref',
-        repositoryId: 'r1',
+        projectRef: 'group/api',
         defaultBranch: 'main',
-        componentMapping: ['c1'],
+        headSha: 'abc123',
+        componentNaturalKeys: ['svc:api'],
       },
       {
         kind: 'pull_request_ref',

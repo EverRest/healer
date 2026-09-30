@@ -119,10 +119,41 @@ did not build — nothing schedules the sweep or retention, a merged issue's lat
 issue, audit action keys wait on 002 — is indexed at the end of `QUESTIONS.md`. `make ci`: 408 unit
 + 332 e2e tests, all gates.
 
-Next: **002 policy-and-autonomy** (phases 1–3 first: the closed input record, the `DENY`-seeded
-lattice, the pure evaluator, then US1) and, in parallel, **012 phase 6's deferred runner tasks**
-(T042, T045, T048–T051), which 001's repository/controller pattern has now unblocked, as have T080
-and the persistence half of T059/T061/T070. 012 phase 13
+**004 architecture-graph phases 1–2 landed 2026-09-30** (VERSION 0.45.0): the architecture graph's
+foundation, T001–T017 of the full spec. `Component`/`DeploymentUnit`/`Repository` over one
+`graph_node`/`graph_edge` pair, provenance and versioning enforced by database constraints and a
+partial unique index (not only by types), `edge_provenance` append-only with a true `MAX()`
+maintaining the edge's denormalised strength/confidence, the `gitlab`/`kubernetes`/`otel`
+`DiscoveryAdapter` skeletons, and the four discovery boundary shapes corrected in
+`packages/boundary-contract` (012 T040 had pre-built placeholder versions with different fields).
+Built as five reviewed batches, each with two independent reviewers before merge; review caught and
+fixed a trigger that would have silently rewritten closed/historical graph versions, a tenant-blind
+FK on all six attribute tables, and several concrete bypasses in the `graph:confirm` capability
+gate before it actually held. `make ci` green (the one flaky signal was 001's own previously-known
+load-sensitive replay test, confirmed transient by isolated retry). Phase 3 (US1, real discovery
+collection) not started.
+
+**002 policy-and-autonomy phases 1–3 landed 2026-09-30** (VERSION 0.46.0): the policy engine's
+foundation and US1, T001–T033 of the full spec — the gate every writing feature (008, 010) must
+call before it may mutate anything. The pure evaluator (closed `DecisionInput`, the `DENY`-seeded
+lattice, the closed predicate vocabulary, `ACTION_CEILING` with no configuration input),
+`PublishRuleset`/`EvaluateAndBind`/`ExplainDecision` as the writing and read-only callers of one
+shared evaluation path, and the continuous reconciliation checks (`check:policy-coverage`,
+`check:decision-replay`). Built as nine reviewed batches, each with two independent reviewers
+before merge — including one CRITICAL fix inside a single batch (the autonomy ceiling's clamp
+never firing for the ordinary no-grant-yet state) and, after all 33 tasks individually passed
+review, a whole-branch pass that found two further CRITICAL bugs invisible to any single task's
+review: consumption never checked a decision's outcome was actually `allow`, and `actionClass` was
+caller-supplied and never checked against the action registry, undermining the un-exceedable
+ceiling at its root. Both fixed and re-reviewed clean, along with a reproduced replay crash and the
+coverage check's own false positive against its own writes. Autonomy grants, approvals and budgets
+(phases 4–7) don't exist yet; scoped accordingly, extension points recorded in `QUESTIONS.md`
+rather than stubbed or silently assumed closed.
+
+Next: **002 phases 4–7** (autonomy grants, reversible-action governance, budgets, approvals) and,
+in parallel, **012 phase 6's deferred runner tasks** (T042, T045, T048–T051), which 001's
+repository/controller pattern has now unblocked, as have T080 and the persistence half of
+T059/T061/T070. 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
 (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub
 interaction and can start on request. Stage 0 S0-1 still blocks realistic sizing of v1 and does not

@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  componentCandidate,
+  deploymentUnitCandidate,
+  dependencyObservation,
+  repositoryRef,
+} from './discovery-shapes.js';
 
 /**
  * The closed evidence shape set that may cross the control/execution boundary (012 T040, R-04,
@@ -117,46 +123,6 @@ const collectionGap = z
     what: z.string(),
     why: z.string(),
     withheldByRedaction: z.boolean(),
-  })
-  .strict();
-
-const componentCandidate = z
-  .object({
-    kind: z.literal('component_candidate'),
-    identifier: z.string(),
-    type: z.string(),
-    characteristics: z.record(z.string(), z.string()),
-    source: z.string(),
-  })
-  .strict();
-
-const deploymentUnitCandidate = z
-  .object({
-    kind: z.literal('deployment_unit_candidate'),
-    identifier: z.string(),
-    version: z.string(),
-    componentRefs: z.array(z.string()),
-  })
-  .strict();
-
-const dependencyObservation = z
-  .object({
-    kind: z.literal('dependency_observation'),
-    from: z.string(),
-    to: z.string(),
-    edgeKind: z.string(),
-    provenance: z.string(),
-    observationCount: z.number().int().nonnegative(),
-    window: z.string(),
-  })
-  .strict();
-
-const repositoryRef = z
-  .object({
-    kind: z.literal('repository_ref'),
-    repositoryId: z.string(),
-    defaultBranch: z.string(),
-    componentMapping: z.array(z.string()),
   })
   .strict();
 
@@ -443,3 +409,4 @@ export * from './outbound-buffer.js';
 export * from './redaction.js';
 export * from './tool-call-digest.js';
 export * from './byo-fallback-check.js';
+export * from './discovery-shapes.js';

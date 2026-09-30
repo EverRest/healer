@@ -200,12 +200,29 @@ describe('migrations', () => {
     for (const name of [...names].reverse()) {
       await applySqlFile(pg, migrationSqlPath(name, 'down.sql'));
     }
+    // Review finding (004): this list was hardcoded to the schemas 001/012 introduced and never
+    // grew when 004 added "architecture" — adding it here closes that specific blind spot. NOT
+    // widened to "every non-system schema" — most of the schemas below (all but "events", per
+    // `20260927030000_outbox`'s own down.sql) never drop themselves either, a pre-existing gap in
+    // migrations this feature does not own and has no authority to amend.
     const remaining = await query(
       pg,
       `select coalesce(string_agg(c.relname, ','), '') from pg_class c
        join pg_namespace n on n.oid = c.relnamespace
-       where c.relkind = 'r' and n.nspname in ('workflow','prompt','tenant','runner','agent')`,
+       where c.relkind = 'r' and n.nspname in ('workflow','prompt','tenant','runner','agent','architecture')`,
     );
     expect(remaining).toBe('');
+
+    // Review finding (004): the table-count check above cannot, by construction, ever catch a
+    // `down.sql` that drops every table but forgets `DROP SCHEMA` — an empty, undropped schema
+    // has zero tables in it, so the query above sees nothing wrong either way. "architecture" is
+    // the one schema this feature owns end-to-end and is the one whose down.sql we can promise
+    // drops its own schema (matching "events", the one other schema in this repo that does) —
+    // asserted directly against pg_namespace, not by counting tables.
+    const architectureSchemaStillExists = await query(
+      pg,
+      `select count(*) from pg_namespace where nspname = 'architecture'`,
+    );
+    expect(architectureSchemaStillExists).toBe('0');
   });
 });

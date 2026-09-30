@@ -3,3 +3,4 @@
 // stably-named workspace package instead of a `link:` path to a build artifact.
 export * from '@healer/prisma-generated';
 export * from './privileged-write.js';
+export * from './concurrency.js';
