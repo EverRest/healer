@@ -4,18 +4,44 @@
 // "No agent credential carries `graph:confirm`; no MCP tool exposes confirmation"
 // (graph-contract.md §5) is a fact about today's repository, not an enforcement mechanism — no
 // capability or credential registry exists anywhere in this codebase yet (002-policy's to build,
-// out of this feature's scope). Until one does, the only guard available is structural: scan every
-// place a confirm path for the graph could be exposed — MCP tool registrations, application
-// commands, job handlers — and fail if one appears without referencing
-// `GRAPH_CONFIRM_CAPABILITY` (`packages/domain/architecture/src/domain/capabilities.ts`).
+// out of this feature's scope). This gate is a **best-effort structural drift detector**, not the
+// real security boundary: the real enforcement is that whatever eventually mints an agent or
+// automation credential simply never puts `'graph:confirm'` in its capability list. This scan
+// exists to notice, before that code is built, if a confirm path shows up somewhere it shouldn't
+// have been able to reach in the first place — and to keep noticing afterwards.
 //
-// Necessarily a mostly-vacuous check today: `ConfirmDraftItems` is Phase 3 work (004 T026) and
-// nothing in this scan set currently mentions graph confirmation at all. The value is what it
-// catches the day Phase 3 adds one — this is the regression guard, not a compliance report.
+// Three different rules for three different places, because "exposes a confirm path" means
+// something different depending on who is exposing it:
 //
-// Textual, like `gate-architecture-agnostic`: it cannot see whether a referenced capability is
-// actually *checked* before the handler runs, only whether the constant is mentioned in the same
-// file. A stronger (AST/call-graph) version is future work if this proves too weak in practice.
+//  - `apps/mcp-server/src`, `apps/worker/src`, `apps/api/src`: **nothing here may look like a graph
+//    confirmation surface at all, yet** — no escape hatch. Referencing `GRAPH_CONFIRM_CAPABILITY`
+//    here would not be a guard, it would be the capability *reaching* a tool, job or endpoint;
+//    R-09 says no MCP tool exposes confirmation, full stop, and that is a fact about *today's*
+//    repository, not something a mention of the constant can excuse.
+//  - `apps/runner/src`, `packages/agents`: the Change Agent and Verifier execute here (ADR 0010).
+//    This capability must never be referenced here at all, confirm-shaped surface or not — deciding
+//    what a credential carries is the (not-yet-built) credential-issuing code's job, never the
+//    agent's own.
+//  - `packages/**/application/commands/**` and `packages/domain/architecture/src/infrastructure/**`:
+//    a confirm-shaped command handler is expected eventually (`ConfirmDraftItems`, Phase 3) —
+//    legitimate once it checks `GRAPH_CONFIRM_CAPABILITY` before proceeding. A match with no such
+//    reference is the actual regression this rule exists to catch.
+//
+// Necessarily a mostly-vacuous check today: nothing in any of these places currently mentions graph
+// confirmation. The value is what it catches the day one of Phase 3's commands lands without the
+// capability check, or a tool/agent references the capability where it must not.
+//
+// Known, accepted limits of a textual scan (no attempt is made to chase these further — doing so
+// properly needs real static analysis, which this is not):
+//  - dynamic name construction (`'graph_' + 'confirm' + '_draft'`, `.join('_')`, a template built
+//    from parts) will not be recognised as the pattern it assembles into;
+//  - a tool/command registered through a factory or a loop (`for (const op of ['confirm', ...])`)
+//    is invisible — there is no literal "confirm" token in the source at all;
+//  - these are exactly the shapes a determined bypass would use, and no regex will close them.
+//
+// Comments are stripped with the same tokenizer-based `stripComments` `gate-architecture-agnostic`
+// and `gate-isolation` use (`scripts/lib/strip-comments.mjs`) — string- and template-literal-aware,
+// so an ordinary URL string earlier on the same line cannot hide a real match from this scan.
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,25 +50,49 @@ import { stripComments } from '../lib/strip-comments.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
-// Every place a confirm path could be wired up today (FR-010's own words: "no MCP tool, in-process
-// command interface or job handler"). `apps/api/src` is included too: a controller dispatching a
-// command is as much an exposure as the command itself.
-const APP_SCAN_ROOTS = ['apps/mcp-server/src', 'apps/worker/src', 'apps/api/src'];
+// No escape hatch: any confirm-shaped match here is a violation regardless of what else the file
+// says (see file header).
+const STRICT_SCAN_ROOTS = ['apps/mcp-server/src', 'apps/worker/src', 'apps/api/src'];
 
-// Application commands live inside each domain package at `application/commands/`; scanning all of
-// `packages` and filtering to this path segment (rather than listing every package by name) is what
-// keeps this check honest as new domain packages are added.
+// The capability constant/string must never appear here at all (see file header).
+const AGENT_SCAN_ROOTS = ['apps/runner/src', 'packages/agents'];
+
+// Confirm-shaped matches here are legitimate once they reference the capability constant.
 const COMMANDS_DIR_PATTERN = /(^|\/)application\/commands\//;
-
-// Catches `ConfirmDraftItems`, `confirmDraftItem`, `confirm-draft`, an MCP tool id like
-// `graph_confirm` or `graph.confirm`, and the capability string `graph:confirm` used as something
-// granted rather than required — any shape of "confirm" paired with "graph" or "draft".
-const CONFIRM_PATTERN =
-  /confirm[a-z_-]*draft|draft[a-z_-]*confirm|graph[a-z_.:-]*confirm|confirm[a-z_.:-]*graph/i;
+const ARCHITECTURE_INFRA_DIR = 'packages/domain/architecture/src/infrastructure';
 
 const CAPABILITY_REFERENCE = 'GRAPH_CONFIRM_CAPABILITY';
+// `graph:confirm` written as a literal string, any quote style — the shape a hand-rolled credential
+// or tool declaration would use instead of importing the constant.
+const CAPABILITY_LITERAL_PATTERN = /['"`]graph:confirm['"`]/gi;
 
-/* v8 ignore start -- CLI wiring (real fs walk); findUncappedConfirmExposures below is unit tested */
+// `confirm`/`reject`/`approve`/`accept` paired with `draft`/`graph`, in either order, allowing at
+// most one separator character (`_-.:`) or none (a camelCase transition needs none: `confirmDraft`).
+// Word-bounded so this cannot match a substring of an unrelated longer identifier.
+const ACTION = '(?:confirm|reject|approve|accept)';
+const SUBJECT = '(?:draft|graph)';
+const SEP = '[_.:-]?';
+const CONFIRM_PATTERN_SOURCE = `\\b${ACTION}${SEP}${SUBJECT}\\w*|\\b${SUBJECT}${SEP}${ACTION}\\w*`;
+function newConfirmPattern() {
+  return new RegExp(CONFIRM_PATTERN_SOURCE, 'gi');
+}
+
+// The read envelope's own `confirmationState` field (004 T013) is not a confirmation path — mask it
+// out before matching so it can never be confused for one, independently of how the pattern above
+// is worded (docs/patterns.md: prefer unrepresentable, but a mask is the honest fallback for a
+// textual scan). `graph.confirmationState` / `graphConfirmationState` are masked too.
+const EXCLUDED_IDENTIFIER_PATTERN = /\b(?:graph[_.:-]?)?confirmationState\b/gi;
+function maskExcludedIdentifiers(text) {
+  return text.replace(EXCLUDED_IDENTIFIER_PATTERN, (m) => ' '.repeat(m.length));
+}
+
+function lineOf(text, index) {
+  let line = 1;
+  for (let i = 0; i < index; i += 1) if (text[i] === '\n') line += 1;
+  return line;
+}
+
+/* v8 ignore start -- CLI wiring (real fs walk); the pure functions below are unit tested */
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
@@ -56,43 +106,117 @@ function* walk(dir) {
   }
 }
 
-export function collectConfirmSurfaceFiles() {
-  const files = [];
-  for (const root of APP_SCAN_ROOTS) {
-    const abs = join(REPO_ROOT, root);
-    if (!existsSync(abs)) continue;
-    files.push(...walk(abs));
-  }
-  const packagesAbs = join(REPO_ROOT, 'packages');
-  for (const path of walk(packagesAbs)) {
-    if (COMMANDS_DIR_PATTERN.test(relative(REPO_ROOT, path))) files.push(path);
-  }
-  return files.map((path) => ({
+function toFileEntries(paths) {
+  return paths.map((path) => ({
     path: relative(REPO_ROOT, path),
     content: readFileSync(path, 'utf8'),
   }));
 }
+
+function collectFromRoots(roots) {
+  const files = [];
+  for (const root of roots) {
+    const abs = join(REPO_ROOT, root);
+    if (!existsSync(abs)) continue;
+    files.push(...walk(abs));
+  }
+  return toFileEntries(files);
+}
+
+export function collectStrictSurfaceFiles() {
+  return collectFromRoots(STRICT_SCAN_ROOTS);
+}
+
+export function collectAgentSurfaceFiles() {
+  return collectFromRoots(AGENT_SCAN_ROOTS);
+}
+
+export function collectCommandSurfaceFiles() {
+  const packagesAbs = join(REPO_ROOT, 'packages');
+  if (!existsSync(packagesAbs)) return [];
+  const files = [...walk(packagesAbs)].filter((path) => {
+    const rel = relative(REPO_ROOT, path);
+    return COMMANDS_DIR_PATTERN.test(rel) || rel.startsWith(`${ARCHITECTURE_INFRA_DIR}/`);
+  });
+  return toFileEntries(files);
+}
 /* v8 ignore stop */
 
-/** @param {{ path: string, content: string }[]} files */
-export function findUncappedConfirmExposures(files) {
+/**
+ * `apps/mcp-server/src`, `apps/worker/src`, `apps/api/src` (004 T015, R-09): any confirm-shaped
+ * match is a violation, with no way for the file to excuse it — see file header.
+ * @param {{ path: string, content: string }[]} files
+ */
+export function findStrictConfirmExposures(files) {
   const issues = [];
   for (const { path, content } of files) {
-    const stripped = stripComments(content);
-    if (!CONFIRM_PATTERN.test(stripped)) continue;
-    if (!stripped.includes(CAPABILITY_REFERENCE)) {
+    const stripped = maskExcludedIdentifiers(stripComments(content));
+    for (const match of stripped.matchAll(newConfirmPattern())) {
       issues.push(
-        `${path}: exposes a graph confirmation path without referencing ${CAPABILITY_REFERENCE} (FR-010, R-09)`,
+        `${path}:${lineOf(stripped, match.index)}: exposes a graph confirmation-shaped surface ` +
+          `("${match[0]}") — nothing here may expose one yet (FR-010, R-09)`,
       );
     }
   }
   return issues;
 }
 
-/* v8 ignore start -- CLI wiring; findUncappedConfirmExposures above is unit tested */
+/**
+ * `apps/runner/src`, `packages/agents` (004 T015, R-09, ADR 0010): the capability must never be
+ * referenced here, confirm-shaped surface or not — see file header.
+ * @param {{ path: string, content: string }[]} files
+ */
+export function findAgentCapabilityReferences(files) {
+  const issues = [];
+  for (const { path, content } of files) {
+    const stripped = stripComments(content);
+    if (stripped.includes(CAPABILITY_REFERENCE)) {
+      issues.push(
+        `${path}: references ${CAPABILITY_REFERENCE} — agent/runner code must never carry a ` +
+          `graph:confirm capability (R-09, ADR 0010)`,
+      );
+    }
+    for (const match of stripped.matchAll(CAPABILITY_LITERAL_PATTERN)) {
+      issues.push(
+        `${path}:${lineOf(stripped, match.index)}: references the literal "graph:confirm" ` +
+          `capability string — agent/runner code must never carry it (R-09, ADR 0010)`,
+      );
+    }
+  }
+  return issues;
+}
+
+/**
+ * `packages/**\/application/commands/**`, `packages/domain/architecture/src/infrastructure/**`
+ * (004 T015, FR-010, R-09): a confirm-shaped match is legitimate once the file also references
+ * `GRAPH_CONFIRM_CAPABILITY` — the capability check a real handler is expected to make.
+ * @param {{ path: string, content: string }[]} files
+ */
+export function findUncappedConfirmExposures(files) {
+  const issues = [];
+  for (const { path, content } of files) {
+    const stripped = maskExcludedIdentifiers(stripComments(content));
+    const matches = [...stripped.matchAll(newConfirmPattern())];
+    if (matches.length === 0) continue;
+    if (stripped.includes(CAPABILITY_REFERENCE)) continue;
+    for (const match of matches) {
+      issues.push(
+        `${path}:${lineOf(stripped, match.index)}: exposes a graph confirmation path ` +
+          `("${match[0]}") without referencing ${CAPABILITY_REFERENCE} (FR-010, R-09)`,
+      );
+    }
+  }
+  return issues;
+}
+
+/* v8 ignore start -- CLI wiring; the three functions above are unit tested */
 if (isMainModule(import.meta.url)) {
   const result = await runGate('gate-graph-confirm-capability', () => {
-    const issues = findUncappedConfirmExposures(collectConfirmSurfaceFiles());
+    const issues = [
+      ...findStrictConfirmExposures(collectStrictSurfaceFiles()),
+      ...findAgentCapabilityReferences(collectAgentSurfaceFiles()),
+      ...findUncappedConfirmExposures(collectCommandSurfaceFiles()),
+    ];
     if (issues.length > 0) throw new Error(issues.join('; '));
   });
   reportAndExit(result);

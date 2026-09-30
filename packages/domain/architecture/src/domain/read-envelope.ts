@@ -37,14 +37,33 @@ export class ReadEnvelopeInvariantError extends Error {
 }
 
 /**
+ * `confirmationState` is derived from `coverage`, never accepted as its own argument — a free
+ * parameter could otherwise disagree with the counts sitting right next to it (`'confirmed'` with
+ * `nodesConfirmed < nodesTotal`), and an exported interface is structurally satisfied by any
+ * matching object literal, so nothing but the constructor itself could have caught that. `total`
+ * confirmed against `total` overall is safe to compare as one sum only because the two range
+ * checks above already hold per field — a sum that reaches the total therefore means *both*
+ * `nodesConfirmed === nodesTotal` and `edgesConfirmed === edgesTotal`, not one masking the other.
+ */
+function deriveConfirmationState(discovered: boolean, coverage: Coverage): ConfirmationState {
+  if (!discovered) return 'never_discovered';
+  const confirmed = coverage.nodesConfirmed + coverage.edgesConfirmed;
+  const total = coverage.nodesTotal + coverage.edgesTotal;
+  if (total === 0 || confirmed === 0) return 'unconfirmed';
+  return confirmed === total ? 'confirmed' : 'partially_confirmed';
+}
+
+/**
  * The only constructor. A query layer builds `items` however it likes; this is what stops it from
  * handing that value to a caller without also stating the version, confirmation state and
  * coverage it was read against — the omission that a bare-array return would otherwise let
- * through invisibly.
+ * through invisibly. `discovered` is the one fact `coverage` cannot supply on its own — a tenant
+ * discovery has never run for is indistinguishable, by counts alone, from one whose graph is
+ * genuinely empty (spec edge case: "a consumer queries the graph before any discovery has run").
  */
 export function toReadEnvelope<T>(
   graphVersion: number,
-  confirmationState: ConfirmationState,
+  discovered: boolean,
   coverage: Coverage,
   items: T,
 ): ReadEnvelope<T> {
@@ -54,5 +73,5 @@ export function toReadEnvelope<T>(
   if (coverage.edgesConfirmed > coverage.edgesTotal) {
     throw new ReadEnvelopeInvariantError('coverage.edgesConfirmed cannot exceed coverage.edgesTotal');
   }
-  return { graphVersion, confirmationState, coverage, items };
+  return { graphVersion, confirmationState: deriveConfirmationState(discovered, coverage), coverage, items };
 }
