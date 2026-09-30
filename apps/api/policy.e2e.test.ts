@@ -328,6 +328,46 @@ describe('/policy (002 T027-T030, T032)', () => {
         createUnderTenant: async (tenantId) => (await decideUnder(tenantId)).id,
       });
     });
+
+    it('replay binds to the decision\'s own recorded version — a since-published, materially different version does not change the result', async () => {
+      const tenantId = randomUUID();
+      const decision = await decideUnder(tenantId); // publishes v1 (allow), records against it
+      expect(decision.rulesetVersion).toBe(1);
+
+      // v2 for the same tenant: what v1 said ALLOW, v2 says DENY for the identical input. If
+      // replay ever resolved "latest" instead of the decision's own rulesetVersion, this would
+      // flip the outcome and falsely report identical: false.
+      await publishUnder(tenantId, [allowRule({ ruleKey: `deny-${randomUUID()}`, outcome: 'deny' })]);
+
+      const response = await request(app.getHttpServer())
+        .post(path(`/policy/decisions/${decision.id}/replay`))
+        .set('X-Tenant-Id', tenantId)
+        .expect(200);
+      expect(response.body.identical).toBe(true);
+      expect(response.body.replayed).toMatchObject({ outcome: 'allow', rulesetVersion: 1 });
+    });
+
+    it('replay reports identical: false for a genuine mismatch, with both traces, and never throws', async () => {
+      const tenantId = randomUUID();
+      const decision = await decideUnder(tenantId);
+      expect(decision.outcome).toBe('allow');
+
+      // The only honest way to produce a real recorded/replayed mismatch without defeating the
+      // append-only trigger the row is protected by is a privileged write — same mechanism
+      // `decision-replay.e2e.test.ts` and `prisma-issue-deletion.ts` already rely on.
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT set_config('healer.privileged_write', 'on', true)`;
+        await tx.$executeRaw`UPDATE "policy"."policy_decision" SET outcome = 'deny' WHERE id = ${decision.id}::uuid`;
+      });
+
+      const response = await request(app.getHttpServer())
+        .post(path(`/policy/decisions/${decision.id}/replay`))
+        .set('X-Tenant-Id', tenantId)
+        .expect(200);
+      expect(response.body.identical).toBe(false);
+      expect(response.body.original).toMatchObject({ outcome: 'deny' });
+      expect(response.body.replayed).toMatchObject({ outcome: 'allow' });
+    });
   });
 
   describe('POST /policy/dry-run and GET /policy/actions (T029)', () => {

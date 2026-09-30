@@ -76,6 +76,30 @@ describe('replayDecision (T028, FR-002)', () => {
     expect(result.replayed.outcome).toBe('allow');
   });
 
+  it('resolves version 1 even when a materially different version 2 has since superseded it (SC-003)', async () => {
+    // A conflicting rule set: what v1 says ALLOW, v2 says DENY. If replayDecision ever resolved
+    // "latest" instead of the decision's own recorded version, this would silently flip the
+    // reported outcome — the exact regression this test exists to catch.
+    const v1 = published({ id: 'ruleset-1', version: 1 });
+    const v2 = published({
+      id: 'ruleset-2',
+      version: 2,
+      supersedesVersion: 1,
+      rules: [{ ...v1.rules[0]!, outcome: 'deny' }],
+    });
+    const repos = { rulesets: new FakeRulesetRepo(new Map([[1, v1], [2, v2]])) };
+
+    const result = await replayDecision(repos, CONTEXT, {
+      decisionInput: buildDecisionInput(),
+      rulesetVersion: 1,
+      outcome: 'allow',
+    });
+
+    expect(result.identical).toBe(true);
+    expect(result.replayed.outcome).toBe('allow');
+    expect(result.replayed.rulesetVersion).toBe(1);
+  });
+
   it('throws when the cited ruleset version no longer resolves', async () => {
     const repos = { rulesets: new FakeRulesetRepo(new Map()) };
     await expect(

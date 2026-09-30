@@ -114,6 +114,58 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
     expect(await findReplayMismatches(prisma)).toEqual([]);
   });
 
+  it('binds a decision to its own recorded version, not a since-published superseding one with different rules', async () => {
+    // A separate tenant so this is unaffected by the other tests' in-place mutation of every
+    // policy_decision row under TENANT_ID.
+    const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000e6');
+    const rulesets = new PrismaPolicyRulesetRepository(prisma);
+    const decisions = new PrismaPolicyDecisionRepository(prisma);
+    const autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
+
+    await withCorrelation(newCorrelationId(), async () => {
+      await publishRuleset(rulesets, tenant, {
+        rules: [
+          {
+            ruleKey: 'allow-code-change',
+            predicates: [
+              { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
+            ],
+            outcome: 'allow',
+            reasonCode: 'NO_ADOPTED_EXPECTATION',
+            note: '',
+          },
+        ],
+        publishedBy: 'pavlo',
+      });
+      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, tenant, {
+        decisionInput: buildDecisionInput(),
+      });
+      expect(decision.outcome).toBe('allow');
+      expect(decision.rulesetVersion).toBe(1);
+
+      // A materially different v2 for the same tenant: what v1 said ALLOW, v2 says DENY. If the
+      // check ever resolved "latest" instead of the decision's own recorded ruleset_version, this
+      // would flip the replay to "deny" and falsely flag the v1 decision as a mismatch.
+      await publishRuleset(rulesets, tenant, {
+        rules: [
+          {
+            ruleKey: 'deny-code-change',
+            predicates: [
+              { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
+            ],
+            outcome: 'deny',
+            reasonCode: 'NO_ADOPTED_EXPECTATION',
+            note: '',
+          },
+        ],
+        publishedBy: 'pavlo',
+      });
+
+      const violations = await findReplayMismatches(prisma);
+      expect(violations.filter((v) => v.includes(decision.id))).toEqual([]);
+    });
+  });
+
   it('flags a decision whose recorded outcome no longer matches a fresh replay', async () => {
     // The only honest way to produce a real mismatch without defeating the append-only trigger
     // this row is protected by (`policy_decision_append_only`) is a privileged write — same

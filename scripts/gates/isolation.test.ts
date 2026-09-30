@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { findUncoveredEndpoints } from './isolation.mjs';
+
+const SCHEMA_PATH = fileURLToPath(new URL('../../prisma/schema.prisma', import.meta.url));
 
 const openapi = {
   paths: {
@@ -63,6 +67,16 @@ describe('gate-isolation (012 T029, FR-013, quickstart 10)', () => {
       "await assertTenantIsolatedList(app, 'GET', '/issues/:id', { tenantA, tenantB, tenantHeader, createUnderA, responseContainsMarker });",
     ]);
     expect(uncovered).toEqual(['DELETE /issues/:id']);
+  });
+
+  it('the schema fact backing GET /policy/actions\' exemption still holds: PolicyAction has no tenant_id', () => {
+    // `isolation.mjs`'s own EXEMPT_PATHS comment justifies exempting GET /policy/actions on this
+    // exact fact (policy_action is a product-wide registry, not tenant-scoped). If PolicyAction
+    // ever gains a tenantId column, that exemption must be revisited — this fails loudly instead
+    // of the exemption silently continuing to apply to a now-tenant-scoped table.
+    const body = readFileSync(SCHEMA_PATH, 'utf8').match(/model\s+PolicyAction\s*\{([\s\S]*?)\n\}/)?.[1];
+    expect(body).toBeDefined();
+    expect(body).not.toMatch(/tenantId/);
   });
 
   it('does not count a call inside describe.skip as coverage', () => {
