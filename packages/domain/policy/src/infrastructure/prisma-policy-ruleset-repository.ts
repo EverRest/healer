@@ -21,7 +21,9 @@ import { recordAuditEntry } from './record-audit-entry.js';
  *  domain, checked before the transaction opens rather than discovered after two writes. */
 function assertCorrelated(): void {
   if (currentCorrelationId() === undefined) {
-    throw new Error('PublishRuleset publishes PolicyRulesetPublished: call it inside a correlated scope (withCorrelation)');
+    throw new Error(
+      'PublishRuleset publishes PolicyRulesetPublished: call it inside a correlated scope (withCorrelation)',
+    );
   }
 }
 
@@ -86,7 +88,8 @@ function isRulesetVersionOrDigestConflict(error: unknown): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
     return false;
   }
-  const meta = error.meta as { readonly modelName?: unknown; readonly target?: unknown } | undefined;
+  const meta = error.meta as
+    { readonly modelName?: unknown; readonly target?: unknown } | undefined;
   if (meta?.modelName !== 'PolicyRuleset') return false;
   const target = meta.target;
   if (!Array.isArray(target)) return false;
@@ -138,6 +141,23 @@ export class PrismaPolicyRulesetRepository implements PolicyRulesetRepository {
     return row === null ? null : toDomain(row);
   }
 
+  async findByVersion(where: TenantScoped<{ version: number }>): Promise<PublishedRuleset | null> {
+    const row = await this.prisma.policyRuleset.findUnique({
+      where: { tenantId_version: { tenantId: where.tenantId, version: where.version } },
+      include: RULESET_INCLUDE,
+    });
+    return row === null ? null : toDomain(row);
+  }
+
+  async list(where: TenantScoped<object>): Promise<readonly PublishedRuleset[]> {
+    const rows = await this.prisma.policyRuleset.findMany({
+      where: { tenantId: where.tenantId },
+      orderBy: { version: 'desc' },
+      include: RULESET_INCLUDE,
+    });
+    return rows.map(toDomain);
+  }
+
   async publish(where: TenantScoped<NewPublishedRuleset>): Promise<PublishedRuleset> {
     assertCorrelated();
     const { tenantId } = where;
@@ -145,7 +165,9 @@ export class PrismaPolicyRulesetRepository implements PolicyRulesetRepository {
       rulesetId: where.id,
       version: where.version,
       digest: where.digest,
-      ...(where.supersedesVersion !== undefined ? { supersedesVersion: where.supersedesVersion } : {}),
+      ...(where.supersedesVersion !== undefined
+        ? { supersedesVersion: where.supersedesVersion }
+        : {}),
     });
 
     try {

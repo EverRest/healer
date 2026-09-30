@@ -6,7 +6,10 @@ import type {
   PolicyDecisionRepository,
   RecordedDecision,
 } from '../../domain/policy-decision-repository.js';
-import type { PolicyRulesetRepository, PublishedRuleset } from '../../domain/policy-ruleset-repository.js';
+import type {
+  PolicyRulesetRepository,
+  PublishedRuleset,
+} from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import { evaluateAndBind, NoPublishedRulesetError } from './evaluate-and-bind.js';
@@ -24,7 +27,14 @@ function published(overrides: Partial<PublishedRuleset> = {}): PublishedRuleset 
     rules: [
       {
         ruleKey: 'allow-code-change',
-        predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+        predicates: [
+          {
+            kind: 'enumerated',
+            field: 'action.actionClass',
+            operator: 'equals',
+            value: 'code_change',
+          },
+        ],
         outcome: 'allow',
         reasonCode: 'NO_ADOPTED_EXPECTATION',
         note: '',
@@ -44,6 +54,12 @@ class FakeRulesetRepo implements PolicyRulesetRepository {
   }
   async publish(): Promise<PublishedRuleset> {
     throw new Error('not used by this test');
+  }
+  async findByVersion(): Promise<PublishedRuleset | null> {
+    return this.ruleset;
+  }
+  async list(): Promise<readonly PublishedRuleset[]> {
+    return this.ruleset === null ? [] : [this.ruleset];
   }
 }
 
@@ -65,6 +81,12 @@ class FakeDecisionRepo implements PolicyDecisionRepository {
   async consume(): Promise<void> {
     throw new Error('not used by this test');
   }
+  async findById(): Promise<null> {
+    throw new Error('not used by this test');
+  }
+  async list(): Promise<readonly never[]> {
+    throw new Error('not used by this test');
+  }
 }
 
 class FakeEpochRepo implements AutonomyEpochRepository {
@@ -79,9 +101,16 @@ describe('evaluateAndBind (T021)', () => {
     const decisions = new FakeDecisionRepo();
     const input = buildDecisionInput();
     const result = await evaluateAndBind(
-      { rulesets: new FakeRulesetRepo(published()), decisions, autonomyEpochs: new FakeEpochRepo(0n) },
+      {
+        rulesets: new FakeRulesetRepo(published()),
+        decisions,
+        autonomyEpochs: new FakeEpochRepo(0n),
+      },
       CONTEXT,
-      { decisionInput: input, binding: { workflowRunId: 'run-1', workflowState: 'awaiting_execution' } },
+      {
+        decisionInput: input,
+        binding: { workflowRunId: 'run-1', workflowState: 'awaiting_execution' },
+      },
     );
 
     expect(result.decision.outcome).toBe('allow');
@@ -99,7 +128,11 @@ describe('evaluateAndBind (T021)', () => {
 
   it('reads a nonzero autonomy epoch when one has been bumped', async () => {
     const result = await evaluateAndBind(
-      { rulesets: new FakeRulesetRepo(published()), decisions: new FakeDecisionRepo(), autonomyEpochs: new FakeEpochRepo(3n) },
+      {
+        rulesets: new FakeRulesetRepo(published()),
+        decisions: new FakeDecisionRepo(),
+        autonomyEpochs: new FakeEpochRepo(3n),
+      },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
     );
@@ -109,7 +142,11 @@ describe('evaluateAndBind (T021)', () => {
   it('refuses to evaluate when no ruleset has ever been published for the tenant', async () => {
     await expect(
       evaluateAndBind(
-        { rulesets: new FakeRulesetRepo(null), decisions: new FakeDecisionRepo(), autonomyEpochs: new FakeEpochRepo(0n) },
+        {
+          rulesets: new FakeRulesetRepo(null),
+          decisions: new FakeDecisionRepo(),
+          autonomyEpochs: new FakeEpochRepo(0n),
+        },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
       ),
@@ -118,7 +155,11 @@ describe('evaluateAndBind (T021)', () => {
 
   it('two structurally identical proposals evaluated separately get the same proposal digest', async () => {
     const decisions = new FakeDecisionRepo();
-    const repos = { rulesets: new FakeRulesetRepo(published()), decisions, autonomyEpochs: new FakeEpochRepo(0n) };
+    const repos = {
+      rulesets: new FakeRulesetRepo(published()),
+      decisions,
+      autonomyEpochs: new FakeEpochRepo(0n),
+    };
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
     expect(decisions.recorded).toHaveLength(2);

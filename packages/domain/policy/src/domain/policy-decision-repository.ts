@@ -40,6 +40,28 @@ export interface ConsumeDecisionInput {
   readonly presentedDigest: string;
 }
 
+/** A decision as `GET /policy/decisions` and `GET /policy/decisions/{decisionId}` read it
+ *  (FR-002, FR-017) — everything `record()` wrote, not only what it returned: the recorded
+ *  `decisionInput` and `budgetState` a replay needs, the binding, and the two terminal fields
+ *  (`consumedAt`, `invalidatedReason`) that only ever change after the fact. */
+export interface StoredDecision extends RecordedDecision, DecisionBinding {
+  readonly actionKey: string;
+  readonly targetRef?: string;
+  readonly fingerprint?: string;
+  readonly decisionInput: DecisionInput;
+  readonly budgetState: BudgetState;
+  readonly consumedAt?: Date;
+  readonly invalidatedReason?: string;
+}
+
+/** `GET /policy/decisions` query filters (contracts/openapi.yaml). */
+export interface DecisionListFilter {
+  readonly issueId?: string;
+  readonly actionKey?: string;
+  readonly outcome?: Decision['outcome'];
+  readonly since?: Date;
+}
+
 /** `error.code` mirrors `@healer/shared`'s closed `ErrorCode` union (T023, contracts/
  *  evaluation.md "Error codes") — `DECISION_ALREADY_CONSUMED` maps to HTTP 409 via
  *  `httpStatusFor`, the same as every other typed error in this repository. */
@@ -52,7 +74,10 @@ export class DecisionAlreadyConsumedError extends HealerError {
 
 export class DigestMismatchError extends HealerError {
   constructor(readonly decisionId: string) {
-    super('DIGEST_MISMATCH', `presented digest does not match decision ${decisionId}'s proposal digest`);
+    super(
+      'DIGEST_MISMATCH',
+      `presented digest does not match decision ${decisionId}'s proposal digest`,
+    );
     this.name = 'DigestMismatchError';
   }
 }
@@ -73,4 +98,13 @@ export interface PolicyDecisionRepository {
    * tenant.
    */
   consume(where: TenantScoped<ConsumeDecisionInput>): Promise<void>;
+
+  /** One decision for this tenant, or null — including another tenant's decision id, which must
+   *  read as "not found," never as a lookup that could distinguish "exists" from "doesn't"
+   *  (FR-018). */
+  findById(where: TenantScoped<{ readonly id: string }>): Promise<StoredDecision | null>;
+
+  /** Recorded decisions for this tenant, newest first, narrowed by whichever filters are given
+   *  (`GET /policy/decisions`, FR-002). */
+  list(where: TenantScoped<DecisionListFilter>): Promise<readonly StoredDecision[]>;
 }

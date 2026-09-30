@@ -73,7 +73,17 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
       const audit = await prisma.auditEntry.findFirst({
         where: { tenantId: TENANT_ID, targetType: 'policy_ruleset', targetId: published.id },
       });
-      expect(audit).toMatchObject({ action: 'policy.publish_ruleset', actorRef: 'pavlo', outcome: 'ok' });
+      expect(audit).toMatchObject({
+        action: 'policy.publish_ruleset',
+        actorRef: 'pavlo',
+        outcome: 'ok',
+      });
+      // 002 T033 (scoped this run to PublishRuleset's own entry): exactly one audit entry per
+      // publish, naming the actor and — for the first version — that there is no "before".
+      expect(
+        await prisma.auditEntry.count({ where: { tenantId: TENANT_ID, targetId: published.id } }),
+      ).toBe(1);
+      expect(audit?.reason).toBe(`published version ${published.version}`);
 
       const outboxRow = await prisma.outbox.findFirst({
         where: { tenantId: TENANT_ID, name: 'PolicyRulesetPublished', subjectId: published.id },
@@ -98,14 +108,29 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
 
   it('changed content creates a new, monotone version citing the one it supersedes', async () =>
     withCorrelation('corr-publish-3', async () => {
-      const v1 = await publishRuleset(repo, CONTEXT, { rules: [rule({ ruleKey: 'allow-c' })], publishedBy: 'pavlo' });
-      const v2 = await publishRuleset(repo, CONTEXT, { rules: [rule({ ruleKey: 'deny-c', outcome: 'deny' })], publishedBy: 'pavlo' });
+      const v1 = await publishRuleset(repo, CONTEXT, {
+        rules: [rule({ ruleKey: 'allow-c' })],
+        publishedBy: 'pavlo',
+      });
+      const v2 = await publishRuleset(repo, CONTEXT, {
+        rules: [rule({ ruleKey: 'deny-c', outcome: 'deny' })],
+        publishedBy: 'pavlo',
+      });
 
       expect(v2.version).toBe(v1.version + 1);
       expect(v2.supersedesVersion).toBe(v1.version);
 
       const latest = await repo.findLatest(scope(CONTEXT, {}));
       expect(latest?.id).toBe(v2.id);
+
+      // 002 T033 (scoped this run): the audit entry naming a superseding publish's before/after
+      // versions — `PublishRuleset`'s own `auditReason`, unasserted until now.
+      const audit = await prisma.auditEntry.findFirst({
+        where: { tenantId: TENANT_ID, targetType: 'policy_ruleset', targetId: v2.id },
+      });
+      expect(audit?.reason).toBe(
+        `published version ${v2.version}, superseding version ${v1.version}`,
+      );
     }));
 
   it('a decision citing an earlier version still resolves it exactly, via findByDigest', async () =>
@@ -116,6 +141,49 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
       expect(resolved?.rules.map((r) => r.ruleKey)).toEqual(rules.map((r) => r.ruleKey));
     }));
 
+  it('findByVersion resolves a superseded version forever, and a version never published as null (SC-003)', async () =>
+    withCorrelation('corr-publish-version-lookup', async () => {
+      const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fa');
+      const v1 = await publishRuleset(repo, tenant, {
+        rules: [rule({ ruleKey: 'v1' })],
+        publishedBy: 'pavlo',
+      });
+      const v2 = await publishRuleset(repo, tenant, {
+        rules: [rule({ ruleKey: 'v2', outcome: 'deny' })],
+        publishedBy: 'pavlo',
+      });
+
+      const resolvedV1 = await repo.findByVersion(scope(tenant, { version: v1.version }));
+      expect(resolvedV1?.id).toBe(v1.id);
+      expect(resolvedV1?.rules.map((r) => r.ruleKey)).toEqual(['v1']);
+
+      const resolvedV2 = await repo.findByVersion(scope(tenant, { version: v2.version }));
+      expect(resolvedV2?.id).toBe(v2.id);
+
+      expect(await repo.findByVersion(scope(tenant, { version: 9999 }))).toBeNull();
+    }));
+
+  it("list returns every published version for this tenant, newest first, and never another tenant's", async () =>
+    withCorrelation('corr-publish-list', async () => {
+      const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fb');
+      const other = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fc');
+      const v1 = await publishRuleset(repo, tenant, {
+        rules: [rule({ ruleKey: 'list-v1' })],
+        publishedBy: 'pavlo',
+      });
+      const v2 = await publishRuleset(repo, tenant, {
+        rules: [rule({ ruleKey: 'list-v2', outcome: 'deny' })],
+        publishedBy: 'pavlo',
+      });
+      await publishRuleset(repo, other, {
+        rules: [rule({ ruleKey: 'other-tenant' })],
+        publishedBy: 'pavlo',
+      });
+
+      const list = await repo.list(scope(tenant, {}));
+      expect(list.map((r) => r.id)).toEqual([v2.id, v1.id]);
+    }));
+
   // Review finding: `publishRuleset` used to read-decide-write with no lock, so two concurrent
   // publishes for the same tenant could both compute the same next version and race a raw
   // `PrismaClientKnownRequestError` (P2002) to the loser. Fixed by having `repo.publish()`
@@ -123,13 +191,21 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
   // `StaleRulesetVersionError`) for a genuine version collision — proved here against real
   // concurrent writes, the same way the existing `consumeDecision` race test proves its own lock.
   describe('concurrent publishes for the same tenant (review finding)', () => {
-    const CONCURRENT_TENANT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000f8');
+    const CONCURRENT_TENANT = TenantContext.forTrustedInternalUse(
+      '00000000-0000-0000-8000-0000000000f8',
+    );
 
     it('two concurrent publishes of different content both succeed, with distinct consecutive versions — no raw Prisma error', async () =>
       withCorrelation('corr-publish-race-1', async () => {
         const [a, b] = await Promise.all([
-          publishRuleset(repo, CONCURRENT_TENANT, { rules: [rule({ ruleKey: `race-a-${randomUUID()}` })], publishedBy: 'pavlo' }),
-          publishRuleset(repo, CONCURRENT_TENANT, { rules: [rule({ ruleKey: `race-b-${randomUUID()}` })], publishedBy: 'pavlo' }),
+          publishRuleset(repo, CONCURRENT_TENANT, {
+            rules: [rule({ ruleKey: `race-a-${randomUUID()}` })],
+            publishedBy: 'pavlo',
+          }),
+          publishRuleset(repo, CONCURRENT_TENANT, {
+            rules: [rule({ ruleKey: `race-b-${randomUUID()}` })],
+            publishedBy: 'pavlo',
+          }),
         ]);
 
         expect(a.digest).not.toBe(b.digest);
@@ -178,7 +254,10 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
           publishedAt: new Date(),
           publishedBy: 'pavlo',
           conflictWarnings: [],
-          rules: [rule({ ruleKey: duplicateKey }), rule({ ruleKey: duplicateKey, outcome: 'deny' })],
+          rules: [
+            rule({ ruleKey: duplicateKey }),
+            rule({ ruleKey: duplicateKey, outcome: 'deny' }),
+          ],
           auditEntry: scope(tenant, {
             id: randomUUID(),
             actorType: 'human' as const,

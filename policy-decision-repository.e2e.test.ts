@@ -15,7 +15,7 @@ import {
   type DecisionInput,
   type RuleBody,
 } from '@healer/domain-policy';
-import { TenantContext, withCorrelation } from '@healer/shared';
+import { TenantContext, scope, withCorrelation } from '@healer/shared';
 import { applySqlFile, startPostgres, type StartedPostgres } from './test/containers.js';
 
 /** A valid, fully-populated `DecisionInput` — mirrors `packages/domain/policy/src/domain/
@@ -79,7 +79,9 @@ const CONTEXT = TenantContext.forTrustedInternalUse(TENANT_ID);
 function allowRule(overrides: Partial<RuleBody> = {}): RuleBody {
   return {
     ruleKey: 'allow-code-change',
-    predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+    predicates: [
+      { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
+    ],
     outcome: 'allow',
     reasonCode: 'NO_ADOPTED_EXPECTATION',
     note: '',
@@ -117,11 +119,10 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('records a decision bound to a workflow run/state and publishes PolicyDecisionRecorded', async () =>
     withCorrelation('corr-bind-1', async () => {
       const input = buildDecisionInput();
-      const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs },
-        CONTEXT,
-        { decisionInput: input, binding: { workflowRunId: randomUUID(), workflowState: 'awaiting_execution' } },
-      );
+      const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, CONTEXT, {
+        decisionInput: input,
+        binding: { workflowRunId: randomUUID(), workflowState: 'awaiting_execution' },
+      });
 
       expect(decision.outcome).toBe('allow');
       const row = await prisma.policyDecision.findUnique({ where: { id: decision.id } });
@@ -166,7 +167,10 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
       });
 
       await expect(
-        consumeDecision(decisions, CONTEXT, { decisionId: decision.id, presentedDigest: decision.proposalDigest }),
+        consumeDecision(decisions, CONTEXT, {
+          decisionId: decision.id,
+          presentedDigest: decision.proposalDigest,
+        }),
       ).rejects.toThrow(DecisionAlreadyConsumedError);
     }));
 
@@ -177,7 +181,10 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
       });
 
       await expect(
-        consumeDecision(decisions, CONTEXT, { decisionId: decision.id, presentedDigest: 'not-the-real-digest' }),
+        consumeDecision(decisions, CONTEXT, {
+          decisionId: decision.id,
+          presentedDigest: 'not-the-real-digest',
+        }),
       ).rejects.toThrow(DigestMismatchError);
 
       // The refused attempt left the decision unconsumed and still valid for its real digest.
@@ -192,14 +199,19 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
       });
 
       const attempt = () =>
-        consumeDecision(decisions, CONTEXT, { decisionId: decision.id, presentedDigest: decision.proposalDigest });
+        consumeDecision(decisions, CONTEXT, {
+          decisionId: decision.id,
+          presentedDigest: decision.proposalDigest,
+        });
       const results = await Promise.allSettled([attempt(), attempt()]);
 
       const fulfilled = results.filter((r) => r.status === 'fulfilled');
       const rejected = results.filter((r) => r.status === 'rejected');
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
-      expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(DecisionAlreadyConsumedError);
+      expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+        DecisionAlreadyConsumedError,
+      );
     }));
 
   it('a decision id under another tenant is not found, never leaking whether it exists', async () =>
@@ -207,9 +219,105 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
       const { decision } = await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, CONTEXT, {
         decisionInput: buildDecisionInput(),
       });
-      const otherTenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000f7');
+      const otherTenant = TenantContext.forTrustedInternalUse(
+        '00000000-0000-0000-8000-0000000000f7',
+      );
       await expect(
-        consumeDecision(decisions, otherTenant, { decisionId: decision.id, presentedDigest: decision.proposalDigest }),
+        consumeDecision(decisions, otherTenant, {
+          decisionId: decision.id,
+          presentedDigest: decision.proposalDigest,
+        }),
       ).rejects.toThrow(/not found/);
     }));
+
+  describe('findById / list (002 T028, FR-002, FR-017, FR-018)', () => {
+    it('findById returns every stored field, including the recorded decisionInput and budgetState', async () =>
+      withCorrelation('corr-read-1', async () => {
+        const issueId = randomUUID();
+        const { decision } = await evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs },
+          CONTEXT,
+          {
+            decisionInput: buildDecisionInput(),
+            binding: { issueId },
+          },
+        );
+
+        const found = await decisions.findById(scope(CONTEXT, { id: decision.id }));
+        expect(found).toMatchObject({
+          id: decision.id,
+          actionKey: 'change.open_pull_request',
+          targetRef: 'target-1',
+          fingerprint: 'fingerprint-1',
+          issueId,
+          outcome: 'allow',
+        });
+        expect(found?.decisionInput).toMatchObject({
+          action: { actionKey: 'change.open_pull_request' },
+        });
+        expect(found?.budgetState).toMatchObject({ limit: 100 });
+        expect(found?.consumedAt).toBeUndefined();
+      }));
+
+    it("findById returns null for another tenant's decision — not found, never a leak (FR-018)", async () =>
+      withCorrelation('corr-read-2', async () => {
+        const { decision } = await evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs },
+          CONTEXT,
+          {
+            decisionInput: buildDecisionInput(),
+          },
+        );
+        const otherTenant = TenantContext.forTrustedInternalUse(
+          '00000000-0000-0000-8000-0000000000f7',
+        );
+        expect(await decisions.findById(scope(otherTenant, { id: decision.id }))).toBeNull();
+      }));
+
+    it('findById returns null for a malformed id rather than throwing (SC-004 parity with issues)', async () =>
+      withCorrelation('corr-read-3', async () => {
+        expect(await decisions.findById(scope(CONTEXT, { id: 'not-a-uuid' }))).toBeNull();
+      }));
+
+    it("list narrows by issueId, actionKey, outcome and since, and never returns another tenant's rows", async () =>
+      withCorrelation('corr-read-4', async () => {
+        const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fd');
+        const other = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000fe');
+        await withCorrelation('corr-read-4-seed-ruleset', () =>
+          publishRuleset(rulesets, tenant, { rules: [allowRule()], publishedBy: 'pavlo' }),
+        );
+        const issueId = randomUUID();
+        const { decision: matching } = await evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs },
+          tenant,
+          {
+            decisionInput: buildDecisionInput(),
+            binding: { issueId },
+          },
+        );
+        await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, tenant, {
+          decisionInput: buildDecisionInput({
+            target: { ...buildDecisionInput().target, targetRef: 'other-target' },
+          }),
+        });
+        await withCorrelation('corr-read-4-seed-ruleset-other', () =>
+          publishRuleset(rulesets, other, { rules: [allowRule()], publishedBy: 'pavlo' }),
+        );
+        await evaluateAndBind({ rulesets, decisions, autonomyEpochs }, other, {
+          decisionInput: buildDecisionInput(),
+        });
+
+        const byIssue = await decisions.list(scope(tenant, { issueId }));
+        expect(byIssue.map((d) => d.id)).toEqual([matching.id]);
+
+        const byOutcome = await decisions.list(scope(tenant, { outcome: 'allow' }));
+        expect(byOutcome.length).toBe(2);
+        expect(byOutcome.some((d) => d.id === matching.id)).toBe(true);
+
+        const future = await decisions.list(
+          scope(tenant, { since: new Date('2099-01-01T00:00:00Z') }),
+        );
+        expect(future).toHaveLength(0);
+      }));
+  });
 });

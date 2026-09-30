@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { TenantContext } from '@healer/shared';
-import type { ReadOnlyPolicyRulesetRepository, PublishedRuleset } from '../../domain/policy-ruleset-repository.js';
+import type {
+  ReadOnlyPolicyRulesetRepository,
+  PublishedRuleset,
+} from '../../domain/policy-ruleset-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import { NoPublishedRulesetError } from '../resolve-ruleset-and-evaluate.js';
 import { explainDecision, type ExplainDecisionRepos } from './explain-decision.js';
@@ -18,7 +21,14 @@ function published(overrides: Partial<PublishedRuleset> = {}): PublishedRuleset 
     rules: [
       {
         ruleKey: 'allow-code-change',
-        predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+        predicates: [
+          {
+            kind: 'enumerated',
+            field: 'action.actionClass',
+            operator: 'equals',
+            value: 'code_change',
+          },
+        ],
         outcome: 'allow',
         reasonCode: 'NO_ADOPTED_EXPECTATION',
         note: '',
@@ -42,12 +52,26 @@ class ReadOnlyFakeRulesetRepo implements ReadOnlyPolicyRulesetRepository {
   async findLatest(): Promise<PublishedRuleset | null> {
     return this.ruleset;
   }
+  async findByVersion(): Promise<PublishedRuleset | null> {
+    return this.ruleset;
+  }
+  async list(): Promise<readonly PublishedRuleset[]> {
+    return this.ruleset === null ? [] : [this.ruleset];
+  }
 }
 
 describe('ExplainDecision — structural read-only guarantee (T026, R-08, quickstart 32)', () => {
   it('ReadOnlyPolicyRulesetRepository, the only type ExplainDecisionRepos names, has no write-shaped method', () => {
     const repo = new ReadOnlyFakeRulesetRepo(published());
-    for (const mutatingMethod of ['publish', 'create', 'update', 'delete', 'save', 'remove', 'write']) {
+    for (const mutatingMethod of [
+      'publish',
+      'create',
+      'update',
+      'delete',
+      'save',
+      'remove',
+      'write',
+    ]) {
       expect(mutatingMethod in repo).toBe(false);
     }
     expect(Object.getOwnPropertyNames(Object.getPrototypeOf(repo))).toEqual(
@@ -81,7 +105,9 @@ describe('explainDecision (T024)', () => {
 
   it('refuses when no ruleset has ever been published for the tenant', async () => {
     await expect(
-      explainDecision({ rulesets: new ReadOnlyFakeRulesetRepo(null) }, CONTEXT, { decisionInput: buildDecisionInput() }),
+      explainDecision({ rulesets: new ReadOnlyFakeRulesetRepo(null) }, CONTEXT, {
+        decisionInput: buildDecisionInput(),
+      }),
     ).rejects.toThrow(NoPublishedRulesetError);
   });
 });

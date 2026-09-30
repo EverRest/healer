@@ -44,8 +44,13 @@ export interface NewPublishedRuleset {
  * re-reads the tenant's current state and retries with a freshly computed version.
  */
 export class StaleRulesetVersionError extends Error {
-  constructor(readonly tenantId: string, readonly attemptedVersion: number) {
-    super(`policy_ruleset version ${attemptedVersion} for tenant ${tenantId} was taken by a concurrent publish`);
+  constructor(
+    readonly tenantId: string,
+    readonly attemptedVersion: number,
+  ) {
+    super(
+      `policy_ruleset version ${attemptedVersion} for tenant ${tenantId} was taken by a concurrent publish`,
+    );
     this.name = 'StaleRulesetVersionError';
   }
 }
@@ -65,6 +70,16 @@ export interface ReadOnlyPolicyRulesetRepository {
    *  been published — contracts/evaluation.md step 1's "current published version for the
    *  tenant". */
   findLatest(where: TenantScoped<object>): Promise<PublishedRuleset | null>;
+
+  /** One exact version for this tenant, or null — including a version superseded long ago: "a
+   *  version cited by a decision resolves forever" (SC-003). Immutable rows, so this is a plain
+   *  point lookup, never a snapshot of something that could still change under the caller. */
+  findByVersion(
+    where: TenantScoped<{ readonly version: number }>,
+  ): Promise<PublishedRuleset | null>;
+
+  /** Every published version for this tenant, newest first (`GET /policy/rulesets`, FR-004). */
+  list(where: TenantScoped<object>): Promise<readonly PublishedRuleset[]>;
 }
 
 /**

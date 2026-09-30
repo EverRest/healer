@@ -21,30 +21,38 @@ class FakeDecisionRepo implements PolicyDecisionRepository {
     this.calls.push(where);
     this.effect();
   }
+  async findById(): Promise<null> {
+    throw new Error('not used by this test');
+  }
+  async list(): Promise<readonly never[]> {
+    throw new Error('not used by this test');
+  }
 }
 
 describe('consumeDecision (T023)', () => {
   it('scopes the presented digest and decision id to the tenant before delegating to the repository', async () => {
     const repo = new FakeDecisionRepo();
     await consumeDecision(repo, CONTEXT, { decisionId: 'd1', presentedDigest: 'digest-1' });
-    expect(repo.calls).toEqual([{ decisionId: 'd1', presentedDigest: 'digest-1', tenantId: CONTEXT.tenantId }]);
+    expect(repo.calls).toEqual([
+      { decisionId: 'd1', presentedDigest: 'digest-1', tenantId: CONTEXT.tenantId },
+    ]);
   });
 
   it('propagates DecisionAlreadyConsumedError from the repository', async () => {
     const repo = new FakeDecisionRepo(() => {
       throw new DecisionAlreadyConsumedError('d1');
     });
-    await expect(consumeDecision(repo, CONTEXT, { decisionId: 'd1', presentedDigest: 'x' })).rejects.toThrow(
-      DecisionAlreadyConsumedError,
-    );
+    await expect(
+      consumeDecision(repo, CONTEXT, { decisionId: 'd1', presentedDigest: 'x' }),
+    ).rejects.toThrow(DecisionAlreadyConsumedError);
   });
 
   it('propagates DigestMismatchError from the repository', async () => {
     const repo = new FakeDecisionRepo(() => {
       throw new DigestMismatchError('d1');
     });
-    await expect(consumeDecision(repo, CONTEXT, { decisionId: 'd1', presentedDigest: 'wrong' })).rejects.toThrow(
-      DigestMismatchError,
-    );
+    await expect(
+      consumeDecision(repo, CONTEXT, { decisionId: 'd1', presentedDigest: 'wrong' }),
+    ).rejects.toThrow(DigestMismatchError);
   });
 });

@@ -54,6 +54,16 @@ class FakeRulesetRepo implements PolicyRulesetRepository {
     this.byTenant.set(where.tenantId, [...rows, row]);
     return row;
   }
+
+  async findByVersion(where: TenantScoped<{ version: number }>): Promise<PublishedRuleset | null> {
+    const rows = this.byTenant.get(where.tenantId) ?? [];
+    return rows.find((r) => r.version === where.version) ?? null;
+  }
+
+  async list(where: TenantScoped<object>): Promise<readonly PublishedRuleset[]> {
+    const rows = this.byTenant.get(where.tenantId) ?? [];
+    return [...rows].sort((a, b) => b.version - a.version);
+  }
 }
 
 function ruleBody(overrides: Partial<RuleBody>): RuleBody {
@@ -88,8 +98,14 @@ describe('publishRuleset — no-op and versioning (T019, R-01)', () => {
 
   it('changed content creates a new, monotone version, citing the version it supersedes', async () => {
     const repo = new FakeRulesetRepo();
-    const v1 = await publishRuleset(repo, CONTEXT, { rules: [ruleBody({ ruleKey: 'a' })], publishedBy: 'pavlo' });
-    const v2 = await publishRuleset(repo, CONTEXT, { rules: [ruleBody({ ruleKey: 'b' })], publishedBy: 'pavlo' });
+    const v1 = await publishRuleset(repo, CONTEXT, {
+      rules: [ruleBody({ ruleKey: 'a' })],
+      publishedBy: 'pavlo',
+    });
+    const v2 = await publishRuleset(repo, CONTEXT, {
+      rules: [ruleBody({ ruleKey: 'b' })],
+      publishedBy: 'pavlo',
+    });
     expect(v1.version).toBe(1);
     expect(v2.version).toBe(2);
     expect(v2.supersedesVersion).toBe(1);
@@ -104,7 +120,11 @@ describe('publishRuleset — no-op and versioning (T019, R-01)', () => {
 describe('publishRuleset — rejects a duplicate ruleKey before touching the repository (review finding)', () => {
   it('throws DuplicateRuleKeyError, naming the duplicate, and never calls the repository', async () => {
     const repo = new FakeRulesetRepo();
-    const rules = [ruleBody({ ruleKey: 'a' }), ruleBody({ ruleKey: 'b' }), ruleBody({ ruleKey: 'a' })];
+    const rules = [
+      ruleBody({ ruleKey: 'a' }),
+      ruleBody({ ruleKey: 'b' }),
+      ruleBody({ ruleKey: 'a' }),
+    ];
 
     await expect(publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' })).rejects.toThrow(
       DuplicateRuleKeyError,
@@ -128,13 +148,27 @@ describe('publishRuleset — order independence at the storage layer (T018, R-04
   it('publishing the same rules in reverse order evaluates identically across a varied input corpus', async () => {
     const allow: RuleBody = ruleBody({
       ruleKey: 'allow-code-change',
-      predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+      predicates: [
+        {
+          kind: 'enumerated',
+          field: 'action.actionClass',
+          operator: 'equals',
+          value: 'code_change',
+        },
+      ],
       outcome: 'allow',
       reasonCode: 'NO_ADOPTED_EXPECTATION',
     });
     const requireApproval: RuleBody = ruleBody({
       ruleKey: 'require-approval-prod',
-      predicates: [{ kind: 'enumerated', field: 'target.environment', operator: 'equals', value: 'production' }],
+      predicates: [
+        {
+          kind: 'enumerated',
+          field: 'target.environment',
+          operator: 'equals',
+          value: 'production',
+        },
+      ],
       outcome: 'require_approval',
       reasonCode: 'APPROVAL_REQUIRED',
     });
@@ -175,7 +209,9 @@ describe('publishRuleset — order independence at the storage layer (T018, R-04
       const a = evaluate(forwardRuleset, input);
       const b = evaluate(reverseRuleset, input);
       expect(a.decision.outcome).toBe(b.decision.outcome);
-      expect([...a.decision.matchedRuleKeys].sort()).toEqual([...b.decision.matchedRuleKeys].sort());
+      expect([...a.decision.matchedRuleKeys].sort()).toEqual(
+        [...b.decision.matchedRuleKeys].sort(),
+      );
     }
   });
 });
@@ -200,7 +236,10 @@ describe('publishRuleset — retry on a concurrent publish (review finding)', ()
       return realPublish(where);
     };
 
-    const result = await publishRuleset(repo, CONTEXT, { rules: [ruleBody({ ruleKey: 'a' })], publishedBy: 'pavlo' });
+    const result = await publishRuleset(repo, CONTEXT, {
+      rules: [ruleBody({ ruleKey: 'a' })],
+      publishedBy: 'pavlo',
+    });
     expect(publishCalls).toBe(2);
     expect(result.version).toBe(1);
   });
@@ -236,16 +275,33 @@ describe('publishRuleset — conflict warnings (T020, FR-006, quickstart 6)', ()
     const repo = new FakeRulesetRepo();
     const allow = ruleBody({
       ruleKey: 'allow-code-change',
-      predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+      predicates: [
+        {
+          kind: 'enumerated',
+          field: 'action.actionClass',
+          operator: 'equals',
+          value: 'code_change',
+        },
+      ],
       outcome: 'allow',
     });
     const deny = ruleBody({
       ruleKey: 'deny-code-change',
-      predicates: [{ kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' }],
+      predicates: [
+        {
+          kind: 'enumerated',
+          field: 'action.actionClass',
+          operator: 'equals',
+          value: 'code_change',
+        },
+      ],
       outcome: 'deny',
     });
 
-    const published = await publishRuleset(repo, CONTEXT, { rules: [allow, deny], publishedBy: 'pavlo' });
+    const published = await publishRuleset(repo, CONTEXT, {
+      rules: [allow, deny],
+      publishedBy: 'pavlo',
+    });
     expect(published.conflictWarnings).toEqual([
       { ruleKeyA: 'allow-code-change', ruleKeyB: 'deny-code-change' },
     ]);
