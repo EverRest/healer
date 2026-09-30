@@ -29,6 +29,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  */
 export const ISSUE_ID_COLUMNS = [
   'agent.agent_run.issue_id',
+  'architecture.drift_finding.issue_id',
   'evidence.evidence.issue_id',
   'issue.issue_event.issue_id',
   'issue.issue_relationship.issue_id',
@@ -286,6 +287,10 @@ async function deleteDerivedRows(
   await tx.$executeRaw`
     DELETE FROM "issue"."issue_relationship"
     WHERE tenant_id = ${t}::uuid AND (issue_id = ${id}::uuid OR other_issue_id = ${id}::uuid)`;
+  // A drift finding exists to raise this issue for adjudication (004 R-14) — content about the
+  // issue, like evidence and issue_event, not an independent record like agent_run's spend.
+  await tx.$executeRaw`
+    DELETE FROM "architecture"."drift_finding" WHERE tenant_id = ${t}::uuid AND issue_id = ${id}::uuid`;
   // Machine steps (012). `workflow_run` has no foreign key to `issue`, so nothing would have failed.
   await tx.$executeRaw`
     DELETE FROM "workflow"."workflow_callback"
