@@ -120,25 +120,33 @@ describe('architecture.graph_node: concurrent rename of the same node (004 T010)
     }
   }
 
-  it('rejects the loser of a concurrent rename race with GraphConcurrencyError', async () => {
-    const id = await seedNode(`nk-${randomUUID()}`);
-    const original = (await prisma.graphNode.findUniqueOrThrow({ where: { id } })).naturalKey;
+  // Repeated trials, not a single run: this codebase has documented history (001's
+  // PrismaIssueRepository.transition() investigation, QUESTIONS.md) of Postgres-serialization
+  // -conflict races that pass a single trial and fail intermittently over dozens — a defense this
+  // load-bearing earns more than one shot before it's trusted.
+  it(
+    'rejects the loser of a concurrent rename race with GraphConcurrencyError',
+    { repeats: 19 },
+    async () => {
+      const id = await seedNode(`nk-${randomUUID()}`);
+      const original = (await prisma.graphNode.findUniqueOrThrow({ where: { id } })).naturalKey;
 
-    const holder = await holdRename(id, original, 'renamed-by-holder');
+      const holder = await holdRename(id, original, 'renamed-by-holder');
 
-    // The racer goes through the real repository path — its own read sees `original` (the row
-    // holder hasn't committed yet), then its guarded UPDATE blocks on holder's row lock.
-    const racer = repo.renameNaturalKey(scope(CONTEXT, { id }), 'renamed-by-racer');
-    racer.catch(() => {});
+      // The racer goes through the real repository path — its own read sees `original` (the row
+      // holder hasn't committed yet), then its guarded UPDATE blocks on holder's row lock.
+      const racer = repo.renameNaturalKey(scope(CONTEXT, { id }), 'renamed-by-racer');
+      racer.catch(() => {});
 
-    await waitForBlocked(1, holder);
-    await holder.release();
+      await waitForBlocked(1, holder);
+      await holder.release();
 
-    await expect(racer).rejects.toBeInstanceOf(GraphConcurrencyError);
+      await expect(racer).rejects.toBeInstanceOf(GraphConcurrencyError);
 
-    const final = await prisma.graphNode.findUniqueOrThrow({ where: { id } });
-    expect(final.naturalKey).toBe('renamed-by-holder');
-  });
+      const final = await prisma.graphNode.findUniqueOrThrow({ where: { id } });
+      expect(final.naturalKey).toBe('renamed-by-holder');
+    },
+  );
 
   it('renames the same row in place — same id, no delete+create', async () => {
     const id = await seedNode(`nk-${randomUUID()}`);
