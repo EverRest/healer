@@ -6,5 +6,6 @@ export * from './domain/graph-concurrency-error.js';
 export * from './domain/graph-node-repository.js';
 export * from './domain/read-envelope.js';
 export * from './domain/events.js';
+export * from './domain/capabilities.js';
 export * from './infrastructure/prisma-graph-node-repository.js';
 export * from './infrastructure/graph-event-publisher.js';
