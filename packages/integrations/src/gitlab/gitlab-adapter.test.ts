@@ -17,6 +17,7 @@ describe('gitlabAdapter (T003, FR-020, contracts/graph-contract.md §3)', () => 
       deploymentUnitCandidates: [],
       dependencyObservations: [],
       repositoryRefs: [],
+      collectionGaps: [],
     });
   });
 

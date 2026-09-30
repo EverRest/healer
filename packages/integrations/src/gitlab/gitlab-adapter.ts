@@ -5,6 +5,7 @@ const EMPTY_FACTS: DiscoveryFacts = Object.freeze({
   deploymentUnitCandidates: [],
   dependencyObservations: [],
   repositoryRefs: [],
+  collectionGaps: [],
 });
 
 /**

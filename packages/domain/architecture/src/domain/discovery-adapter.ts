@@ -3,6 +3,7 @@ import type {
   DeploymentUnitCandidate,
   DependencyObservation,
   RepositoryRef,
+  RunnerEvidence,
 } from '@healer/boundary-contract';
 import type { GraphLayer, ProvenanceClass } from './provenance.js';
 
@@ -10,6 +11,9 @@ import type { GraphLayer, ProvenanceClass } from './provenance.js';
 // @healer/boundary-contract (FR-021, R-11, contracts/graph-contract.md §3) — this file no longer
 // declares its own placeholders, so there is exactly one definition of each shape.
 export type { ComponentCandidate, DeploymentUnitCandidate, DependencyObservation, RepositoryRef };
+
+/** 012's `collection_gap` shape — what an adapter skipped and why (FR-023, quickstart 42). */
+export type CollectionGap = Extract<RunnerEvidence, { kind: 'collection_gap' }>;
 
 export interface DiscoveryScope {
   readonly tenantId: string;
@@ -25,6 +29,9 @@ export interface DiscoveryFacts {
   readonly deploymentUnitCandidates: readonly DeploymentUnitCandidate[];
   readonly dependencyObservations: readonly DependencyObservation[];
   readonly repositoryRefs: readonly RepositoryRef[];
+  /** Regions the adapter could not read (an unparsable manifest, say); the rest is still returned
+   *  (FR-023, T032). Names what was skipped — never its content. */
+  readonly collectionGaps: readonly CollectionGap[];
 }
 
 /**
