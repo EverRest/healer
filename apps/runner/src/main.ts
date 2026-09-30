@@ -1,5 +1,6 @@
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import {
   createLogger,
   getRunnerConfigPresence,
@@ -26,6 +27,7 @@ import {
   type DirectiveHandler,
 } from './directive-dispatcher.js';
 import { DiagnosticsState } from './diagnostics-state.js';
+import { diagnosticsFilePath, pidFilePath } from './diagnostics-paths.js';
 
 type Logger = ReturnType<typeof createLogger>;
 
@@ -125,15 +127,23 @@ export async function runHeartbeatCycle(deps: HeartbeatCycleDeps): Promise<void>
 
 /**
  * Assembles the support diagnostic bundle from this process's current state (012 T048, FR-024).
- * Pure given its four inputs — no I/O — so it is unit-testable (including the planted-marker test)
+ * Pure given its five inputs — no I/O — so it is unit-testable (including the planted-marker test)
  * without a real file or signal; `start()`'s `SIGUSR2` handler is the only caller that also writes
  * the result to disk.
+ *
+ * `processNonce` (012 T048 review) is the same opaque token `start()` also writes into the
+ * pidfile — `scripts/runner-diagnostics.mjs` compares the two after signalling, since a bare
+ * liveness check (`kill(pid, 0)` succeeding) proves *some* process exists at that PID, never that
+ * it is the runner the pidfile named. Carrying it here, not deriving a fresh one per dump, is what
+ * lets that comparison mean anything: it must be the one value fixed for this process's whole
+ * lifetime, not regenerated on every `SIGUSR2`.
  */
 export function buildRunnerDiagnosticsBundle(
   config: RunnerConfig,
   presence: DiagnosticsConfigPresence,
   seen: BoundedSeenSet,
   diagnostics: DiagnosticsState,
+  processNonce: string,
 ): DiagnosticsBundle {
   const state = diagnostics.snapshot();
   return buildDiagnosticsBundle({
@@ -145,6 +155,7 @@ export function buildRunnerDiagnosticsBundle(
     heartbeatLatencyHistogramMs: state.heartbeatLatencyHistogramMs,
     errorSignatures: state.errorSignatures,
     recentExchanges: state.recentExchanges,
+    processNonce,
   });
 }
 
@@ -157,20 +168,47 @@ export function writeDiagnosticsFile(bundle: DiagnosticsBundle, filePath: string
   renameSync(tmpPath, filePath);
 }
 
-function pidFilePath(config: RunnerConfig): string {
-  return join(config.RUNNER_DIAGNOSTICS_DIR, 'healer-runner.pid');
+/** Reads an existing pidfile's `pid` field, if any — used only to log a collision when this
+ *  process is about to overwrite one naming a *different, currently live* pid (two runner
+ *  instances pointed at the same `RUNNER_DIAGNOSTICS_DIR`). Never throws: any failure to read or
+ *  parse the previous file just means there is nothing meaningful to compare against. */
+function readExistingPidfilePid(path: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    const pid = (parsed as { pid?: unknown } | null)?.pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-function diagnosticsFilePath(config: RunnerConfig): string {
-  return join(config.RUNNER_DIAGNOSTICS_DIR, 'healer-runner-diagnostics.json');
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Best-effort: a pidfile failure must never take down the runner's actual job (heartbeating) —
- *  this is a support convenience, not the liveness signal itself. */
-function writePidFileBestEffort(config: RunnerConfig, logger: Logger): void {
+ *  this is a support convenience, not the liveness signal itself. Content is JSON, `{pid, nonce}`,
+ *  not a bare PID (012 T048 review): `nonce` is the same opaque token `buildRunnerDiagnosticsBundle`
+ *  stamps into every dump, so `scripts/runner-diagnostics.mjs` can confirm identity, not just
+ *  liveness, before trusting whatever it reads back. */
+function writePidFileBestEffort(config: RunnerConfig, logger: Logger, nonce: string): void {
+  const path = pidFilePath(config.RUNNER_DIAGNOSTICS_DIR);
+  const previousPid = readExistingPidfilePid(path);
+  if (previousPid !== undefined && previousPid !== process.pid && isPidAlive(previousPid)) {
+    logger.warn(
+      { previousPid, pid: process.pid, path },
+      'overwriting a runner pidfile that names a different, still-live pid — two runner ' +
+        'instances may be sharing the same RUNNER_DIAGNOSTICS_DIR',
+    );
+  }
   try {
     mkdirSync(config.RUNNER_DIAGNOSTICS_DIR, { recursive: true });
-    writeFileSync(pidFilePath(config), `${process.pid}\n`);
+    writeFileSync(path, `${JSON.stringify({ pid: process.pid, nonce })}\n`);
   } catch (error) {
     logger.warn(
       { err: error instanceof Error ? error.message : String(error) },
@@ -181,10 +219,13 @@ function writePidFileBestEffort(config: RunnerConfig, logger: Logger): void {
 
 function removePidFileBestEffort(config: RunnerConfig, logger: Logger): void {
   try {
-    unlinkSync(pidFilePath(config));
+    unlinkSync(pidFilePath(config.RUNNER_DIAGNOSTICS_DIR));
   } catch (error) {
-    // A stale pidfile is a tolerable, known failure mode — scripts/runner-diagnostics.mjs checks
-    // liveness before trusting a pid it reads from one, so this is cleanup, not a guarantee.
+    // A stale pidfile is a tolerable, known failure mode on an unclean exit (SIGKILL, OOM, an
+    // uncaught exception — none of which run this cleanup path). `scripts/runner-diagnostics.mjs`
+    // does not treat a resolved pid as trustworthy on liveness alone for exactly this reason: it
+    // cross-checks the pidfile's nonce against the dump's own `processNonce` before trusting either
+    // (012 T048 review — liveness proves a process exists, never that it is this one).
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       logger.warn(
         { err: error instanceof Error ? error.message : String(error) },
@@ -211,6 +252,9 @@ export function start(): RunnerHandle {
   const seen = new BoundedSeenSet(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE);
   const handle = createLoggingDirectiveHandler(logger);
   const diagnostics = new DiagnosticsState();
+  // A fresh, unguessable value per process start (012 T048 review) — the identity token a stale
+  // pidfile's bare PID cannot provide on its own once that PID is reused by an unrelated process.
+  const processNonce = randomUUID();
 
   // Derived from `sendHeartbeat`'s own abort timeout for *this* config, not a fixed constant
   // (012 T050 review): a fixed 10s bound was actually *shorter* than the default heartbeat
@@ -249,11 +293,17 @@ export function start(): RunnerHandle {
   // a POSIX signal plus a file on disk is the outbound-only-compatible equivalent, following the
   // exact precedent already set below for SIGTERM/SIGINT. `scripts/runner-diagnostics.mjs`
   // (`make runner-diagnostics`) is what sends this signal and reads the file back.
-  writePidFileBestEffort(config, logger);
+  writePidFileBestEffort(config, logger, processNonce);
   const onDiagnosticsSignal = (): void => {
     try {
-      const bundle = buildRunnerDiagnosticsBundle(config, presence, seen, diagnostics);
-      writeDiagnosticsFile(bundle, diagnosticsFilePath(config));
+      const bundle = buildRunnerDiagnosticsBundle(
+        config,
+        presence,
+        seen,
+        diagnostics,
+        processNonce,
+      );
+      writeDiagnosticsFile(bundle, diagnosticsFilePath(config.RUNNER_DIAGNOSTICS_DIR));
     } catch (error) {
       logger.error(
         { err: error instanceof Error ? error.message : String(error) },

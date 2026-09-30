@@ -19,6 +19,7 @@ function baseInput() {
     recentExchanges: [
       { timestamp: '2026-01-01T00:00:00.000Z', schema: 'heartbeat-request', byteSize: 42 },
     ],
+    processNonce: 'nonce-abc-123',
     now: () => new Date('2026-09-30T00:00:00.000Z'),
   };
 }
@@ -37,6 +38,7 @@ describe('buildDiagnosticsBundle (012 T048, FR-024, contracts/runner-protocol.md
       recentExchanges: [
         { timestamp: '2026-01-01T00:00:00.000Z', schema: 'heartbeat-request', byteSize: 42 },
       ],
+      processNonce: 'nonce-abc-123',
     });
   });
 
@@ -62,6 +64,7 @@ describe('buildDiagnosticsBundle (012 T048, FR-024, contracts/runner-protocol.md
         'heartbeatLatencyHistogramMs',
         'errorSignatures',
         'recentExchanges',
+        'processNonce',
       ].sort(),
     );
   });

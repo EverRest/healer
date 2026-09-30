@@ -128,13 +128,20 @@ export function loadRunnerConfig(source: NodeJS.ProcessEnv = process.env): Runne
  * own frozen, parsed `RunnerConfig` cannot answer this question by itself — a default that happens
  * to match what an operator would have typed is indistinguishable from an explicit value once
  * parsed — so this reads `source` directly, the same parameter `loadRunnerConfig` already takes.
+ *
+ * Checks `source[key] !== undefined`, not `Object.hasOwn(source, key)` (012 T048 review: the two
+ * differ exactly when a key is present with value `undefined`, which real `process.env` can never
+ * hold — every value there is a string — but a plain object a caller or a test fixture builds can.
+ * `zod`'s own `.default()` fires precisely when the parsed value is `undefined`, so matching that
+ * exact condition, rather than mere key presence, is what makes this function's answer actually
+ * describe what `loadRunnerConfig` does with the same `source`).
  */
 export function getRunnerConfigPresence(
   source: NodeJS.ProcessEnv = process.env,
 ): Readonly<Record<string, 'set' | 'default'>> {
   const presence: Record<string, 'set' | 'default'> = {};
   for (const key of Object.keys(runnerSchema.shape)) {
-    presence[key] = Object.hasOwn(source, key) ? 'set' : 'default';
+    presence[key] = source[key] !== undefined ? 'set' : 'default';
   }
   return Object.freeze(presence);
 }

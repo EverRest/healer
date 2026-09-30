@@ -57,6 +57,12 @@ export interface DiagnosticsBundle {
   readonly heartbeatLatencyHistogramMs: DiagnosticsHistogramSnapshot;
   readonly errorSignatures: Readonly<Record<string, number>>;
   readonly recentExchanges: readonly DiagnosticsExchange[];
+  /** A random, per-process-start opaque token (012 T048 review) — carries no customer data, exists
+   *  solely so `scripts/runner-diagnostics.mjs` can confirm the dump it just read actually came
+   *  from the process it just signalled, not from an unrelated process a recycled, stale pidfile's
+   *  PID now happens to name. Liveness alone (`kill(pid, 0)` succeeding) proves a process exists at
+   *  that PID, never that it is the runner the pidfile was written for. */
+  readonly processNonce: string;
 }
 
 export interface DiagnosticsBundleInput {
@@ -68,6 +74,7 @@ export interface DiagnosticsBundleInput {
   readonly heartbeatLatencyHistogramMs: DiagnosticsHistogramSnapshot;
   readonly errorSignatures: Readonly<Record<string, number>>;
   readonly recentExchanges: readonly DiagnosticsExchange[];
+  readonly processNonce: string;
   /** Injectable for deterministic tests — defaults to the real clock, same pattern as this
    *  package's other timestamped shapes take a caller-suppliable `now`. */
   readonly now?: () => Date;
@@ -87,5 +94,6 @@ export function buildDiagnosticsBundle(input: DiagnosticsBundleInput): Diagnosti
     heartbeatLatencyHistogramMs: input.heartbeatLatencyHistogramMs,
     errorSignatures: input.errorSignatures,
     recentExchanges: input.recentExchanges,
+    processNonce: input.processNonce,
   };
 }

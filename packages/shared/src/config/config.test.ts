@@ -133,4 +133,16 @@ describe('getRunnerConfigPresence (012 T048 — configuration reduced to presenc
     expect(JSON.stringify(presence)).not.toContain('MARKER-PLANTED-CONFIG-VALUE');
     expect(presence.RUNNER_NAME).toBe('set');
   });
+
+  it('reports a key explicitly present with value `undefined` as "default" (012 T048 review — matches zod, which applies its default exactly when the parsed value is `undefined`)', () => {
+    // Object.hasOwn(source, key) would wrongly say 'set' here even though `loadRunnerConfig`
+    // would actually apply the field's default — real `process.env` can never hold `undefined`
+    // (every value is a string), but a plain object built by a caller or another test fixture can,
+    // and this function must still describe what `loadRunnerConfig` will actually do with it.
+    const presence = getRunnerConfigPresence({
+      ...validRunner,
+      RUNNER_CPU_LIMIT: undefined as unknown as string,
+    });
+    expect(presence.RUNNER_CPU_LIMIT).toBe('default');
+  });
 });

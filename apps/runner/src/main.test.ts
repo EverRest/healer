@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +6,7 @@ import { createLogger } from '@healer/shared';
 import type { RunnerConfig } from '@healer/shared';
 import { BoundedSeenSet } from './directive-dispatcher.js';
 import { DiagnosticsState } from './diagnostics-state.js';
+import { pidFilePath } from './diagnostics-paths.js';
 import {
   buildRunnerDiagnosticsBundle,
   createLoggingDirectiveHandler,
@@ -279,6 +280,35 @@ describe('start/close — drain the in-flight heartbeat before the process exits
     expect(closed).toBe(true);
     rmSync(diagnosticsDir, { recursive: true, force: true });
   });
+
+  it('writes a pidfile containing {pid, nonce} at startup and removes it on close (012 T048 review — identity, not just liveness)', async () => {
+    vi.stubEnv('LOG_LEVEL', 'fatal');
+    vi.stubEnv('RUNNER_CONTROL_PLANE_URL', 'https://control-plane.example.com');
+    vi.stubEnv('RUNNER_TENANT_ID', 'tenant-1');
+    vi.stubEnv('RUNNER_NAME', 'runner-1');
+    vi.stubEnv('RUNNER_IMAGE_VERSION', '0.5.0');
+    const diagnosticsDir = mkdtempSync(join(tmpdir(), 'healer-runner-pidfile-test-'));
+    vi.stubEnv('RUNNER_DIAGNOSTICS_DIR', diagnosticsDir);
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [] }),
+        ),
+    );
+
+    const path = pidFilePath(diagnosticsDir);
+    const handle = start();
+    const content = JSON.parse(readFileSync(path, 'utf8')) as { pid: number; nonce: string };
+    expect(content.pid).toBe(process.pid);
+    expect(typeof content.nonce).toBe('string');
+    expect(content.nonce.length).toBeGreaterThan(0);
+
+    await handle.close();
+    expect(existsSync(path)).toBe(false);
+    rmSync(diagnosticsDir, { recursive: true, force: true });
+  });
 });
 
 describe('runHeartbeatCycle — diagnostics instrumentation (012 T048, FR-024)', () => {
@@ -338,6 +368,7 @@ describe('buildRunnerDiagnosticsBundle (012 T048, FR-024)', () => {
       { RUNNER_NAME: 'set', RUNNER_CPU_LIMIT: 'default' },
       seen,
       diagnostics,
+      'nonce-xyz',
     );
 
     expect(bundle.versions).toEqual({ imageVersion: '0.5.0', protocolVersion: 1 });
@@ -345,6 +376,7 @@ describe('buildRunnerDiagnosticsBundle (012 T048, FR-024)', () => {
     expect(bundle.configuration).toEqual({ RUNNER_NAME: 'set', RUNNER_CPU_LIMIT: 'default' });
     expect(bundle.queueDepths).toEqual({ directiveSeenSet: 1 });
     expect(bundle.recentExchanges.length).toBe(2);
+    expect(bundle.processNonce).toBe('nonce-xyz');
   });
 });
 
@@ -357,6 +389,7 @@ describe('writeDiagnosticsFile (012 T048 — the file `make runner-diagnostics` 
       {},
       new BoundedSeenSet(5),
       new DiagnosticsState(),
+      'nonce-file-test',
     );
 
     writeDiagnosticsFile(bundle, filePath);
@@ -423,7 +456,13 @@ describe("the planted-marker test (012 T048, FR-023 applied to FR-024's bundle �
       ),
     });
 
-    const bundle = buildRunnerDiagnosticsBundle(markedConfig, presence, seen, diagnostics);
+    const bundle = buildRunnerDiagnosticsBundle(
+      markedConfig,
+      presence,
+      seen,
+      diagnostics,
+      'nonce-planted-marker-test',
+    );
     const serialized = JSON.stringify(bundle);
 
     expect(serialized).not.toContain(MARKER);

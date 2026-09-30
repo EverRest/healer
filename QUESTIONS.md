@@ -511,6 +511,112 @@ Also confirmed: with no runner running (a graceful shutdown had already removed 
 explicit `RUNNER_PID` naming a process that does not exist, it fails with `no running process at
 pid ... — is the runner still running?`. Neither hangs or fabricates output.
 
+(The pasted bundle above predates the review round below — it has no `processNonce` field, since
+that field did not exist yet at the time it was captured. See the fresh pasted output below for
+the current shape.)
+
+### T048 review round — pidfile identity, one authority for its paths, real script e2e coverage
+
+Two independent reviews of the commit above converged on the same core finding from different
+angles. Both fixed, plus two cheap items found in the same pass.
+
+- **Real safety issue, fixed: pidfile identity was never verified — a recycled pid could make
+  `make runner-diagnostics` send `SIGUSR2` to, and likely kill, an unrelated live process.**
+  `checkProcessLiveness`/`isProcessAlive`'s old shape only proved *some* process existed at a pid,
+  never that it was the runner a pidfile named. `main.ts` has no crash-path cleanup —
+  `removePidFileBestEffort` only runs inside the graceful `SIGTERM`/`SIGINT` `close()` path — so a
+  hard kill (`SIGKILL`, OOM, an uncaught exception) leaves a stale pidfile behind. On a long-lived
+  host, once that pid is reused by an unrelated live process, the old code would find it "alive" and
+  send `SIGUSR2` — whose default disposition, with no handler installed, is termination. Fixed with
+  a random per-process nonce (`crypto.randomUUID()`, `main.ts`'s `start()`): written into the
+  pidfile alongside the pid (`{pid, nonce}`, not a bare integer) and echoed into every dump's own
+  new `processNonce` field (`packages/boundary-contract/src/diagnostics.ts`). After signalling,
+  `scripts/runner-diagnostics.mjs`'s `checkDumpIdentity` compares the two and refuses to trust a
+  mismatched or missing dump — a stale pidfile now reused by an unrelated process, or a signalled
+  process that is not a runner at all and so times out without ever dumping, both fail loudly
+  instead of silently trusting liveness alone. An explicit `--pid`/`RUNNER_PID` override has no
+  pidfile-recorded nonce to compare against; `checkDumpIdentity` reports `ok` in that case since
+  there is genuinely nothing to verify — the operator supplying a raw pid is asserting its identity
+  themselves.
+- **Also fixed in the same pass: `isProcessAlive` collapsed `ESRCH` (genuinely no such process) and
+  `EPERM` (a process exists but this user cannot signal it) into one misleading "not alive".**
+  Replaced with `checkProcessLiveness`, returning `{status: 'alive' | 'not-found' |
+  'permission-denied'}`, with an injectable `killFn` so both branches are unit-tested directly
+  without needing a real permission-denied process to probe. Both failure messages now carry the
+  same Compose hint (`docker exec <container> kill -USR2 1`, reading the dump back via `docker exec
+  ... cat` or a mounted volume) — the PID-namespace limitation applies to both, not just the
+  not-found case. The stale comment claiming the old code "checks liveness before trusting a pid" is
+  gone from `main.ts`; liveness and identity are now explicitly two different checks in both the
+  code and its comments.
+- **Real "closed list has one authority" violation, fixed: the pidfile/dump-file names were
+  duplicated as string literals in three places** (`main.ts`, `scripts/runner-diagnostics.mjs`, the
+  e2e test) — a drift between any two would silently break the real `make` target while every
+  existing test stayed green, since none of them exercised the actual script as a real process.
+  Fixed with a new `apps/runner/src/diagnostics-paths.ts` (`PIDFILE_NAME`, `DIAGNOSTICS_DUMP_NAME`,
+  `pidFilePath()`, `diagnosticsFilePath()`) — the one authority. `main.ts` and the e2e test import it
+  directly (same-package/live-TS-transform, no build dependency for either). `scripts/
+  runner-diagnostics.mjs` cannot import it the same way — a static top-level import of a compiled
+  monorepo package would force every unit test of this script's own pure functions to also depend
+  on a prior `pnpm run build`, exactly what `vitest.config.ts`'s own workspace-package aliasing
+  exists to avoid for every other package in this repo. Solved with a **dynamic** `import()` of
+  `apps/runner/dist/diagnostics-paths.js`, reached only inside the real, signal-sending execution
+  path (guarded by `isMainModule`) — never at module load, so `scripts/runner-diagnostics.test.ts`'s
+  20 tests of the pure decision functions still need no build at all (confirmed: they pass with
+  `apps/runner/dist/` entirely absent). The real execution path needing a build is not a new
+  fragility — by definition, if there is a runner process for this script to signal, it was already
+  built.
+- **Also fixed in the same pass: the actual `make runner-diagnostics` script was never exercised
+  end to end.** Only its pure decision functions were unit-tested, and the e2e test proved the
+  runner's own half of the cycle by hand-sending the signal and reading the file directly — never by
+  actually running `node scripts/runner-diagnostics.mjs`. Added two tests to
+  `apps/runner/main-diagnostics.e2e.test.ts`: one spawns a real runner and the real script as two
+  separate processes and asserts on the script's real stdout (proving the whole path — pidfile
+  discovery, signalling, waiting, identity check, printing — works as shipped); the other points the
+  script at a pidfile naming an implausible, certainly-unassigned pid and asserts the real process
+  exits non-zero with a clear stderr message, rather than hanging or fabricating output. A genuine
+  OS-level PID-reuse scenario (the actual hazard the nonce fix defends against) is not reproduced
+  here — forcing a specific pid to be reused deterministically in a test is not practical — but
+  `checkDumpIdentity`'s own unit tests cover the mismatch and missing-nonce branches directly with
+  synthetic fixtures, and the fix itself (the nonce comparison) is exercised for real by the
+  positive e2e case above (a real dump's real nonce genuinely matching its pidfile's).
+- **Cheap fix: `getRunnerConfigPresence` used `Object.hasOwn(source, key)` instead of `source[key]
+  !== undefined`.** For real `process.env` (every value a string, `undefined` impossible) the two
+  are equivalent, but for a plain object with an explicit `{KEY: undefined}` — reachable only in a
+  test fixture today — `Object.hasOwn` would wrongly report `'set'` while `loadRunnerConfig` would
+  actually apply the field's default. Fixed to check the value, not mere key presence, matching
+  exactly the condition zod's own `.default()` fires on.
+- **Cheap fix: `make-targets.md`'s `runner-diagnostics` row didn't mention the PID-namespace
+  limitation.** Added a clause matching how honestly the rest of this section already describes it.
+- **Considered, not done: logging when `writePidFileBestEffort` overwrites a pidfile naming a
+  different, still-live pid** (two runner instances sharing one `RUNNER_DIAGNOSTICS_DIR`) — done
+  anyway, since it was cheap and directly related to the exact hazard this round fixes: a `logger
+  .warn` now fires in that case, naming both pids and the path.
+
+Fresh pasted output from a real, hand-run `make runner-diagnostics` against a live runner, after
+this round's fixes — note the new `processNonce` field, and that it matches the pidfile's own
+`nonce` exactly (`{"pid":76844,"nonce":"879b185f-a241-4a25-9c59-d150f123457a"}` was the pidfile's
+content for this same run):
+
+```json
+{
+  "generatedAt": "2026-09-30T14:06:38.622Z",
+  "versions": { "imageVersion": "1.0.0-smoke2", "protocolVersion": 1 },
+  "capabilities": [],
+  "configuration": { "...": "unchanged shape, omitted here for brevity" },
+  "queueDepths": { "directiveSeenSet": 0 },
+  "heartbeatLatencyHistogramMs": {
+    "bucketsMs": [50, 100, 250, 500, 1000, 2500, 5000, 10000],
+    "counts": [1, 0, 0, 0, 0, 0, 0, 0],
+    "overflowCount": 0
+  },
+  "errorSignatures": { "network error": 1 },
+  "recentExchanges": [
+    { "timestamp": "2026-09-30T14:06:31.572Z", "schema": "heartbeat-request", "byteSize": 156 }
+  ],
+  "processNonce": "879b185f-a241-4a25-9c59-d150f123457a"
+}
+```
+
 ## 001 data-model.md — fingerprint index exclusion set
 
 **Resolved and confirmed**: `where state not in ('merged', 'removed')`, already applied in
