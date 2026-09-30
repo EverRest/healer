@@ -69,8 +69,8 @@ about the implementation — the closed input record, the lattice and the pure e
 - [ ] T029 [P] `POST /policy/dry-run` and `GET /policy/actions` (FR-019, R-14)
 - [ ] T030 [P] `check:decision-replay` — sampled stored decisions replay identically against their own recorded inputs and rule set version (FR-002, SC-002)
 - [ ] T031 `check:policy-coverage` — executed mutating actions from `audit_entry` left-joined to `policy_decision` on `(tenant_id, action, target_id)`; the join has a key because `audit_entry.action` **is** a registered `policy_action.action_key` and `policy_action.mutating` supplies the filter (001 FR-012, R-14). A row with no consumed `ALLOW` raises an alarm in production, not a test failure at release time (SC-001, 001 T005)
-- [ ] T032 [P] e2e isolation matrix: rule set, grant, decision, approval and budget reads all return **404 for another tenant, never 403** (FR-018, SC-008, quickstart 38)
-- [ ] T033 [P] **Test**: publish a rule set, change a budget, grant and revoke → four audit entries naming the actor and the before and after versions (FR-020, quickstart 37)
+- [ ] T032 [P] e2e isolation matrix: rule set, grant, decision, approval and budget reads all return **404 for another tenant, never 403** (FR-018, SC-008, quickstart 38) — _scoped to rule set + decision this run (grant/approval/budget endpoints are Phase 4/6/7, not built yet); extend, don't rewrite, when those land — QUESTIONS.md "002 T032/T033"_
+- [ ] T033 [P] **Test**: publish a rule set, change a budget, grant and revoke → four audit entries naming the actor and the before and after versions (FR-020, quickstart 37) — _scoped to the publish-ruleset audit entry this run (budget/grant/revoke commands are Phase 4/6, not built yet); extend, don't rewrite, when those land — QUESTIONS.md "002 T032/T033"_
 
 **Checkpoint**: the surface 008 and 010 must call before they may write anything exists and is audited.
 
