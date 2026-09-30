@@ -1,24 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
-import { evaluate } from '../../domain/evaluate.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
 import type { DecisionBinding, PolicyDecisionRepository, RecordedDecision } from '../../domain/policy-decision-repository.js';
 import type { PolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
-import type { Rule } from '../../domain/rule.js';
+import { NoPublishedRulesetError, resolveRulesetAndEvaluate } from '../resolve-ruleset-and-evaluate.js';
 
-/** No `policy_ruleset` has ever been published for this tenant — `evaluate()` needs one
- *  (contracts/evaluation.md step 1), and data-model.md's SC-003 invariant requires every
- *  `policy_decision.ruleset_version` to resolve to a real `policy_ruleset`, so this refuses
- *  rather than fabricating a phantom version 0 to evaluate against and persist a decision that
- *  would violate that invariant on sight. */
-export class NoPublishedRulesetError extends Error {
-  constructor() {
-    super('no policy_ruleset has been published for this tenant — PublishRuleset must run first');
-    this.name = 'NoPublishedRulesetError';
-  }
-}
+// Re-exported so existing callers/tests importing this error from here keep working — the error
+// itself now lives in `resolve-ruleset-and-evaluate.ts` since `ExplainDecision` (T024) throws it too.
+export { NoPublishedRulesetError };
 
 export interface EvaluateAndBindRepos {
   readonly rulesets: PolicyRulesetRepository;
@@ -57,17 +48,7 @@ export async function evaluateAndBind(
   context: TenantContext,
   input: { readonly decisionInput: DecisionInput; readonly binding?: DecisionBinding },
 ): Promise<EvaluateAndBindResult> {
-  const latest = await repos.rulesets.findLatest(scope(context, {}));
-  if (latest === null) throw new NoPublishedRulesetError();
-
-  const rules: readonly Rule[] = latest.rules.map((r) => ({
-    ruleKey: r.ruleKey,
-    predicates: r.predicates,
-    outcome: r.outcome,
-    reasonCode: r.reasonCode,
-  }));
-
-  const { decision, trace } = evaluate({ version: latest.version, rules }, input.decisionInput);
+  const { decision, trace } = await resolveRulesetAndEvaluate(repos, context, input.decisionInput);
   const proposalDigest = computeProposalDigest(input.decisionInput);
   const autonomyEpoch = await repos.autonomyEpochs.current(scope(context, {}));
 

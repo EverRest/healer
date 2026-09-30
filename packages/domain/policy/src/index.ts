@@ -24,6 +24,7 @@ export {
   type NewPublishedRuleset,
   type PolicyRulesetRepository,
   type PublishedRuleset,
+  type ReadOnlyPolicyRulesetRepository,
 } from './domain/policy-ruleset-repository.js';
 export { computeProposalDigest } from './domain/proposal-digest.js';
 export {
@@ -38,6 +39,7 @@ export {
 export { publishRuleset } from './application/commands/publish-ruleset.js';
 export { evaluateAndBind } from './application/commands/evaluate-and-bind.js';
 export { consumeDecision } from './application/commands/consume-decision.js';
+export { explainDecision, type ExplainDecisionRepos } from './application/queries/explain-decision.js';
 export { PrismaPolicyActionRepository } from './infrastructure/prisma-policy-action-repository.js';
 export { PrismaPolicyRulesetRepository } from './infrastructure/prisma-policy-ruleset-repository.js';
 export { PrismaPolicyDecisionRepository } from './infrastructure/prisma-policy-decision-repository.js';

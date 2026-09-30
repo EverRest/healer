@@ -51,10 +51,12 @@ export class StaleRulesetVersionError extends Error {
 }
 
 /**
- * `policy_ruleset` / `policy_rule` (T019, data-model.md). Every method takes `TenantScoped`
- * (T015's pattern) — `policy_ruleset` is tenant-scoped, unlike `policy_action` (T014).
+ * `policy_ruleset` / `policy_rule`, read side only (T019, data-model.md; split out for T024/T026 —
+ * `ExplainDecision` depends on this and nothing wider, so a repository interface with a `publish`
+ * method is never in its reachable type at all, not merely unused by its code). Every method takes
+ * `TenantScoped` (T015's pattern) — `policy_ruleset` is tenant-scoped, unlike `policy_action` (T014).
  */
-export interface PolicyRulesetRepository {
+export interface ReadOnlyPolicyRulesetRepository {
   /** The published version with this exact digest for this tenant, or null — R-01's "identical
    *  content is a no-op" lookup. */
   findByDigest(where: TenantScoped<{ readonly digest: string }>): Promise<PublishedRuleset | null>;
@@ -63,7 +65,14 @@ export interface PolicyRulesetRepository {
    *  been published — contracts/evaluation.md step 1's "current published version for the
    *  tenant". */
   findLatest(where: TenantScoped<object>): Promise<PublishedRuleset | null>;
+}
 
+/**
+ * `policy_ruleset` / `policy_rule` (T019, data-model.md), read and write. `PublishRuleset` depends
+ * on this; `EvaluateAndBind` and `ExplainDecision` only ever need `ReadOnlyPolicyRulesetRepository`
+ * above.
+ */
+export interface PolicyRulesetRepository extends ReadOnlyPolicyRulesetRepository {
   /**
    * Writes the ruleset, its rules and the audit entry naming both versions in one transaction
    * (data-model.md: "the publish writes an audit_entry naming both versions — because the rule

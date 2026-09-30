@@ -1,0 +1,51 @@
+import { scope, type TenantContext } from '@healer/shared';
+import type { DecisionInput } from '../domain/decision-input.js';
+import { evaluate, type Decision, type EvaluationTrace } from '../domain/evaluate.js';
+import type { ReadOnlyPolicyRulesetRepository } from '../domain/policy-ruleset-repository.js';
+import type { Rule } from '../domain/rule.js';
+
+/** No `policy_ruleset` has ever been published for this tenant — `evaluate()` needs one
+ *  (contracts/evaluation.md step 1), and data-model.md's SC-003 invariant requires every
+ *  `policy_decision.ruleset_version` to resolve to a real `policy_ruleset`, so this refuses
+ *  rather than fabricating a phantom version 0 to evaluate against. Shared by both callers: a
+ *  tenant with no published ruleset gets the same refusal whether they're binding a decision or
+ *  only asking what one would be. */
+export class NoPublishedRulesetError extends Error {
+  constructor() {
+    super('no policy_ruleset has been published for this tenant — PublishRuleset must run first');
+    this.name = 'NoPublishedRulesetError';
+  }
+}
+
+export interface ResolveRulesetAndEvaluateRepos {
+  readonly rulesets: ReadOnlyPolicyRulesetRepository;
+}
+
+/**
+ * Step 1 (resolve the tenant's current published ruleset) plus the call into the pure `evaluate()`
+ * (batch 3, untouched) — the logic `EvaluateAndBind` (T021) and `ExplainDecision` (T024) share
+ * verbatim (contracts/evaluation.md "The two callers, and why there is no flag", R-08). Neither
+ * caller duplicates this; they differ only in what they do with the result afterwards —
+ * `EvaluateAndBind` persists it, `ExplainDecision` returns it.
+ *
+ * Takes only a read-only ruleset dependency: nothing downstream of this function can reach a
+ * write-capable repository method through it, by construction of `ReadOnlyPolicyRulesetRepository`
+ * (T024/T026) rather than by this function choosing not to call one.
+ */
+export async function resolveRulesetAndEvaluate(
+  repos: ResolveRulesetAndEvaluateRepos,
+  context: TenantContext,
+  decisionInput: DecisionInput,
+): Promise<{ readonly decision: Decision; readonly trace: EvaluationTrace }> {
+  const latest = await repos.rulesets.findLatest(scope(context, {}));
+  if (latest === null) throw new NoPublishedRulesetError();
+
+  const rules: readonly Rule[] = latest.rules.map((r) => ({
+    ruleKey: r.ruleKey,
+    predicates: r.predicates,
+    outcome: r.outcome,
+    reasonCode: r.reasonCode,
+  }));
+
+  return evaluate({ version: latest.version, rules }, decisionInput);
+}
