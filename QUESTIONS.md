@@ -1375,3 +1375,36 @@ new to build there, just one more statement inside the existing privileged trans
 entry in the closed list. Fixing this in-run (folded into batch 7) rather than deferring: it's the
 thing currently keeping the full e2e suite from being green, the fix is mechanical and
 precedent-following (not a new design decision), and 002 is what broke the gate.
+
+## 002 batch 7 — two spec-vs-code disagreements found while wiring the HTTP surface
+
+Per AGENTS.md ("if a document and the code disagree, say so and ask which is stale") — both
+independently confirmed by review, not fixed in code this run:
+
+1. **`RULESET_INVALID` has no seat in the closed error-code list.** `contracts/evaluation.md`'s
+   "Error codes" section names it as a first-class sibling of `CEILING_EXCEEDED`,
+   `DECISION_ALREADY_CONSUMED`, etc. — all of which already exist in
+   `packages/shared/src/errors/index.ts`'s `ERROR_CODES`, except this one. `POST /policy/rulesets`
+   maps a schema-invalid rule set to the existing generic `VALIDATION` code instead, matching this
+   repo's actual precedent (every other DTO `safeParse` failure in `apps/api` does the same, and
+   there's no existing precedent anywhere for a domain-specific 422 code distinct from
+   `VALIDATION`). Reads as a scaffolding gap this batch was first to hit, not a deliberate spec
+   choice. Not fixed: adding a new closed-list error code is a small but real decision (does a
+   caller actually need to distinguish "rule set schema-invalid" from "some other validation
+   failure"?) that's cheap to make later and costs nothing to defer — `VALIDATION` is correct today.
+2. **`contracts/openapi.yaml`'s `DecisionInput` schema and the domain's real, closed
+   `decisionInputSchema` (batch 3) are substantially different shapes** — the yaml is flat with
+   mostly-nullable fields; the real schema is nested (`action.actionClass`, required
+   `reversibility`/`autonomy`/`budget` groups the yaml doesn't have at all). Confirmed via the
+   yaml's own header: it's an explicitly-labeled *draft*, and per ADR 0012 the generated
+   `apps/api/openapi.json` is the authoritative, drift-checked contract — `contracts-check`
+   diffs the generated document against the committed one, never touches the hand-written yaml, so
+   nothing keeps the two in sync mechanically. `POST /policy/dry-run` validates against the real
+   domain schema (correct — it's what the evaluator actually accepts), which is why the two
+   disagree.
+
+**Ruling**: log both here rather than editing `contracts/evaluation.md`/`openapi.yaml` in this
+run — reconciling a spec doc against a shape that's still evolving (Phase 4-7 will add fields to
+`DecisionInput` too, e.g. real `autonomy`/`budget` resolution) is better done once, after those
+phases land, than incrementally per-batch. Whoever does that pass should start from this entry and
+from `decisionInputSchema`'s actual code, not from the yaml.
