@@ -6,6 +6,7 @@ import { PrismaClient } from '@healer/prisma-client';
 import {
   publishRuleset,
   PrismaPolicyRulesetRepository,
+  StaleRulesetVersionError,
   type RuleBody,
 } from '@healer/domain-policy';
 import { scope, TenantContext, withCorrelation } from '@healer/shared';
@@ -156,4 +157,48 @@ describe('PrismaPolicyRulesetRepository (002 T019)', () => {
         expect(rowCount).toBe(1);
       }));
   });
+
+  // Review finding: the repository's P2002 handling used to catch *any* unique violation from
+  // this transaction, including `policy_rule`'s own `@@unique([rulesetId, ruleKey])` constraint —
+  // reached when two rules share a `ruleKey` — and misdiagnosed it as `StaleRulesetVersionError`.
+  // `publishRuleset` now rejects that case before ever calling the repository
+  // (`assertUniqueRuleKeys`), but the repository is exercised directly here too: enforcing the
+  // narrowed catch at this layer independently is what keeps a *second* caller of `publish()`
+  // that skipped the application-layer guard from hitting the same misdiagnosis.
+  it('publish() lets a policy_rule ruleKey collision propagate as a raw P2002, not StaleRulesetVersionError', async () =>
+    withCorrelation('corr-publish-rulekey-collision', async () => {
+      const tenant = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000f9');
+      const duplicateKey = `dup-${randomUUID()}`;
+
+      const attempt = repo.publish(
+        scope(tenant, {
+          id: randomUUID(),
+          version: 1,
+          digest: `digest-${randomUUID()}`,
+          publishedAt: new Date(),
+          publishedBy: 'pavlo',
+          conflictWarnings: [],
+          rules: [rule({ ruleKey: duplicateKey }), rule({ ruleKey: duplicateKey, outcome: 'deny' })],
+          auditEntry: scope(tenant, {
+            id: randomUUID(),
+            actorType: 'human' as const,
+            actorRef: 'pavlo',
+            action: 'policy.publish_ruleset',
+            targetType: 'policy_ruleset',
+            targetId: randomUUID(),
+            reason: 'test: rulekey collision',
+            evidenceIds: [],
+            outcome: 'ok',
+          }),
+        }),
+      );
+
+      await expect(attempt).rejects.toThrow(/Unique constraint/);
+      await expect(attempt).rejects.not.toBeInstanceOf(StaleRulesetVersionError);
+
+      // No ruleset row was left behind — the transaction rolled back as a whole, and this was
+      // never resolved (incorrectly) to an existing row the way a genuine digest race would be.
+      const rows = await prisma.policyRuleset.count({ where: { tenantId: tenant.tenantId } });
+      expect(rows).toBe(0);
+    }));
 });

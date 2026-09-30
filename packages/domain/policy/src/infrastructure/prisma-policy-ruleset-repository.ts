@@ -63,10 +63,37 @@ function toDomain(row: RulesetRow): PublishedRuleset {
 
 const RULESET_INCLUDE = { rules: true } as const;
 
-/** A P2002 (unique constraint violation) on this table only ever comes from `(tenantId, digest)`
- *  or `(tenantId, version)` — the two unique indexes `policy_ruleset` declares. */
-function isUniqueConstraintViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+/**
+ * True only for a P2002 on `policy_ruleset`'s own `(tenant_id, version)` or `(tenant_id, digest)`
+ * unique index — never for a P2002 raised by anything else this transaction touches.
+ *
+ * Review finding: the original version treated *any* P2002 from this transaction as the version
+ * race this method exists to resolve. But this transaction also inserts into `policy_rule`, whose
+ * own `@@unique([rulesetId, ruleKey])` constraint rejects a request with two rules sharing a
+ * `ruleKey` — a caller error `publishRuleset` now rejects before this method is ever called
+ * (`assertUniqueRuleKeys`), but nothing here would have known that: the old code caught that
+ * P2002 too, misdiagnosed it as `StaleRulesetVersionError`, and `publishRuleset`'s retry loop
+ * burned every attempt against a request that could never succeed regardless of how many times
+ * it re-read the tenant's state. Confirmed empirically (a throwaway probe against a real Postgres,
+ * not from documentation) that Prisma's `error.meta` for a Postgres unique violation carries
+ * `{ modelName, target }`, with `target` the raw snake_case column list — `["tenant_id",
+ * "version"]` / `["tenant_id", "digest"]` for this table, `["ruleset_id", "rule_key"]` for
+ * `policy_rule` — so checking `modelName` alone already disambiguates the two tables; the column
+ * check on top is what pins it to *this table's own two* indexes specifically, not some future
+ * third one added to `policy_ruleset` this method hasn't been taught about.
+ */
+function isRulesetVersionOrDigestConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+  const meta = error.meta as { readonly modelName?: unknown; readonly target?: unknown } | undefined;
+  if (meta?.modelName !== 'PolicyRuleset') return false;
+  const target = meta.target;
+  if (!Array.isArray(target)) return false;
+  return (
+    (target.includes('tenant_id') && target.includes('version')) ||
+    (target.includes('tenant_id') && target.includes('digest'))
+  );
 }
 
 /**
@@ -80,13 +107,16 @@ function isUniqueConstraintViolation(error: unknown): boolean {
  * `PolicyRulesetPublished` through the same transaction's outbox.
  *
  * Concurrency (review finding): the version/digest this call attempts is a snapshot the caller
- * read before this transaction opened. If the insert's unique constraints reject it, this
- * re-checks by digest inside the same transaction: if a row with this exact digest now exists,
- * that *is* R-01's no-op, resolved here rather than left as a raw `P2002` for the caller — no
- * matter which of two racing publishes of identical content actually landed. Otherwise, the
- * conflict was on `version` — this tenant's next version was taken by different content between
- * the caller's read and this write — and `StaleRulesetVersionError` tells `publishRuleset`'s
- * retry loop to recompute against fresh state.
+ * read before this transaction opened. If the insert fails on `policy_ruleset`'s own
+ * `(tenant_id, version)` or `(tenant_id, digest)` unique index specifically
+ * (`isRulesetVersionOrDigestConflict`) — never for any other constraint this transaction's insert
+ * can violate — this re-checks by digest: if a row with this exact digest now exists, that *is*
+ * R-01's no-op, resolved here rather than left as a raw `P2002` for the caller, no matter which of
+ * two racing publishes of identical content actually landed. Otherwise the conflict was on
+ * `version` — this tenant's next version was taken by different content between the caller's read
+ * and this write — and `StaleRulesetVersionError` tells `publishRuleset`'s retry loop to
+ * recompute against fresh state. Any other error, including a P2002 from `policy_rule`'s own
+ * `@@unique([rulesetId, ruleKey])` constraint, propagates unchanged.
  */
 export class PrismaPolicyRulesetRepository implements PolicyRulesetRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -142,7 +172,7 @@ export class PrismaPolicyRulesetRepository implements PolicyRulesetRepository {
 
       return toDomain(row);
     } catch (error) {
-      if (!isUniqueConstraintViolation(error)) throw error;
+      if (!isRulesetVersionOrDigestConflict(error)) throw error;
 
       // The failed transaction rolled back everything, including the audit entry and outbox
       // write — this re-check runs outside it, against whatever a concurrent publish actually

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { scope, type TenantContext } from '@healer/shared';
 import { computeConflictWarnings } from '../../domain/conflict-warnings.js';
-import { computeRulesetDigest, type RuleBody } from '../../domain/policy-ruleset.js';
+import { assertUniqueRuleKeys, computeRulesetDigest, type RuleBody } from '../../domain/policy-ruleset.js';
 import {
   StaleRulesetVersionError,
   type PolicyRulesetRepository,
@@ -38,6 +38,12 @@ function auditReason(version: number, supersedesVersion: number | undefined): st
  * Identical content (same digest) is a no-op: the existing published version is returned as-is,
  * with no new row and no new audit entry — republishing what already stands is not a change to
  * audit (R-01).
+ *
+ * Rejects a request with two rules sharing a `ruleKey` (`DuplicateRuleKeyError`, `VALIDATION`)
+ * before computing anything or touching the repository — review finding: nothing upstream of
+ * `policy_rule`'s own `@@unique([rulesetId, ruleKey])` constraint used to reject this, so such a
+ * request reached the repository, hit that constraint as a P2002, and was indistinguishable from
+ * a genuine version race, burning every retry attempt against a request that could never succeed.
  */
 export async function publishRuleset(
   repo: PolicyRulesetRepository,
@@ -45,6 +51,7 @@ export async function publishRuleset(
   input: { readonly rules: readonly RuleBody[]; readonly publishedBy: string },
   now: () => Date = () => new Date(),
 ): Promise<PublishedRuleset> {
+  assertUniqueRuleKeys(input.rules);
   const digest = computeRulesetDigest(input.rules);
 
   for (let attempt = 1; ; attempt += 1) {

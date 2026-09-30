@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { HealerError } from '@healer/shared';
 import { canonicalize } from './canonicalize.js';
 import type { Outcome } from './outcome-lattice.js';
 import type { PredicateConjunction } from './predicates/types.js';
@@ -44,6 +45,32 @@ export function computeRulesetDigest(rules: readonly RuleBody[]): string {
     }),
   );
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+/**
+ * Review finding: nothing upstream rejected two rules sharing a `ruleKey` within one publish
+ * call — such a request reached `PrismaPolicyRulesetRepository.publish()`, hit `policy_rule`'s
+ * own `@@unique([rulesetId, ruleKey])` constraint as a P2002, and — before the repository's P2002
+ * handling was narrowed to only the ruleset table's own constraints — was misdiagnosed as a
+ * version race and burned every retry attempt against a request that could never succeed.
+ * `ruleKey` is "stable across versions, so a rule can be followed through history"
+ * (data-model.md) — duplicating one within a single publish is a caller error, not a race,
+ * and cheaper to reject here, before any digest or DB work, than to discover via a raw
+ * constraint failure three layers down.
+ */
+export class DuplicateRuleKeyError extends HealerError {
+  constructor(readonly ruleKey: string) {
+    super('VALIDATION', `rule key "${ruleKey}" appears more than once in this rule set`);
+    this.name = 'DuplicateRuleKeyError';
+  }
+}
+
+export function assertUniqueRuleKeys(rules: readonly RuleBody[]): void {
+  const seen = new Set<string>();
+  for (const rule of rules) {
+    if (seen.has(rule.ruleKey)) throw new DuplicateRuleKeyError(rule.ruleKey);
+    seen.add(rule.ruleKey);
+  }
 }
 
 export type { ConflictWarning };

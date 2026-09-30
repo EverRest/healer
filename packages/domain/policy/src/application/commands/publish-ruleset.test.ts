@@ -6,7 +6,7 @@ import {
   type PolicyRulesetRepository,
   type PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
-import type { RuleBody } from '../../domain/policy-ruleset.js';
+import { DuplicateRuleKeyError, type RuleBody } from '../../domain/policy-ruleset.js';
 import type { ResolvedRuleset, Rule } from '../../domain/rule.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import { publishRuleset } from './publish-ruleset.js';
@@ -19,13 +19,16 @@ const CONTEXT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-000
  *  against a real database in `policy-ruleset-repository.e2e.test.ts`. */
 class FakeRulesetRepo implements PolicyRulesetRepository {
   private readonly byTenant = new Map<string, PublishedRuleset[]>();
+  readonly calls = { findByDigest: 0, findLatest: 0, publish: 0 };
 
   async findByDigest(where: TenantScoped<{ digest: string }>): Promise<PublishedRuleset | null> {
+    this.calls.findByDigest += 1;
     const rows = this.byTenant.get(where.tenantId) ?? [];
     return rows.find((r) => r.digest === where.digest) ?? null;
   }
 
   async findLatest(where: TenantScoped<object>): Promise<PublishedRuleset | null> {
+    this.calls.findLatest += 1;
     const rows = this.byTenant.get(where.tenantId) ?? [];
     if (rows.length === 0) return null;
     return rows.reduce((a, b) => (b.version > a.version ? b : a));
@@ -44,6 +47,7 @@ class FakeRulesetRepo implements PolicyRulesetRepository {
       auditEntry: unknown;
     }>,
   ): Promise<PublishedRuleset> {
+    this.calls.publish += 1;
     const { auditEntry: _auditEntry, ...rest } = where;
     const row: PublishedRuleset = { ...rest };
     const rows = this.byTenant.get(where.tenantId) ?? [];
@@ -90,6 +94,33 @@ describe('publishRuleset — no-op and versioning (T019, R-01)', () => {
     expect(v2.version).toBe(2);
     expect(v2.supersedesVersion).toBe(1);
     expect(v2.digest).not.toBe(v1.digest);
+  });
+});
+
+// Review finding: nothing rejected a publish request with two rules sharing a `ruleKey` before
+// it reached `policy_rule`'s own `@@unique([rulesetId, ruleKey])` constraint, three layers down,
+// where a P2002 from it was indistinguishable from a genuine version race and burned every retry
+// attempt against a request that could never succeed.
+describe('publishRuleset — rejects a duplicate ruleKey before touching the repository (review finding)', () => {
+  it('throws DuplicateRuleKeyError, naming the duplicate, and never calls the repository', async () => {
+    const repo = new FakeRulesetRepo();
+    const rules = [ruleBody({ ruleKey: 'a' }), ruleBody({ ruleKey: 'b' }), ruleBody({ ruleKey: 'a' })];
+
+    await expect(publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' })).rejects.toThrow(
+      DuplicateRuleKeyError,
+    );
+    await expect(
+      publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' }),
+    ).rejects.toMatchObject({ ruleKey: 'a', code: 'VALIDATION' });
+
+    expect(repo.calls).toEqual({ findByDigest: 0, findLatest: 0, publish: 0 });
+  });
+
+  it('a rule set with no duplicates is unaffected', async () => {
+    const repo = new FakeRulesetRepo();
+    const rules = [ruleBody({ ruleKey: 'a' }), ruleBody({ ruleKey: 'b' })];
+    const published = await publishRuleset(repo, CONTEXT, { rules, publishedBy: 'pavlo' });
+    expect(published.rules).toHaveLength(2);
   });
 });
 

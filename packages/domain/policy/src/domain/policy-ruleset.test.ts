@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeRulesetDigest, type RuleBody } from './policy-ruleset.js';
+import { assertUniqueRuleKeys, computeRulesetDigest, DuplicateRuleKeyError, type RuleBody } from './policy-ruleset.js';
 
 // Review finding: the original digest only canonicalized each rule body's own top-level fields,
 // not the objects nested inside `predicates` — so two predicates differing only in the order
@@ -66,5 +66,38 @@ describe('computeRulesetDigest — canonicalization reaches nested predicate obj
     };
 
     expect(computeRulesetDigest([a])).not.toBe(computeRulesetDigest([b]));
+  });
+});
+
+// Review finding: nothing rejected two rules sharing a `ruleKey` within one publish call before
+// it reached `policy_rule`'s own `@@unique([rulesetId, ruleKey])` constraint, three layers down
+// and misdiagnosed by the repository's P2002 handling as a version race.
+describe('assertUniqueRuleKeys (review finding)', () => {
+  function rule(ruleKey: string): RuleBody {
+    return { ruleKey, predicates: [], outcome: 'allow', reasonCode: 'NO_ADOPTED_EXPECTATION', note: '' };
+  }
+
+  it('accepts a rule set with no duplicate ruleKeys', () => {
+    expect(() => assertUniqueRuleKeys([rule('a'), rule('b'), rule('c')])).not.toThrow();
+  });
+
+  it('accepts the empty rule set', () => {
+    expect(() => assertUniqueRuleKeys([])).not.toThrow();
+  });
+
+  it('rejects two rules sharing a ruleKey, naming the duplicate', () => {
+    expect(() => assertUniqueRuleKeys([rule('a'), rule('b'), rule('a')])).toThrow(DuplicateRuleKeyError);
+    try {
+      assertUniqueRuleKeys([rule('a'), rule('b'), rule('a')]);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(DuplicateRuleKeyError);
+      expect((error as DuplicateRuleKeyError).ruleKey).toBe('a');
+      expect((error as DuplicateRuleKeyError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('rejects three-or-more-way duplication, not only exact pairs', () => {
+    expect(() => assertUniqueRuleKeys([rule('a'), rule('a'), rule('a')])).toThrow(DuplicateRuleKeyError);
   });
 });
