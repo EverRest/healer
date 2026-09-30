@@ -259,7 +259,15 @@ system cannot know which sequence of calls a human considers one journey.
   by `node_id`. `prisma-migrations.md`'s inviolable rule ("every tenant-scoped table has
   `tenant_id` and a leading index"), enforced continuously by `prisma/migration.e2e.test.ts`,
   applies to these tables too — a table missing it fails `make db-check`. `tenant_id` is
-  denormalized onto all six, each with its own leading `(tenant_id)` index.
+  denormalized onto all six, each with its own leading `(tenant_id)` index. **Review fix:** the
+  six FKs to `graph_node` originally referenced `graph_node(id)` alone rather than the composite
+  `(id, tenant_id)` every other child table in this migration uses — reproduced against live
+  Postgres (a `component_attr` row naming one tenant while pointing `node_id` at another tenant's
+  `graph_node` row was accepted). Fixed to `FOREIGN KEY (node_id, tenant_id) REFERENCES
+  graph_node(id, tenant_id)` on all six, which required adding `@@unique([nodeId, tenantId])` to
+  each attr model (Prisma's one-to-one relation validity rule) even though `node_id` alone is
+  already the primary key — same redundant-but-required shape as `graph_node`/`graph_edge`'s own
+  `@@unique([id, tenantId])` alongside their single-column `@id`.
 - **`discovery_source_outcome` carries `tenant_id`.** Its own field list above omits it, unlike
   `discovery_draft`'s and `draft_item`'s, which both list `tenant_id` explicitly next to their
   `run_id`/`draft_id` — the omission reads as an oversight rather than a decision. Added for the

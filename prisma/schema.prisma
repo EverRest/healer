@@ -1159,8 +1159,12 @@ model ComponentAttr {
   characteristics String[]      @default([])
   ownerRef        String?       @map("owner_ref")
 
-  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  node GraphNode @relation(fields: [nodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
+  // Backs the composite FK to graph_node(id, tenant_id) — Prisma requires the defining side of a
+  // one-to-one relation to carry its own unique constraint on those fields, same pattern as
+  // GraphNode/GraphEdge's own @@unique([id, tenantId]) alongside their single-column @id.
+  @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("component_attr")
   @@schema("architecture")
@@ -1175,8 +1179,9 @@ model DeploymentUnitAttr {
   currentVersion String?               @map("current_version")
   lastDeployedAt DateTime?             @map("last_deployed_at") @db.Timestamptz(6)
 
-  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  node GraphNode @relation(fields: [nodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("deployment_unit_attr")
   @@schema("architecture")
@@ -1189,8 +1194,9 @@ model RepositoryAttr {
   projectRef    String        @map("project_ref")
   defaultBranch String        @map("default_branch")
 
-  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  node GraphNode @relation(fields: [nodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("repository_attr")
   @@schema("architecture")
@@ -1204,8 +1210,9 @@ model EndpointAttr {
   pathTemplate String?          @map("path_template")
   contractRef  String?          @map("contract_ref")
 
-  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  node GraphNode @relation(fields: [nodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("endpoint_attr")
   @@schema("architecture")
@@ -1220,8 +1227,9 @@ model FeatureAttr {
   description     String?
   productOwnerRef String? @map("product_owner_ref")
 
-  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  node GraphNode @relation(fields: [nodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("feature_attr")
   @@schema("architecture")
@@ -1237,8 +1245,9 @@ model FlowAttr {
   owner             String?
   sourceDocumentRef String? @map("source_document_ref")
 
-  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  node GraphNode @relation(fields: [nodeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
+  @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("flow_attr")
   @@schema("architecture")
