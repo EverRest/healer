@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
+import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type {
   DecisionBinding,
@@ -25,6 +26,7 @@ export interface EvaluateAndBindRepos {
   readonly decisions: PolicyDecisionRepository;
   readonly autonomyEpochs: AutonomyEpochRepository;
   readonly actions: PolicyActionRepository;
+  readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
 }
 
 export interface EvaluateAndBindResult {

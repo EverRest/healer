@@ -1,8 +1,25 @@
 // @healer/domain-policy — entry surface. Nothing is exported until it exists (012 FR-001).
 
 export { ACTION_CLASSES, type ActionClass } from './domain/action-class.js';
+export type { ApprovalCallbackPort } from './domain/approval-callback-port.js';
+export {
+  ApprovalNotPendingError,
+  type ApprovalRequestRepository,
+  type ApprovalRequestSummary,
+} from './domain/approval-request-repository.js';
 export type { AuditActorType, NewAuditEntry } from './domain/audit-entry.js';
+export {
+  CeilingExceededError,
+  GrantAlreadyRevokedError,
+  type AutonomyGrant,
+  type AutonomyGrantRepository,
+  type NewAutonomyGrant,
+  type ReadOnlyAutonomyGrantRepository,
+  type RevokeAutonomyGrant,
+} from './domain/autonomy-grant-repository.js';
+export type { AutonomyEpochRepository } from './domain/autonomy-epoch-repository.js';
 export { ACTION_CEILING, type AutonomyLevel, type Ceiling } from './domain/ceiling.js';
+export { checkAutonomyEpoch, StaleAutonomyEpochError } from './domain/check-autonomy-epoch.js';
 export {
   computeConflictWarnings,
   couldBothMatch,
@@ -32,6 +49,7 @@ export {
 } from './domain/policy-action-repository.js';
 export * from './domain/predicates/index.js';
 export { REASON_CODES, type ReasonCode } from './domain/reason-code.js';
+export { resolveAutonomyLevel, type AutonomyGrantTarget } from './domain/resolve-autonomy-level.js';
 export type { CooldownBounds, ResolvedRuleset, Rule } from './domain/rule.js';
 export {
   assertValidPredicates,
@@ -63,6 +81,20 @@ export {
 export { publishRuleset } from './application/commands/publish-ruleset.js';
 export { evaluateAndBind } from './application/commands/evaluate-and-bind.js';
 export {
+  grantAutonomy,
+  GRANT_AUTONOMY_AUDIT_ACTION,
+  type GrantAutonomyInput,
+} from './application/commands/grant-autonomy.js';
+export {
+  revokeAutonomy,
+  REVOKE_AUTONOMY_AUDIT_ACTION,
+  type RevokeAutonomyInput,
+} from './application/commands/revoke-autonomy.js';
+export {
+  sweepRevokedApprovals,
+  type SweepRevokedApprovalsResult,
+} from './application/commands/sweep-revoked-approvals.js';
+export {
   NoPublishedRulesetError,
   UnregisteredActionError,
 } from './application/resolve-ruleset-and-evaluate.js';
@@ -80,4 +112,6 @@ export { PrismaPolicyActionRepository } from './infrastructure/prisma-policy-act
 export { PrismaPolicyRulesetRepository } from './infrastructure/prisma-policy-ruleset-repository.js';
 export { PrismaPolicyDecisionRepository } from './infrastructure/prisma-policy-decision-repository.js';
 export { PrismaAutonomyEpochRepository } from './infrastructure/prisma-autonomy-epoch-repository.js';
+export { PrismaAutonomyGrantRepository } from './infrastructure/prisma-autonomy-grant-repository.js';
+export { PrismaApprovalRequestRepository } from './infrastructure/prisma-approval-request-repository.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';

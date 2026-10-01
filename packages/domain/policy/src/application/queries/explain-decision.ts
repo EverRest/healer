@@ -1,5 +1,6 @@
 import type { TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
+import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
 import type { Decision, EvaluationTrace } from '../../domain/evaluate.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
@@ -21,10 +22,13 @@ import { resolveRulesetAndEvaluate } from '../resolve-ruleset-and-evaluate.js';
  * `actions` (batch 9 C1(b)) is needed to resolve the real `actionClass` from the registry, the
  * same enforcement `EvaluateAndBind` gets — a dry run must ceiling-check against the real class
  * too, or it would report a misleadingly permissive outcome for a caller's wrong claim.
+ * `autonomyGrants` (T039) is the read-only counterpart for `autonomy.level` — a dry run resolves
+ * the tenant's real, current grants, never the caller's claimed level.
  */
 export interface ExplainDecisionRepos {
   readonly rulesets: ReadOnlyPolicyRulesetRepository;
   readonly actions: PolicyActionRepository;
+  readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
 }
 
 export async function explainDecision(

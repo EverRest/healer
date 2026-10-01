@@ -3,6 +3,10 @@ import { TenantContext, type TenantScoped } from '@healer/shared';
 import type { ActionClass } from '../../domain/action-class.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
 import type {
+  AutonomyGrant,
+  ReadOnlyAutonomyGrantRepository,
+} from '../../domain/autonomy-grant-repository.js';
+import type {
   PolicyAction,
   PolicyActionRepository,
 } from '../../domain/policy-action-repository.js';
@@ -103,6 +107,9 @@ class FakeEpochRepo implements AutonomyEpochRepository {
   async current(): Promise<bigint> {
     return this.epoch;
   }
+  async bump(): Promise<bigint> {
+    throw new Error('not used by this test');
+  }
 }
 
 /** `change.open_pull_request` → `code_change` by default, matching `buildDecisionInput`'s own
@@ -136,6 +143,25 @@ class FakeActionRepo implements PolicyActionRepository {
   }
 }
 
+/** Resolves to level 2 for `change.open_pull_request` scoped to nothing in particular (a
+ *  wildcard grant), matching `buildDecisionInput`'s own fixture default `autonomy: { level: 2 }`
+ *  (T039 made `autonomyGrants` a required dependency, the same move batch 9 made for `actions`) —
+ *  existing tests that don't care about autonomy resolution keep their exact outcomes. */
+class FakeAutonomyGrantRepo implements ReadOnlyAutonomyGrantRepository {
+  constructor(private readonly level = 2) {}
+  async findActive(): Promise<readonly AutonomyGrant[]> {
+    return [
+      {
+        id: 'grant-1',
+        actionKey: 'change.open_pull_request',
+        level: this.level,
+        grantedBy: 'pavlo',
+        grantedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    ];
+  }
+}
+
 describe('evaluateAndBind (T021)', () => {
   it('resolves the current ruleset, evaluates, and persists the decision bound to the workflow run/state', async () => {
     const decisions = new FakeDecisionRepo();
@@ -146,6 +172,7 @@ describe('evaluateAndBind (T021)', () => {
         decisions,
         autonomyEpochs: new FakeEpochRepo(0n),
         actions: new FakeActionRepo(),
+        autonomyGrants: new FakeAutonomyGrantRepo(),
       },
       CONTEXT,
       {
@@ -174,6 +201,7 @@ describe('evaluateAndBind (T021)', () => {
         decisions: new FakeDecisionRepo(),
         autonomyEpochs: new FakeEpochRepo(3n),
         actions: new FakeActionRepo(),
+        autonomyGrants: new FakeAutonomyGrantRepo(),
       },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
@@ -189,6 +217,7 @@ describe('evaluateAndBind (T021)', () => {
           decisions: new FakeDecisionRepo(),
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -209,6 +238,7 @@ describe('evaluateAndBind (T021)', () => {
           decisions: new FakeDecisionRepo(),
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -223,6 +253,7 @@ describe('evaluateAndBind (T021)', () => {
       decisions,
       autonomyEpochs: new FakeEpochRepo(0n),
       actions: new FakeActionRepo(),
+      autonomyGrants: new FakeAutonomyGrantRepo(),
     };
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
@@ -255,6 +286,7 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
         decisions,
         autonomyEpochs: new FakeEpochRepo(0n),
         actions,
+        autonomyGrants: new FakeAutonomyGrantRepo(),
       },
       CONTEXT,
       {
@@ -280,6 +312,7 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
           decisions: new FakeDecisionRepo(),
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(new Map()),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
         },
         CONTEXT,
         {
@@ -299,6 +332,7 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
           decisions: new FakeDecisionRepo(),
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(new Map()),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
         },
         CONTEXT,
         {

@@ -80,11 +80,15 @@ Index `(tenant_id, action_key, environment) where revoked_at is null`. A narrowe
 widens a broader one — grants are additive and the ceiling clamps the maximum, so overlapping grants
 cannot raise a level above what either grants alone.
 
-> Implementation note (batch 1, T002/T003): the `level` check constraint above is not yet a
-> database constraint. It depends on `ACTION_CEILING` and `has_tested_undo`, which resolve through
-> 010's remediation catalogue — not implemented in this repository yet. The table and its FK to
-> `policy_action` exist; the ceiling check lands with `ceiling.ts` and 010's catalogue in a later
-> batch. Until then nothing publishes a row through this table, so the gap has no live effect.
+> Implementation note (T035): the `level` check is a `BEFORE INSERT OR UPDATE` trigger
+> (`policy_autonomy_grant_ceiling`, migration `20261003060000_autonomy_grant_ceiling`), not a
+> plain `CHECK` — Postgres `CHECK` constraints cannot reference another table, and the ceiling
+> depends on `policy_action.action_class`, resolved via `action_key`. The trigger mirrors
+> `ceiling.ts` for the three classes this repository can attest today (`read_only`, `code_change`,
+> `repository_write`); `reversible_remediation` has no level in the trigger at all, because
+> `has_tested_undo` has no data source until 010's catalogue lands — more conservative than
+> `ceiling.ts`'s own answer once attested, never less. `gate-ceiling` (T038) keeps the two
+> mechanisms' literals from drifting apart.
 
 ## policy.autonomy_epoch
 
@@ -221,8 +225,7 @@ budget scope:     within ──soft threshold crossed──▶ degraded(step n),
   the edit to the ceiling is diff-enforced by the same gate (FR-008a, R-15, 011 FR-021c).
 - No `autonomy_grant` exists with `level > ACTION_CEILING(action_class, has_tested_undo)`, and no
   evaluation returns an outcome above that clamp even if such a row were written (FR-008, SC-004)
-  — DB constraint not yet implemented, see implementation note under `policy.autonomy_grant`
-  (batch 1, deferred to T035).
+  — see the implementation note under `policy.autonomy_grant` (T035).
 - No `autonomy_grant` of class `reversible_remediation` exists for an action whose catalogue undo is
   unattested, and no evaluation grants such an action a level — the ceiling has none (C-18).
 - No grant exists for an action of class `merge`, `forward_deploy` or `irreversible` in this

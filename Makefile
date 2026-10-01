@@ -8,7 +8,7 @@
 # parallel make, but a single recipe's command lines always run in sequence.
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
-	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
+	contracts-check gate-data-model gate-isolation gate-undo gate-ceiling gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
 	gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
@@ -42,6 +42,7 @@ ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) gate-data-model
 	$(MAKE) gate-isolation
 	$(MAKE) gate-undo
+	$(MAKE) gate-ceiling
 	$(MAKE) gate-evidence
 	$(MAKE) gate-architecture-agnostic
 	$(MAKE) gate-graph-confirm-capability
@@ -88,6 +89,9 @@ gate-isolation: ## Every HTTP endpoint has a tenant-isolation test (FR-013)
 
 gate-undo: ## Every reversible-action catalogue entry has a passing undo test (FR-014)
 	pnpm run gate-undo
+
+gate-ceiling: ## ceiling.ts and the autonomy_grant DB trigger agree on the ceiling per action class (002 SC-004, C-18)
+	pnpm run gate-ceiling
 
 gate-evidence: ## No persisted conclusion type has a nullable evidence reference (001 FR-009)
 	pnpm run gate-evidence

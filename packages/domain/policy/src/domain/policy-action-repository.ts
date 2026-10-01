@@ -53,6 +53,21 @@ export const SEED_POLICY_ACTIONS: readonly Omit<PolicyAction, 'introducedAt'>[] 
     mutating: false,
     owningSpec: '002',
   },
+  // Registered up front (T039), applying batch 9 I1's own fix before `check:policy-coverage`
+  // would otherwise have to find the gap: grant/revoke are admin/config changes, never a decision
+  // the ceiling itself gates, so `mutating: false` exactly as `policy.publish_ruleset` above.
+  {
+    actionKey: 'policy.grant_autonomy',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.revoke_autonomy',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
 ];
 
 /**

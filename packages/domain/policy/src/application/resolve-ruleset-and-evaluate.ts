@@ -1,8 +1,10 @@
 import { HealerError, scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../domain/decision-input.js';
 import { evaluate, type Decision, type EvaluationTrace } from '../domain/evaluate.js';
+import type { ReadOnlyAutonomyGrantRepository } from '../domain/autonomy-grant-repository.js';
 import type { PolicyActionRepository } from '../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../domain/policy-ruleset-repository.js';
+import { resolveAutonomyLevel } from '../domain/resolve-autonomy-level.js';
 import type { Rule } from '../domain/rule.js';
 
 /** No `policy_ruleset` has ever been published for this tenant — `evaluate()` needs one
@@ -49,6 +51,7 @@ export class UnregisteredActionError extends HealerError {
 export interface ResolveRulesetAndEvaluateRepos {
   readonly rulesets: ReadOnlyPolicyRulesetRepository;
   readonly actions: PolicyActionRepository;
+  readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
 }
 
 /**
@@ -90,9 +93,27 @@ export async function resolveRulesetAndEvaluate(
   const action = await repos.actions.findByKey(decisionInput.action.actionKey);
   if (action === null) throw new UnregisteredActionError(decisionInput.action.actionKey);
 
+  // T039/T040/T041/T042: `autonomy.level` gets the same treatment as `actionClass` below, for the
+  // same reason — a caller trusted to state its own level could simply claim L5 and the grant
+  // table would never be consulted, exactly the bypass batch 9 closed for the action class.
+  // `resolveAutonomyLevel` (pure) narrows by `target.componentId`/`environment`/`issueKind`
+  // (quickstart 11: a grant scoped to component A does not authorize component B). This repository
+  // read happens on every call, never cached across a wait, which is what makes a revocation
+  // visible at the very next evaluation with no push mechanism involved (R-07).
+  const activeGrants = await repos.autonomyGrants.findActive(
+    scope(context, { actionKey: decisionInput.action.actionKey }),
+  );
+  const resolvedLevel = resolveAutonomyLevel(activeGrants, {
+    actionKey: decisionInput.action.actionKey,
+    componentId: decisionInput.target.componentId,
+    environment: decisionInput.target.environment,
+    issueKind: decisionInput.target.issueKind,
+  });
+
   const correctedInput: DecisionInput = {
     ...decisionInput,
     action: { ...decisionInput.action, actionClass: action.actionClass },
+    autonomy: { level: resolvedLevel },
   };
 
   const latest = await repos.rulesets.findLatest(scope(context, {}));

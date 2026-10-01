@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { TenantContext } from '@healer/shared';
 import type { ActionClass } from '../../domain/action-class.js';
 import type {
+  AutonomyGrant,
+  ReadOnlyAutonomyGrantRepository,
+} from '../../domain/autonomy-grant-repository.js';
+import type {
   PolicyAction,
   PolicyActionRepository,
 } from '../../domain/policy-action-repository.js';
@@ -98,6 +102,23 @@ class FakeActionRepo implements PolicyActionRepository {
   }
 }
 
+/** Resolves to level 2 for `change.open_pull_request`, matching `buildDecisionInput`'s own
+ *  fixture default `autonomy: { level: 2 }` (T039 made `autonomyGrants` a required dependency,
+ *  the same move batch 9 made for `actions`). */
+class FakeAutonomyGrantRepo implements ReadOnlyAutonomyGrantRepository {
+  async findActive(): Promise<readonly AutonomyGrant[]> {
+    return [
+      {
+        id: 'grant-1',
+        actionKey: 'change.open_pull_request',
+        level: 2,
+        grantedBy: 'pavlo',
+        grantedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    ];
+  }
+}
+
 describe('ExplainDecision — structural read-only guarantee (T026, R-08, quickstart 32)', () => {
   it('ReadOnlyPolicyRulesetRepository, one of the two types ExplainDecisionRepos names, has no write-shaped method', () => {
     const repo = new ReadOnlyFakeRulesetRepo(published());
@@ -121,6 +142,7 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
     const repos: ExplainDecisionRepos = {
       rulesets: new ReadOnlyFakeRulesetRepo(published()),
       actions: new FakeActionRepo(),
+      autonomyGrants: new FakeAutonomyGrantRepo(),
     };
     // @ts-expect-error — `rulesets` is `ReadOnlyPolicyRulesetRepository`; `publish` is not a
     // member of that type. If this stops being a type error (e.g. someone widens
@@ -135,7 +157,11 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
 describe('explainDecision (T024)', () => {
   it('returns the decision and trace for the current published ruleset, persisting nothing observable to this handler', async () => {
     const result = await explainDecision(
-      { rulesets: new ReadOnlyFakeRulesetRepo(published()), actions: new FakeActionRepo() },
+      {
+        rulesets: new ReadOnlyFakeRulesetRepo(published()),
+        actions: new FakeActionRepo(),
+        autonomyGrants: new FakeAutonomyGrantRepo(),
+      },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
     );
@@ -147,7 +173,11 @@ describe('explainDecision (T024)', () => {
   it('refuses when no ruleset has ever been published for the tenant', async () => {
     await expect(
       explainDecision(
-        { rulesets: new ReadOnlyFakeRulesetRepo(null), actions: new FakeActionRepo() },
+        {
+          rulesets: new ReadOnlyFakeRulesetRepo(null),
+          actions: new FakeActionRepo(),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
+        },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
       ),
@@ -173,7 +203,11 @@ describe('explainDecision (T024)', () => {
     });
     const actions = new FakeActionRepo(new Map([['merge.something', 'merge']]));
     const result = await explainDecision(
-      { rulesets: new ReadOnlyFakeRulesetRepo(rulesetMatchingRealClass), actions },
+      {
+        rulesets: new ReadOnlyFakeRulesetRepo(rulesetMatchingRealClass),
+        actions,
+        autonomyGrants: new FakeAutonomyGrantRepo(),
+      },
       CONTEXT,
       {
         decisionInput: buildDecisionInput({
@@ -190,6 +224,7 @@ describe('explainDecision (T024)', () => {
         {
           rulesets: new ReadOnlyFakeRulesetRepo(published()),
           actions: new FakeActionRepo(new Map()),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
         },
         CONTEXT,
         {
