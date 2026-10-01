@@ -42,7 +42,16 @@ export type EvidenceExcerpt =
 export type Evidence = EvidenceExcerpt & {
   readonly id: string;
   readonly tenantId: string;
-  readonly issueId: string;
+  /**
+   * Null only for the two discovery evidence types (`graph_fact`, `collection_gap` when written
+   * by 004's discovery step) — 004 Phase 3 dropped the column's NOT NULL for exactly those two
+   * types (migration `20261004000000_t018_t035_discovery_evidence_and_draft_checks`); every other
+   * evidence type keeps an issue. `NewEvidence.issueId` stays `string`: 001's own recording path
+   * (`recordEvidence`) always has an issue — only discovery's direct-transaction write path (which
+   * bypasses this package's repository, see `packages/domain/architecture/src/infrastructure/`)
+   * produces a null one.
+   */
+  readonly issueId: string | null;
   readonly type: EvidenceType;
   readonly sourceSystem: string;
   readonly sourceRef: string;
