@@ -27,6 +27,7 @@ import {
 } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
+import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 
 /**
  * `GET /autonomy/grants`, `POST /autonomy/grants`, `DELETE /autonomy/grants/{grantId}` (T046,
@@ -79,6 +80,7 @@ describe('/autonomy/grants (002 T046)', () => {
       rulesets,
       decisions,
       actions,
+      new PrismaRunnerRegistrationRepository(prisma),
       autonomyGrants,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });

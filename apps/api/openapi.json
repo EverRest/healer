@@ -348,6 +348,21 @@
         "tags": ["PolicyEvaluation"]
       }
     },
+    "/api/v1/runners/heartbeat": {
+      "post": {
+        "operationId": "RunnersController_heartbeat",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["Runners"]
+      }
+    },
     "/api/v1/autonomy/grants": {
       "get": {
         "operationId": "AutonomyGrantsController_list",

@@ -15,6 +15,7 @@ import {
 } from '@healer/domain-issues';
 import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer/domain-evidence';
 import {
+  PrismaAutonomyGrantRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -133,6 +134,7 @@ describe('ingestion load and downstream-failure recovery (001 T026, SC-006)', ()
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
+      new PrismaAutonomyGrantRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

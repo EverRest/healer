@@ -95,6 +95,48 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.48.0 — 2026-10-01
+
+**002 policy-and-autonomy phase 4 (T034–T047)**: US2 — autonomy is granted in increments the
+customer controls, and the ceiling it is granted under is un-exceedable by construction.
+
+- The ceiling is enforced twice, independently (R-05): `GrantAutonomy` refuses a level above
+  `ACTION_CEILING` before the row is ever written (`422 CEILING_EXCEEDED`), and a new `BEFORE
+  INSERT OR UPDATE` trigger on `autonomy_grant` refuses it a second way for a row written around
+  the command entirely — not a plain `CHECK` constraint, since Postgres `CHECK` cannot reference
+  `policy_action`, which the ceiling depends on via `action_class`. `evaluate()`'s own clamp
+  (already built in phase 2) is the structural backstop proven even against the one documented
+  `healer.privileged_write` bypass. `reversible_remediation` earns no level at all today: no
+  attestation source exists yet (010's catalogue isn't built), so the trigger and `GrantAutonomy`
+  both read `hasTestedUndo` as `false`. `gate-ceiling` (static, no database) keeps `ceiling.ts`
+  and the trigger's literals from drifting apart; `check:ceiling` is the live-database
+  reconciliation counterpart.
+- `autonomy.level` is now resolved from real `autonomy_grant` rows, scoped by component,
+  environment and issue kind, and never trusted from the caller — the same move phase 3 made for
+  `action.actionClass`. The grant table is re-read on every evaluation, never cached across a
+  wait, which is what makes a revocation reach the very next guarded step with no push mechanism.
+- `autonomy_epoch` gained a write side: `RevokeAutonomy` bumps it in the same transaction as the
+  grant revocation. `checkAutonomyEpoch` instantiates the `STALE_AUTONOMY_EPOCH` error (reserved
+  since phase 1, unused until now) for phase 7's `ResolveApproval` to call at redemption.
+  `sweepRevokedApprovals` resolves stale pending approvals to `revoked` and invalidates the
+  decision they were issued for, atomically — the full approval lifecycle (`RequestApproval`/
+  `ResolveApproval`/`ExpireApproval`) stays phase 7; callback delivery is a port with no concrete
+  implementation yet, since no Prisma-backed callback delivery or sweep scheduler exists anywhere
+  in this repository (the same gap 001's staleness sweep already has, recorded there too).
+- `GET/POST /autonomy/grants`, `DELETE /autonomy/grants/{grantId}`, with full tenant-isolation
+  coverage. Found and fixed before merge: `AutonomyGrantsController` and the dry-run controller
+  needed each other's DI token, which made the two controller files circularly import each
+  other — invisible to `pnpm run typecheck`, and NestJS's bootstrap failure on a real cycle
+  crashes the whole worker process with a native stack trace rather than a catchable error, so
+  only an e2e test actually booting the app caught it.
+- Rebased onto master as 012 phase 6 (runner build/diagnostics/heartbeat) landed in parallel:
+  `createApiModule`'s two new required parameters (`runnerRegistrations`, `autonomyGrants`)
+  needed combining by hand across `main.ts`/`openapi.ts` and every e2e test file that boots the
+  real app — the same class of gap 012's own 0.47.0 entry already found and fixed once for a
+  stale call site invisible to `typecheck` (root-level `*.e2e.test.ts` files fall outside this
+  app's `tsconfig.json` `include` pattern); checked every call site by hand this time rather than
+  waiting for a full e2e run to find the one that was missed.
+
 ## 0.47.0 — 2026-10-01
 
 **012 phase 6 (T042, T045, T048–T051)**: the runner is a product we ship, and we debug it blind —

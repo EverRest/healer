@@ -33,6 +33,7 @@ import {
 } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
+import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 
 /**
  * The six `/policy/*` endpoints (002 T027–T029, T032) over real HTTP against a real Postgres:
@@ -160,6 +161,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       rulesets,
       decisions,
       actions,
+      new PrismaRunnerRegistrationRepository(prisma),
       autonomyGrants,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
