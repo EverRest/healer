@@ -1886,6 +1886,7 @@ clean up blind). Retried standalone once more: 59.6s total, 43.7s for the heavy 
 001's own documented "~55s alone" baseline almost exactly. Confirmed transient, not a regression —
 every other test in the full suite, including everything 004 added, passed both full runs.
 
+<<<<<<< HEAD
 ## 004 Phase 3 — discovery run and draft (A1)
 
 Sub-batch A1: T018-T021, T023, T032, and the write path of T035. Judgment calls the plan told me to
@@ -1966,3 +1967,101 @@ record, plus a few I made myself.
   are excluded by *type* — `ProposedPayload` has no field for any of them — so there is nothing a
   mutation could remove; `headSha`'s exclusion is likewise now structural (see above), not a runtime
   branch to mutate.
+
+## 004 Phase 3 — adapter collection (A2)
+
+Scope: only `packages/integrations/**` — the three `collect()` skeletons replaced with real
+collection logic over injected read-only ports (`GitlabProjectReader`, `KubernetesReader`,
+`TraceReader`), each adapter now built by a factory (`createGitlabAdapter(reader)`, etc.), version
+bumped to `0.2.0`. No network client, no credentials, no config — per the coordinator's design, the
+runner-side HTTP implementation of each port is a later batch's job; nothing here assumes an
+implementation beyond the port's three-to-four-method shape.
+
+- **No new dependency, but a new workspace edge.** `packages/integrations` now depends on
+  `@healer/boundary-contract` directly (added to `package.json`/`tsconfig.json` references), not
+  only transitively through `@healer/domain-architecture`'s re-exports. Needed because the T030/T031
+  tests call `validateEgress` directly. This is a workspace-internal edge already used elsewhere in
+  the monorepo (`domain-architecture` itself depends on it) — not an external package, so no ADR.
+- **`layer`/`provenance` are stamped from one constant per adapter, reused in two places.** Each
+  adapter file defines `<ADAPTER>_LAYER`/`<ADAPTER>_PROVENANCE` once and uses the same binding both
+  for the frozen adapter object's fields and for every `dependency_observation` it emits — so the
+  two can't structurally diverge (AGENTS.md: prefer unrepresentable over checked, rather than a
+  cross-check that could be added and later forgotten). Mutation-checked: hardcoding a different
+  literal for the GitLab edge's `layer` field made the paired test fail for the right reason
+  (`expected false to be true` on the layer/provenance assertion); restored byte-for-byte.
+- **GitLab `componentType` heuristic, exact precedence** (graph-contract.md §3 and the batch prompt
+  list the four rules but not their order): worker mention (name or directory) checked first, then
+  frontend/web mention, then a `packages/`/`libs/` directory prefix, with `apps/*` (and anything
+  else) falling through to `service` as the default rather than an explicit first check — an
+  explicit-first `apps/*` rule would have misclassified `apps/worker` and `apps/frontend` as
+  `service` before the more specific rules ever ran. Adapter-local per FR-020; not escalated.
+- **A manifest with no `name` field is silently not a component** — distinct from a JSON-parse
+  failure (`collection_gap`, T032). Not specified either way by the plan; "no name" is a legitimate
+  package.json (e.g. a private tooling shim) rather than damage, so it produces nothing rather than
+  a gap. Only `JSON.parse` throwing, or the parsed value not being an object, is treated as
+  unparsable.
+- **Workspace-internal dependency matching is on the manifest's raw declared name** (e.g.
+  `@acme/shared`, as it appears as a key under `dependencies`/`devDependencies`), not on the
+  unscoped natural key. Two differently-scoped packages that happen to share an unscoped name would
+  not be merged into one dependency edge by this matching — deliberately naive, matching the plan's
+  own "cross-source identity is by exact natural key — naive; alias/collision handling is T052" note
+  for the *cross-adapter* case; this is the same caution applied one level down, inside one adapter.
+- **`component_candidate.name` is set equal to its `naturalKey`** (the unscoped package name), not
+  the raw scoped manifest name. graph-contract.md §3 lists both fields but the plan's "naturalKey =
+  package name without npm scope" sentence only defines `naturalKey`; with no separate heuristic for
+  a human-readable `name`, using the same unscoped string for both avoids inventing one. Revisit if
+  a later batch wants the scope preserved in `name` for display.
+- **OTel window default.** `DiscoveryScope` (domain/architecture) carries no `windowSeconds` field,
+  so "windowSeconds from the scope/adapter default" resolves to a fixed adapter constant
+  (`DEFAULT_WINDOW_SECONDS = 86_400`, one ponytail comment naming the upgrade path) with the
+  factory's second parameter (`createOtelAdapter(reader, windowSeconds?)`) as the override seam for
+  a future caller, rather than threading a new field through the shared `DiscoveryScope` type for one
+  adapter's use.
+- **`characteristics` is emitted as `[]`** for every GitLab `component_candidate` — no heuristic for
+  populating it was specified in this batch, and inventing one wasn't asked for (YAGNI).
+- **TDD note.** Given the natural-key cross-referencing between GitLab's component/dependency
+  emission and the shared design-partner fixture, tests and implementation were built together
+  rather than strictly red-before-green per adapter (a fixture-shaped test written before the
+  fixture existed would have been testing against nothing). Compensated with the two mutation-checks
+  the batch asked for — adapter-constant stamping (above) and an annotation leak (below) — both
+  confirmed red for the stated reason, then restored byte-for-byte, as the non-vacuousness proof TDD
+  would otherwise have provided.
+- **Mutation-check: annotation leak.** Temporarily made the Kubernetes adapter's
+  `deployment_unit_candidate.environment` include the workload's annotation value
+  (`` `${namespace}:${annotations['design-partner.example.com/note']}` ``). Three tests went red for
+  the right reason: the dedicated "never reads an annotation value into any emitted fact" test, and
+  — as a bonus, unplanned — both the T031 injection-equivalence assertions (deep-equal facts,
+  marker-absence in the serialized output), since the leaked annotation value differs between the
+  fixture's three workloads and changes the emitted shape. Restored byte-for-byte; confirmed no
+  mutation text remained via `grep`.
+- **Design-partner fixture markers are exported, not inlined per test.** `DESIGN_PARTNER_FILE_MARKER`,
+  `DESIGN_PARTNER_COMMIT_MESSAGE`, `DESIGN_PARTNER_ANNOTATION_VALUES` (one per workload, distinct
+  strings rather than a shared "benign") live in `test-support/design-partner.ts` so T030's
+  absence-check and a later sub-batch's e2e tests reference the same literal the fixture actually
+  emits, rather than a second copy that could drift.
+
+## 004 Phase 3 — two coordinator calls, ruled on by Pavlo mid-batch
+
+- **Discovery evidence is issue-less and does not expire — approved.** `evidence.issue_id` is
+  nullable only for `graph_fact`/`collection_gap` (CHECK-enforced, migration
+  `20261004000000_t018_t035_discovery_evidence_and_draft_checks`), and discovery evidence carries a
+  far-future `expires_at`. Reason: 001's retention sweep deletes expired evidence nothing cites
+  through `evidence_link`, and a graph row's `observation_ref` is not an `evidence_link`, so an
+  expiring graph fact would silently orphan every node, edge and draft item pointing at it. Both
+  001's and 004's `data-model.md` record the change, since the table is 001's.
+- **T029: a contradiction of a confirmed element reaches a human as a draft item only — approved.**
+  Discovery has no write path to `graph_node`/`graph_edge`, so the confirmed element stands by
+  construction (and T029's test proves it byte-for-byte); the contradiction is a `proposed`
+  `mark_removed`/`add_edge` item whose `current` shows the confirmed claim. No `drift_finding` is
+  raised: its `issue_id` is NOT NULL and raising a `knowledge_drift` issue is T073/T074 (Phase 7, out
+  of scope). T029 stays unticked, pointing at Phase 7.
+
+## Decisions waiting on Pavlo — 004 Phase 3 (index; detail in the named sections above)
+
+1. **Once Phase 7 exists, does a contradiction of a confirmed element go to drift *instead of* the
+   draft, or *as well as*?** FR-012/FR-017 read as "instead" (a contradiction "MUST be raised as
+   drift"); R-07 and quickstart 11 read as "as well" (re-discovery is add/modify/remove ops against
+   confirmed state). Today: draft only (see the section above).
+2. **Does an `absence` observation deserve its own boundary-contract shape?** A1's `mark_removed`
+   items carry a synthetic `absence` `graph_fact` row the control plane writes itself (see "004 Phase
+   3 — discovery run and draft (A1)") — not one of the four validated shapes.
