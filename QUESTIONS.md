@@ -2585,3 +2585,76 @@ Docker containers, 7h/30h old, likely contributing background load; left them al
 clean up blind). Retried standalone once more: 59.6s total, 43.7s for the heavy test itself — matches
 001's own documented "~55s alone" baseline almost exactly. Confirmed transient, not a regression —
 every other test in the full suite, including everything 004 added, passed both full runs.
+
+## 002 Phase 4 (T034-T047) — autonomy grants, ceiling, revocation, epoch, sweep
+
+Implemented on `worktree-002-policy`, building on Phases 1-3 (already on master, VERSION 0.46.0).
+Not yet committed — awaiting explicit go-ahead per standing instructions (never commit without
+being asked). Judgment calls made along the way, flagged rather than blocking on them:
+
+- **T035's "check constraint" is a trigger, not a CHECK.** Postgres `CHECK` constraints cannot
+  reference another table, and the ceiling depends on `policy_action.action_class`, resolved via
+  `autonomy_grant.action_key` — the same substitute the T003 append-only trigger already uses for
+  a constraint plain SQL can't express. New migration `20261003060000_autonomy_grant_ceiling`
+  (the existing `policy_core` migration is committed/shared and must never be edited per
+  `prisma-migrations.md`). Respects the same `healer.privileged_write` bypass every other
+  append-only trigger does, deliberately — quickstart 9 needs a documented way to "write an
+  over-ceiling row anyway" to prove the second mechanism (`evaluate()`'s clamp) still holds.
+
+- **`reversible_remediation` grants are refused unconditionally today, at every level including
+  0.** No attestation source exists (010's catalogue isn't built), and `hasTestedUndo` has no
+  honest answer other than `false` — the same reading `policy-evaluation.controller.ts`'s
+  `GET /policy/actions` already gives. This is enforced three ways that all had to agree: the
+  command (`grantAutonomy` calls `ACTION_CEILING(class, false)`), the DB trigger (no branch for
+  that class at all), and `gate-ceiling` (deliberately excludes that class from its drift check,
+  since the trigger is *more* conservative than `ceiling.ts`'s attested answer, not a copy of it —
+  comparing them would fail the gate for a difference that's correct by design).
+
+- **`autonomy.level` is now resolved from real grants, never trusted from the caller** — the same
+  move batch 9 made for `action.actionClass` (`resolveRulesetAndEvaluate` now takes
+  `autonomyGrants: ReadOnlyAutonomyGrantRepository` and overwrites `decisionInput.autonomy.level`
+  before `evaluate()` runs). This is a required dependency on `EvaluateAndBindRepos` and
+  `ExplainDecisionRepos`, same as `actions` — every existing test fixture needed a
+  `FakeAutonomyGrantRepo` resolving to the fixture's own default level (2), so no existing test's
+  *outcome* changed, only its repo list grew by one entry. Not a corner cut: leaving
+  `autonomy.level` caller-trusted would be exactly the bypass batch 9 closed for `actionClass`.
+
+- **T044's "redeem" has no command to attach to.** `ResolveApproval` is Phase 7 (T074), out of
+  scope. Added `checkAutonomyEpoch` (`domain/check-autonomy-epoch.ts`) — the small, reusable
+  redemption-time check `STALE_AUTONOMY_EPOCH` (already reserved in `@healer/shared`'s
+  `ErrorCode` union, unused until now) exists for. Phase 7 calls this directly rather than
+  reinventing the comparison; T044's own test exercises it against a hand-built
+  `approval_request` row (the table exists from Phase 1; the lifecycle commands don't yet).
+
+- **T045's sweep does not deliver a real callback.** `packages/workflow/src/callbacks.ts` is pure
+  domain logic with no Prisma-backed delivery anywhere in this repo yet, and no scheduler exists
+  to run any sweep periodically (001's staleness sweep has the identical, already-flagged gap).
+  `sweepRevokedApprovals` takes an `ApprovalCallbackPort` (defined here, in `domain/`) with no
+  concrete production implementation shipped in this batch — a caller wires a real one once 012
+  builds the mechanism. What the sweep *does* guarantee now, atomically: the `approval_request`
+  moves to `revoked` and the `policy_decision` it was issued for gets
+  `invalidated_reason = 'epoch_bump'`, in one transaction, directly via `PrismaApprovalRequestRepository`
+  (mirrors `PrismaAutonomyGrantRepository.revoke()` touching `autonomy_grant` + `autonomy_epoch`
+  together rather than round-tripping through a second repository's interface).
+
+- **`gate-ceiling` is two different things wearing one name** (make-targets.md's own phrasing):
+  the SC-004 *data* check (this batch, T038) and the FR-008a *diff* check (Phase 9, T086/T087,
+  out of scope). Built the data half as a static, DB-free comparison between `ceiling.ts`'s
+  constants and the T035 trigger's hardcoded `CASE` — not a live query against `autonomy_grant`,
+  because a live query is exactly what `check:ceiling` (continuous reconciliation,
+  `scripts/checks/ceiling.mjs`, same convention as `check:policy-coverage`) already owns, and
+  `make ci`'s other gates (`gate-data-model`, `db-check`) are all DB-free by the same convention
+  (the live-DB half of schema verification lives in an e2e test, not a Makefile gate). Extend this
+  gate with the diff check when Phase 9 lands, don't duplicate it.
+
+- **`AutonomyGrantsController` and `PolicyEvaluationController` had a circular import** (each
+  needed the other's DI token). Fixed by moving `AUTONOMY_GRANT_REPOSITORY` into the shared
+  `policy-http.ts` (which every `/policy/*`/`/autonomy/*` controller already imports from, never
+  the reverse) — found because NestJS's bootstrap failure on a real cycle crashes the whole
+  worker process with a native stack trace instead of a catchable error, which only the e2e test
+  actually booting the app (not a unit test) could have caught.
+
+- **`POST /autonomy/grants` isolation test carries its marker in `environment`** — the only
+  free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
+  for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
+  marker in).

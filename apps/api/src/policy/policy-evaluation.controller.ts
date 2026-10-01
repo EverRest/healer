@@ -15,8 +15,9 @@ import {
   UnregisteredActionError,
   type PolicyActionRepository,
   type PolicyRulesetRepository,
+  type ReadOnlyAutonomyGrantRepository,
 } from '@healer/domain-policy';
-import { resolveTenant } from './policy-http.js';
+import { AUTONOMY_GRANT_REPOSITORY, resolveTenant } from './policy-http.js';
 import { parseDryRunRequest } from './dry-run.dto.js';
 import { POLICY_RULESET_REPOSITORY } from './policy-rulesets.controller.js';
 
@@ -35,6 +36,8 @@ export class PolicyEvaluationController {
   constructor(
     @Inject(POLICY_RULESET_REPOSITORY) private readonly rulesets: PolicyRulesetRepository,
     @Inject(POLICY_ACTION_REPOSITORY) private readonly actions: PolicyActionRepository,
+    @Inject(AUTONOMY_GRANT_REPOSITORY)
+    private readonly autonomyGrants: ReadOnlyAutonomyGrantRepository,
   ) {}
 
   @Post('dry-run')
@@ -53,7 +56,7 @@ export class PolicyEvaluationController {
 
     try {
       const { decision, trace } = await explainDecision(
-        { rulesets: this.rulesets, actions: this.actions },
+        { rulesets: this.rulesets, actions: this.actions, autonomyGrants: this.autonomyGrants },
         context,
         { decisionInput: parsed.data },
       );

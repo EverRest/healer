@@ -16,6 +16,11 @@ export function resolveTenant(tenantIdHeader: string | undefined): TenantContext
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Defined here, not in `autonomy-grants.controller.ts`, so `policy-evaluation.controller.ts`
+ *  (which reads grants too, for dry-run's autonomy resolution) can depend on the token without a
+ *  circular import between the two controller files. */
+export const AUTONOMY_GRANT_REPOSITORY = Symbol('AUTONOMY_GRANT_REPOSITORY');
+
 export const MAX_ACTOR_LENGTH = 128;
 
 /** `X-Actor-Id` — same caller-asserted stub convention as `IssuesController.close` (001 T057). */

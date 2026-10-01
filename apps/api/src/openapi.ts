@@ -10,6 +10,7 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  AutonomyGrantRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
   PolicyRulesetRepository,
@@ -75,6 +76,13 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented for contract generation')),
   findByName: () => Promise.resolve(null),
 };
+const noopAutonomyGrants: AutonomyGrantRepository = {
+  findActive: () => Promise.resolve([]),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  create: () => Promise.reject(new Error('not implemented for contract generation')),
+  revoke: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -102,6 +110,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopPolicyDecisions,
     noopPolicyActions,
     noopRunnerRegistrations,
+    noopAutonomyGrants,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

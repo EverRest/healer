@@ -10,6 +10,7 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  AutonomyGrantRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
   PolicyRulesetRepository,
@@ -68,6 +69,13 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
 };
+const noopAutonomyGrants: AutonomyGrantRepository = {
+  findActive: () => Promise.resolve([]),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  create: () => Promise.reject(new Error('not implemented in this test')),
+  revoke: () => Promise.reject(new Error('not implemented in this test')),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -99,6 +107,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopPolicyDecisions,
       noopPolicyActions,
       noopRunnerRegistrations,
+      noopAutonomyGrants,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

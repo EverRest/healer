@@ -22,9 +22,11 @@ import {
   type EvidenceRepository,
 } from '@healer/domain-evidence';
 import {
+  PrismaAutonomyGrantRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type AutonomyGrantRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
@@ -59,6 +61,10 @@ import {
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
+import {
+  AUTONOMY_GRANT_REPOSITORY,
+  AutonomyGrantsController,
+} from './policy/autonomy-grants.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -106,6 +112,7 @@ export function createApiModule(
   policyDecisions: PolicyDecisionRepository,
   policyActions: PolicyActionRepository,
   runnerRegistrations: RunnerRegistrationRepository,
+  autonomyGrants: AutonomyGrantRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -116,6 +123,7 @@ export function createApiModule(
       PolicyDecisionsController,
       PolicyEvaluationController,
       RunnersController,
+      AutonomyGrantsController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -130,6 +138,7 @@ export function createApiModule(
       { provide: POLICY_DECISION_REPOSITORY, useValue: policyDecisions },
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
       { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
+      { provide: AUTONOMY_GRANT_REPOSITORY, useValue: autonomyGrants },
     ],
   })
   class ApiModule {}
@@ -160,6 +169,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyDecisionRepository(prisma),
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
+    new PrismaAutonomyGrantRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

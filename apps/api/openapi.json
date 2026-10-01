@@ -348,9 +348,9 @@
         "tags": ["PolicyEvaluation"]
       }
     },
-    "/api/v1/runners/heartbeat": {
-      "post": {
-        "operationId": "RunnersController_heartbeat",
+    "/api/v1/autonomy/grants": {
+      "get": {
+        "operationId": "AutonomyGrantsController_list",
         "parameters": [
           {
             "name": "x-tenant-id",
@@ -360,7 +360,59 @@
           }
         ],
         "responses": { "200": { "description": "" } },
-        "tags": ["Runners"]
+        "tags": ["AutonomyGrants"]
+      },
+      "post": {
+        "operationId": "AutonomyGrantsController_grant",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-actor-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "201": { "description": "" } },
+        "tags": ["AutonomyGrants"]
+      }
+    },
+    "/api/v1/autonomy/grants/{grantId}": {
+      "delete": {
+        "operationId": "AutonomyGrantsController_revoke",
+        "parameters": [
+          {
+            "name": "grantId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-actor-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["AutonomyGrants"]
       }
     }
   },
