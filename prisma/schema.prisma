@@ -612,7 +612,10 @@ model NormalisationRuleset {
 model Evidence {
   id               String       @id @db.Uuid
   tenantId         String       @map("tenant_id") @db.Uuid
-  issueId          String       @map("issue_id") @db.Uuid
+  /// Null only for `graph_fact`/`collection_gap` rows written by 004's discovery step — see the
+  /// CHECK added in `20261004000000_t018_t035_discovery_evidence_and_draft_checks` (Prisma cannot
+  /// express the CHECK). Every other type keeps a required issue.
+  issueId          String?      @map("issue_id") @db.Uuid
   type             EvidenceType
   sourceSystem     String       @map("source_system")
   sourceRef        String       @map("source_ref")
@@ -640,7 +643,7 @@ model Evidence {
   // evidence under one tenant pointing at another tenant's issue. `onDelete: Restrict` does not
   // block the retention/tenant-deletion paths (T052/T053): both go through the
   // `healer.privileged_write` bypass already, the same one the append-only triggers check.
-  issue Issue @relation(fields: [issueId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  issue Issue? @relation(fields: [issueId, tenantId], references: [id, tenantId], onDelete: Restrict)
 
   @@unique([id, tenantId])
   @@index([tenantId, issueId, observedAt])
@@ -1657,7 +1660,11 @@ model DiscoveryDraft {
   @@schema("architecture")
 }
 
-/// The draft **is** the diff (R-07): an operation against confirmed state at `baseVersion`.
+/// The draft **is** the diff (R-07): an operation against confirmed state at `baseVersion`. Three
+/// CHECK constraints from `20261004000000_t018_t035_discovery_evidence_and_draft_checks` (Prisma
+/// cannot express CHECK): every non-human-provenance item names its `observation_ref`; `state`
+/// being decided (`confirmed`/`rejected`) is equivalent to `decidedBy`/`decidedAt` being set; and
+/// every op but `add_node`/`add_edge` names a target.
 model DraftItem {
   id             String          @id @db.Uuid
   tenantId       String          @map("tenant_id") @db.Uuid

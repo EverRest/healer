@@ -110,7 +110,7 @@ can never name a version that does not exist.
 |-------|------|-------|
 | id | uuid | PK |
 | tenant_id | uuid | |
-| issue_id | uuid | |
+| issue_id | uuid? | **Nullable since 004 Phase 3** (migration `20261004000000_t018_t035_discovery_evidence_and_draft_checks`) — `CHECK (issue_id IS NOT NULL OR type IN ('graph_fact', 'collection_gap'))`. 001 still owns this table; 004 changed it because a `graph_fact` and a non-collected source's `collection_gap` row describe what discovery observed about the architecture, not a claim about an issue — there is no issue to point at. Every other type keeps a required issue |
 | type | enum | `error_signature` · `trace_shape` · `metric_delta` · `deploy_ref` · `commit_ref` · `test_result` · `file_path` · `tool_output_summary` · `document_excerpt` · `collection_gap` · `budget_degradation` (002 FR-012) · `graph_fact` (004) |
 | source_system | text | e.g. `loki`, `gitlab`, `sandbox` |
 | source_ref | text | identifier or URL in that system |
