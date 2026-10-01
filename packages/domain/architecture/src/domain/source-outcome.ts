@@ -17,6 +17,11 @@ export type CollectionOutcome =
       readonly gaps: readonly CollectionGap[];
       /** The item cap (T021 "bounded") truncated this source's results. */
       readonly truncated: boolean;
+      /** T030: at least one item the adapter returned failed `validateEgress` and was dropped
+       *  before transmission — plan "Ingestion rules": "a failing item is not sent (status
+       *  `partial`, `schema_rejected`)" names this outcome for the egress side explicitly, not
+       *  only for ingestion's independent re-check (`downgradeForRejectedItems` below). */
+      readonly anyEgressRejected: boolean;
     };
 
 export interface SourceOutcome {
@@ -38,6 +43,7 @@ export function deriveProvisionalSourceOutcome(outcome: CollectionOutcome): Sour
     case 'timed_out':
       return { status: 'timed_out', reasonCode: 'timeout' };
     case 'completed':
+      if (outcome.anyEgressRejected) return { status: 'partial', reasonCode: 'schema_rejected' };
       if (outcome.truncated) return { status: 'partial', reasonCode: null };
       if (outcome.gaps.length > 0) return { status: 'partial', reasonCode: null };
       if (outcome.items.length === 0) return { status: 'collected', reasonCode: 'empty_result' };

@@ -30,6 +30,7 @@ describe('deriveProvisionalSourceOutcome (T019)', () => {
       items: [{ kind: 'repository_ref' } as never],
       gaps: [],
       truncated: false,
+      anyEgressRejected: false,
     });
     expect(outcome).toEqual({ status: 'collected', reasonCode: null });
   });
@@ -40,6 +41,7 @@ describe('deriveProvisionalSourceOutcome (T019)', () => {
       items: [],
       gaps: [],
       truncated: false,
+      anyEgressRejected: false,
     });
     expect(outcome).toEqual({ status: 'collected', reasonCode: 'empty_result' });
   });
@@ -52,6 +54,7 @@ describe('deriveProvisionalSourceOutcome (T019)', () => {
         { kind: 'collection_gap', what: 'vendor/', why: 'unparsable', withheldByRedaction: false },
       ],
       truncated: false,
+      anyEgressRejected: false,
     });
     expect(outcome).toEqual({ status: 'partial', reasonCode: null });
   });
@@ -62,8 +65,26 @@ describe('deriveProvisionalSourceOutcome (T019)', () => {
       items: [{ kind: 'repository_ref' } as never],
       gaps: [],
       truncated: true,
+      anyEgressRejected: false,
     });
     expect(outcome).toEqual({ status: 'partial', reasonCode: null });
+  });
+
+  // T030: the plan states this outcome explicitly ("Each item passes validateEgress; a failing
+  // item is not sent (status partial, schema_rejected)") — collectOne silently dropped a
+  // schema-invalid item with no outcome signal at all until this field existed (a leaking test
+  // adapter's bad item vanished without the source outcome ever saying so). Written first and
+  // watched fail (TS2353 excess-property, `anyEgressRejected` not yet on the type) before the
+  // field was added below.
+  it('an item failed validateEgress and was dropped -> partial/schema_rejected (quickstart 43, 45)', () => {
+    const outcome = deriveProvisionalSourceOutcome({
+      kind: 'completed',
+      items: [{ kind: 'repository_ref' } as never],
+      gaps: [],
+      truncated: false,
+      anyEgressRejected: true,
+    });
+    expect(outcome).toEqual({ status: 'partial', reasonCode: 'schema_rejected' });
   });
 });
 

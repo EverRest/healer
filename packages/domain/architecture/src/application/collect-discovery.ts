@@ -66,8 +66,12 @@ async function collectOne(
       ...facts.repositoryRefs,
     ];
     // T021 "bounded": every item passes validateEgress (graph-contract.md §3 — a failing item is
-    // never sent) before the item cap is applied.
+    // never sent) before the item cap is applied. T030: dropping a failing item here is silent
+    // unless the outcome says so too (plan "a failing item is not sent (status partial,
+    // schema_rejected)") — `anyEgressRejected` is what makes that outcome, not only the drop,
+    // observable.
     const validated = allItems.filter((item) => validateEgress(item).ok);
+    const anyEgressRejected = validated.length !== allItems.length;
     const truncated = validated.length > options.itemCap;
     const items = truncated ? validated.slice(0, options.itemCap) : validated;
     const outcome = deriveProvisionalSourceOutcome({
@@ -75,6 +79,7 @@ async function collectOne(
       items,
       gaps: facts.collectionGaps,
       truncated,
+      anyEgressRejected,
     });
     return {
       sourceKey: adapter.key,
