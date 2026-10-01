@@ -1,38 +1,73 @@
+import type { DependencyObservation } from '@healer/boundary-contract';
 import type { DiscoveryAdapter, DiscoveryFacts, DiscoveryScope } from '@healer/domain-architecture';
 
-const EMPTY_FACTS: DiscoveryFacts = Object.freeze({
-  componentCandidates: [],
-  deploymentUnitCandidates: [],
-  dependencyObservations: [],
-  repositoryRefs: [],
-});
+/**
+ * Read-only seam a runner-side OTLP/trace-backend client plugs into later (012-runner; no
+ * credentials or config exist yet in this batch — see QUESTIONS.md "004 Phase 3 — adapter
+ * collection (A2)"). Read-only by construction: there is no write method on this interface.
+ */
+export interface ServiceEdge {
+  readonly fromService: string;
+  readonly toService: string;
+  readonly spanCount: number;
+  readonly firstSeen: string;
+  readonly lastSeen: string;
+}
+
+export interface TraceReader {
+  serviceEdges(windowSeconds: number): Promise<readonly ServiceEdge[]>;
+}
+
+const OTEL_ADAPTER_KEY = 'otel';
+const OTEL_ADAPTER_VERSION = '0.2.0';
+const OTEL_LAYER = 'runtime';
+const OTEL_PROVENANCE = 'derived_from_trace';
+// ponytail: one fixed window until a later phase threads a per-run window through DiscoveryScope —
+// widen `DiscoveryScope` (or the factory's second argument, already callable with any value) if a
+// caller ever needs a different window than this adapter default.
+const DEFAULT_WINDOW_SECONDS = 86_400;
+
+function toCallsObservation(edge: ServiceEdge, windowSeconds: number): DependencyObservation {
+  return {
+    kind: 'dependency_observation',
+    fromNaturalKey: edge.fromService,
+    toNaturalKey: edge.toService,
+    edgeType: 'calls',
+    layer: OTEL_LAYER,
+    provenance: OTEL_PROVENANCE,
+    observationCount: edge.spanCount,
+    firstObservedAt: edge.firstSeen,
+    lastObservedAt: edge.lastSeen,
+    windowSeconds,
+  };
+}
 
 /**
- * Trace-derived dependency discovery — OpenTelemetry spans. The adapter-level `provenance`/`layer`
- * are fixed at `derived_from_trace`/`runtime`: `Object.freeze` plus `as const` below mean nothing
- * holding a reference can reassign them at runtime, so this adapter has no way to claim a stronger
- * class for itself (FR-020, contracts/graph-contract.md §3).
- *
- * Known gap, not fixed here: T017 landed the boundary-contract Zod-inferred `DependencyObservation`
- * (graph-contract.md §3 declares `layer`/`provenance` as per-observation wire fields, so the shape
- * still carries them declared, not derived), but nothing yet checks that a given observation's
- * declared `layer`/`provenance` doesn't exceed the collecting adapter's own fixed constants below —
- * that validation belongs to the ingestion step Phase 3 (US1) adds, not to the schema. Nothing
- * exploits the gap today because `collect` below only ever returns empty arrays.
- *
- * Skeleton for T003 — real collection is Phase 3 (US1). `collect` is read-only, bounded and
- * cancellable in shape only: it honours `scope.signal` and returns the empty envelope. The
- * single-shot `throwIfAborted()` check is sufficient while there are no awaited calls in between;
- * once Phase 3 adds real awaited I/O, a long collect needs a `signal` listener (or a recheck after
- * each await), not just this initial check.
+ * Trace-derived dependency discovery over OpenTelemetry service edges (FR-020,
+ * contracts/graph-contract.md §3). `provenance`/`layer` are fixed by `OTEL_LAYER`/`OTEL_PROVENANCE`
+ * above, reused for both the frozen adapter fields and every emitted `dependency_observation`.
  */
-export const otelAdapter = Object.freeze({
-  key: 'otel',
-  version: '0.1.0',
-  layer: 'runtime',
-  provenance: 'derived_from_trace',
-  async collect(scope: DiscoveryScope): Promise<DiscoveryFacts> {
-    scope.signal?.throwIfAborted();
-    return EMPTY_FACTS;
-  },
-} as const) satisfies DiscoveryAdapter;
+export function createOtelAdapter(
+  reader: TraceReader,
+  windowSeconds: number = DEFAULT_WINDOW_SECONDS,
+) {
+  return Object.freeze({
+    key: OTEL_ADAPTER_KEY,
+    version: OTEL_ADAPTER_VERSION,
+    layer: OTEL_LAYER,
+    provenance: OTEL_PROVENANCE,
+    async collect(scope: DiscoveryScope): Promise<DiscoveryFacts> {
+      scope.signal?.throwIfAborted();
+      const edges = await reader.serviceEdges(windowSeconds);
+      scope.signal?.throwIfAborted();
+
+      return {
+        componentCandidates: [],
+        deploymentUnitCandidates: [],
+        dependencyObservations: edges.map((edge) => toCallsObservation(edge, windowSeconds)),
+        repositoryRefs: [],
+        collectionGaps: [],
+      };
+    },
+  } as const) satisfies DiscoveryAdapter;
+}

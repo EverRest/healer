@@ -243,6 +243,9 @@ importers:
 
   packages/integrations:
     dependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../boundary-contract
       '@healer/domain-architecture':
         specifier: workspace:*
         version: link:../domain/architecture

@@ -289,3 +289,48 @@ system cannot know which sequence of calls a human considers one journey.
   directly, not through discovery's per-observation path) would carry neither an observation nor
   an actor. Flagged for review rather than resolved unilaterally; `observation_ref` is nullable to
   avoid blocking on it.
+
+## Phase 3 implementation notes (T018–T035 write path, sub-batch A1)
+
+- **`evidence.evidence.issue_id` is now nullable**, with `CHECK (issue_id IS NOT NULL OR type IN
+  ('graph_fact', 'collection_gap'))` (migration
+  `20261004000000_t018_t035_discovery_evidence_and_draft_checks`). Discovery evidence has no
+  issue — a `graph_fact` is what the step observed about the architecture, and the `collection_gap`
+  rows a non-`collected` source produces name a source and a reason, not an issue. 001's own
+  `data-model.md` is updated with the same line (004 changed 001's table, documented in both
+  places per the plan). `down.sql` deletes every issue-less row before restoring `NOT NULL` —
+  reversing this migration discards discovery evidence, a deliberate, documented cost.
+- **`draft_item` gets three CHECK constraints** in the same migration (Prisma cannot express
+  CHECK): every non-human-provenance item names its `observation_ref` (mirrors `graph_node`'s
+  T006 CHECK); `state IN ('confirmed','rejected')` is exactly equivalent to `decided_by`/
+  `decided_at` both being set (boolean equality, not two independent facts that could disagree);
+  and every op but `add_node`/`add_edge` names a target (`target_node_id`/`target_edge_id`).
+- **Evidence id is deterministic**: `sha256(tenantId|runId|kind|canonicalJSON(shape))`,
+  UUID-formatted (`graph-fact-id.ts`). The draft-item diff builder computes a draft item's
+  `observation_ref` purely, without a database round trip, and a retried ingest of the same batch
+  computes identical ids — `createMany({ skipDuplicates: true })` is what makes the retry a no-op
+  rather than a duplicate.
+- **`mark_removed` items need a provenance and an observation despite observing nothing new** (the
+  CHECK above requires it). Judgment call, not stated by the plan: the triggering fully-`collected`
+  source's own adapter provenance is stamped on the item, and a synthetic **absence** `graph_fact`
+  evidence row is written (`payload: { kind: 'absence', ... }`) — not one of the four boundary
+  shapes, which only declare what *was* observed. **[PAVLO]** whether an "absence" fact deserves
+  its own boundary-contract shape (so it is validated the same way) rather than a free-standing
+  payload written only by this package — recorded in QUESTIONS.md.
+- **`repository_attr` has no `headSha` column** (confirmed by this document's own field list,
+  which never named one) — `RepositoryAttributes` (the domain type compared for `modify_attributes`
+  diffing) therefore excludes `headSha` entirely rather than merely excluding it from
+  `proposal-digest.ts`'s hash. Stronger than the plan's instruction (digest-only exclusion):
+  unrepresentable rather than merely unhashed (docs/patterns.md). `headSha` still rides inside the
+  `repository_ref` shape's own `graph_fact` evidence payload — it is observed and recorded, just
+  never compared as a node attribute.
+- **Confidence (R-15) uses `provenance_base` only** in this phase (`confidence.ts`,
+  `CONFIDENCE_PROVENANCE_BASE_V1`) — `observation_term`/`staleness_term` are T039 (Phase 4),
+  flagged with a `ponytail:` comment naming it.
+- **The adapter-constant cross-check and closed-vocabulary validation are independent of
+  `validateEgress`** (`ingest-discovery-batch.ts`): a `component_candidate` whose `adapterKey`
+  names a different source than the one it arrived under, a `dependency_observation` whose
+  `provenance`/`layer` disagree with its adapter's fixed constants, a `dependency_observation`
+  targeting `layer: 'product'` (FR-013), or a `componentType`/`runtimeKind`/`edgeType` outside this
+  package's own closed lists (`closed-vocabularies.ts`) are each `schema_rejected` — downgrading a
+  `collected` source to `partial` the moment ingestion rejects even one of its items.

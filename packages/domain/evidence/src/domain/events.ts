@@ -21,7 +21,11 @@ export function evidenceRecordedEvent(evidence: Evidence): DomainEvent {
   return {
     name: 'EvidenceRecorded',
     tenantId: evidence.tenantId,
-    subjectId: evidence.issueId,
+    // `subjectId` falls back to the evidence's own id for the two discovery types, which carry no
+    // issue (004 Phase 3). Moot in practice: discovery writes `graph_fact`/`collection_gap` rows
+    // directly through its own transaction (see packages/domain/architecture/src/infrastructure/),
+    // never through `record()`, so this fallback exists only so the type stays total.
+    subjectId: evidence.issueId ?? evidence.id,
     correlationId: requireCorrelationId(),
     payload: {
       evidenceId: evidence.id,
@@ -35,7 +39,8 @@ export function evidenceDetachedEvent(evidence: Evidence): DomainEvent {
   return {
     name: 'EvidenceDetached',
     tenantId: evidence.tenantId,
-    subjectId: evidence.issueId,
+    // See evidenceRecordedEvent's fallback above — same reasoning, same moot-in-practice note.
+    subjectId: evidence.issueId ?? evidence.id,
     correlationId: requireCorrelationId(),
     payload: {
       evidenceId: evidence.id,
