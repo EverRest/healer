@@ -95,6 +95,62 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.47.0 — 2026-10-01
+
+**012 phase 6 (T042, T045, T048–T051)**: the runner is a product we ship, and we debug it blind —
+all six previously-deferred tasks, unblocked once 001's repository/controller pattern landed. Built
+as four batches (registration/heartbeat; outbound transport + directive idempotency; build tooling
+plus the Docker image and Compose wrapper; diagnostics), each with two independent reviewers before
+merge, plus one direct confirmation pass and two full rebases onto master as 002-policy and
+004-architecture-graph landed in parallel.
+
+- `POST /runners/heartbeat` (T042): registration and every later heartbeat are the same call,
+  resolving `resolveHandshake`'s compatibility decision (already built in 012 phase 6's earlier
+  batches) against a real `runner_registration` row. Review found and fixed a real bug before
+  merge: a heartbeat silently un-revoked a revoked runner — status is now sticky against a
+  conditional update, not overwritten unconditionally — plus an unhandled tenant-FK violation that
+  surfaced as an opaque 500 instead of a clear 404.
+- `apps/runner` has real source for the first time (T045, T051): an outbound-only heartbeat client
+  (native `fetch`, never a listening socket), and a directive dispatcher idempotent by directive id.
+  Two review rounds found and fixed real bugs: directives were marked "seen" before their handler
+  ran (a failed handler could never retry), and a heartbeat-buffering design decision was reversed
+  entirely after review showed it silently dropped directives from every buffered response but the
+  last — a heartbeat is a liveness signal, not evidence, and does not need FR-021's durability.
+- The runner's Docker image, `docker-compose.runner.yml` and `make runner-build` (T049, T050; ADR
+  0014): version-and-digest stamped, refusing to rebuild an existing tag in place with different
+  content (FR-017). Two review rounds against real Docker builds found and fixed: a non-hermetic
+  `.dockerignore` that made even a genuine no-op rebuild refuse itself, Prisma/TypeScript/dev
+  dependencies actually present in the shipped runtime image despite scoped installs, a TOCTOU race
+  in the rebuild guard, and a drain-timeout ceiling that could silently exceed the compose file's
+  `stop_grace_period` at a raised heartbeat interval — closed by capping the interval in
+  `loadRunnerConfig` rather than trusting a comment.
+- `make runner-diagnostics` (T048): a support bundle of structured facts only — versions, capability
+  presence, a heartbeat-latency histogram, normalised error signatures, last-N exchanges as schema
+  id plus byte size — dumped to a local file on `SIGUSR2`, never a listening socket. The
+  planted-marker test FR-024 requires (three leak vectors: a thrown error, a validation failure, a
+  refused response's reason) passes non-vacuously. Review found and fixed a real safety issue: the
+  discovery script trusted bare PID liveness as identity, so a stale pidfile whose PID had been
+  reused by an unrelated live process could have signalled — and, under `SIGUSR2`'s default
+  disposition, killed — that process; fixed with a per-process nonce the dump echoes back for the
+  script to verify before trusting what it read.
+- Both rebases onto master (0.45.0, then 0.46.0) surfaced their own real regression: a test file
+  that existed only on this branch (`apps/api/runners.e2e.test.ts`) carried an unmerged, stale
+  `createApiModule(...)` call after 002-policy added three new required parameters elsewhere — never
+  flagged as a conflict, and invisible to `pnpm run typecheck` since this app's root-level
+  `*.e2e.test.ts` files fall outside its `tsconfig.json`'s `include` pattern. Every
+  `POST /runners/heartbeat` request 500'd until a full e2e run caught it; fixed, and the rest of the
+  suite confirmed clean of the same gap.
+- **Open, not silenced**: one Docker-backed e2e test (`apps/runner/runner-image.e2e.test.ts`'s
+  in-flight-heartbeat drain assertion) stayed flaky on this shared development machine through five
+  distinct, genuine fixes — two bound widenings, a redesign from a timing assertion to a real
+  boolean hang detector, and a fix for actual event-loop starvation in its own polling loop. Each
+  fix addressed something real without resolving the flakiness, strong evidence this is host
+  contention rather than a logic bug (independently confirmed by a fast, deterministic unit test
+  exercising the same drain logic in milliseconds, and by repeated manual verification). Decided
+  with Pavlo: not blocking this release; five further fix options and the full investigation are in
+  `QUESTIONS.md`. Real CI (GitHub Actions, agreed as the very next follow-up) may settle whether
+  this reproduces on a runner that doesn't share this machine's contention at all.
+
 ## 0.46.0 — 2026-09-30
 
 **002 policy-and-autonomy phases 1–3 (T001–T033)**: the policy engine's foundation and US1 — the

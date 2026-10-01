@@ -150,10 +150,32 @@ coverage check's own false positive against its own writes. Autonomy grants, app
 (phases 4–7) don't exist yet; scoped accordingly, extension points recorded in `QUESTIONS.md`
 rather than stubbed or silently assumed closed.
 
-Next: **002 phases 4–7** (autonomy grants, reversible-action governance, budgets, approvals) and,
-in parallel, **012 phase 6's deferred runner tasks** (T042, T045, T048–T051), which 001's
-repository/controller pattern has now unblocked, as have T080 and the persistence half of
-T059/T061/T070. 012 phase 13
+**012 phase 6 (US4) fully landed 2026-10-01** (VERSION 0.47.0): the six tasks 001's
+repository/controller pattern unblocked — registration and heartbeat (`POST /runners/heartbeat`),
+`apps/runner`'s first real source (outbound-only transport, directive idempotency), the runner's
+Docker image and `make runner-build`/`docker-compose.runner.yml` (ADR 0014), and
+`make runner-diagnostics`. Built as four reviewed batches, each with two independent reviewers
+before merge, plus two full rebases onto master as 004 and 002 landed in parallel. Real bugs found
+and fixed across review rounds: a heartbeat that could silently un-revoke a revoked runner; an
+unhandled tenant-FK violation surfacing as an opaque 500; a directive marked "seen" before its
+handler ran, so a genuine failure could never retry; a heartbeat-buffering design that silently
+dropped directives from every buffered response but the last (reversed — a heartbeat needs no
+FR-021 durability, it is a liveness signal, not evidence); a non-hermetic `.dockerignore` that made
+even an unchanged rebuild refuse itself; Prisma/TypeScript actually present in the shipped runtime
+image despite a scoped install; a drain-timeout ceiling that could silently exceed the compose
+file's `stop_grace_period`, closed by capping the interval in `loadRunnerConfig` rather than
+trusting a comment; and a diagnostics pidfile that trusted bare PID liveness as identity, closed
+with a per-process nonce. Both rebases onto master surfaced their own regression — a test file
+unique to this branch carried a stale `createApiModule` call invisible to `pnpm run typecheck`
+(this app's root-level `*.e2e.test.ts` files fall outside its `tsconfig.json`'s `include`) — found
+by running the full suite, not by any static check, and fixed. One Docker-backed e2e test stays
+flaky on this shared development machine after five genuine, independent fixes; decided with Pavlo
+not to block this release on it, full investigation and fix options in `QUESTIONS.md`. Real CI
+(GitHub Actions, agreed as the immediate next step) may settle whether it reproduces elsewhere.
+
+Next: **002 phases 4–7** (autonomy grants, reversible-action governance, budgets, approvals) and
+**a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR — the first CI/CD
+pipeline this repo will have). 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
 (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub
 interaction and can start on request. Stage 0 S0-1 still blocks realistic sizing of v1 and does not
