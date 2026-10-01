@@ -1885,3 +1885,84 @@ Docker containers, 7h/30h old, likely contributing background load; left them al
 clean up blind). Retried standalone once more: 59.6s total, 43.7s for the heavy test itself — matches
 001's own documented "~55s alone" baseline almost exactly. Confirmed transient, not a regression —
 every other test in the full suite, including everything 004 added, passed both full runs.
+
+## 004 Phase 3 — discovery run and draft (A1)
+
+Sub-batch A1: T018-T021, T023, T032, and the write path of T035. Judgment calls the plan told me to
+record, plus a few I made myself.
+
+- **`evidence.evidence.issue_id` dropped to nullable, with a CHECK closing it to `graph_fact`/
+  `collection_gap` only** (migration `20261004000000_t018_t035_discovery_evidence_and_draft_checks`).
+  `down.sql` deletes issue-less rows before restoring NOT NULL — reversing this migration discards
+  discovery evidence. Documented in both 004's and 001's `data-model.md` per the plan's instruction
+  (001 owns the table, 004 changed it).
+- **`draft_item` gets three CHECK constraints** in the same migration, mirroring `graph_node`'s T006
+  pattern: non-human provenance needs an `observation_ref`; `state` being decided is exactly
+  equivalent to `decided_by`/`decided_at` being set (boolean equality, not two independently-settable
+  facts); every op but `add_node`/`add_edge` names a target. Round-tripped against a real Postgres
+  (`prisma/migration.e2e.test.ts`): applies, reverses cleanly, zero drift against `schema.prisma`.
+- **`mark_removed` items need a provenance and an `observation_ref` despite observing nothing new**
+  (the CHECK above requires one for every non-human class). Not specified by the plan. Decided: stamp
+  the triggering fully-`collected` source's own adapter provenance, and write a synthetic **absence**
+  `graph_fact` evidence row (`payload: { kind: 'absence', targetKind: 'node'|'edge', ... }`) in the
+  same transaction as the draft. This is not one of the four boundary shapes graph-contract.md §3
+  declares — those only declare what *was* observed — so it is a free-standing payload this package
+  writes directly, not something that passed `validateIngress`. **[PAVLO]**: whether "absence" merits
+  its own boundary-contract shape (validated the same way the four positive shapes are) once a real
+  runner needs to express it, versus staying a control-plane-only synthesis the way it is now.
+- **`repository_attr` has no `headSha` column** (data-model.md's own field list for that table never
+  named one — I checked before building `RepositoryAttributes` to carry it, and reverted that design).
+  Rather than keep `headSha` in the node-attribute comparison and rely on `proposal-digest.ts`'s
+  volatile-key exclusion alone (the plan's instruction), `RepositoryAttributes` excludes `headSha`
+  entirely — unrepresentable rather than merely excluded from one hash (docs/patterns.md). `headSha`
+  still rides inside the `repository_ref` shape's own `graph_fact` evidence payload (it is observed
+  and recorded), it is just never compared as an attribute. This is a stronger guarantee than the
+  plan asked for, not a deviation from its intent — flagging in case a future phase wants `headSha`
+  surfaced as a node attribute after all, in which case this exclusion needs revisiting together with
+  the digest's.
+- **Idempotent retry**: `PrismaDiscoveryRepository.ingestBatch` checks `discovery_run.finished_at`
+  inside the transaction and returns the existing draft untouched (reading, not re-writing) when it is
+  already set — the plan's instruction. Belt-and-suspenders underneath that: every id in the write
+  path (`graph_fact`/`collection_gap`/absence evidence ids, the draft id, draft item ids) is
+  deterministic (sha256 of tenant/run/kind/canonical-shape, or tenant/run for the draft, or draft/digest
+  for an item), so even a retry that somehow bypassed the `finished_at` check would collapse via
+  `createMany({ skipDuplicates: true })` rather than duplicate. Proven end to end
+  (`discovery-run.e2e.test.ts`'s idempotency group): three `ingestDiscoveryBatch` calls against the
+  same run produce one draft, one item, and a stable evidence count.
+- **Run outcome `'failed'` writes no draft row at all** (plan: "failed if none returned any item") —
+  `ingestDiscoveryBatch` returns `null` in that case, and `PrismaDiscoveryRepository.ingestBatch`
+  still writes the run's finishing update and every source outcome/evidence row inside the same
+  transaction, just skips `discoveryDraft`/`draftItem`. A retried ingest of a `failed` run finds no
+  draft row and also returns `null` (not a throw) — tested via the adapter-cross-check scenario, whose
+  only candidate is rejected, making the run `failed` by construction.
+- **Confidence (R-15) is `provenance_base` only in this phase** (`confidence.ts`) —
+  `observation_term`/`staleness_term` are T039 (Phase 4), flagged with a `ponytail:` comment rather
+  than stubbed with a fake formula.
+- **The adapter-constant cross-check and closed-vocabulary validation sit in `ingest-discovery-batch.ts`,
+  independent of `collectDiscovery`'s `validateEgress`** — a `component_candidate` whose `adapterKey`
+  names a different source than the one it arrived under, a `dependency_observation` whose
+  `provenance`/`layer` disagree with its adapter's fixed constants, a `dependency_observation`
+  targeting `layer: 'product'` (FR-013 — product knowledge is human, never discovered), or a
+  `componentType`/`runtimeKind`/`edgeType` outside this package's own closed lists
+  (`closed-vocabularies.ts`, mirroring the Prisma enums) are each `schema_rejected`. A `collected`
+  source carrying even one such item is downgraded to `partial`/`schema_rejected` at ingestion — it
+  is never upgraded back. Mutation-checked (comment out the `adapterKey` check, confirm the paired
+  e2e test goes red with the real run outcome, restore byte-for-byte).
+- **Natural-key identity resolution for `dependency_observation` endpoints is exact-match only, across
+  this run's candidates and the confirmed snapshot together** — zero or more than one `(nodeKind)`
+  match for a natural key means the edge is not proposed (its originating item's `graph_fact`
+  evidence is still written independently, by the ingestion layer, regardless of whether the diff
+  builder could use it). Alias/collision handling is T052 (Phase 5), per the plan.
+- **`mark_removed` eligibility is strictly `status === 'collected'`** for both nodes ("some source
+  emitted ≥1 candidate of this kind, and ran fully collected") and edges ("every adapter that ever
+  contributed to this edge's `edge_provenance` ran collected this run") — a `partial`/`timed_out`
+  source never licenses a removal, matching "absence from a source that did not fully answer is not
+  evidence" verbatim.
+- Mutation checks performed and reported (red-for-the-right-reason, then restored byte-for-byte):
+  rejection filter (`diff-builder.ts`'s `push`), the adapter-constant cross-check
+  (`ingest-discovery-batch.ts`'s `passesAdapterCrossCheck`), and the two named digest exclusions
+  (`currentVersion`, `lastDeployedAt` in `proposal-digest.ts`'s `VOLATILE_ATTRIBUTE_KEYS`). The other
+  five excluded fields the plan names (confidence, strength, provenance, observation counts, run id)
+  are excluded by *type* — `ProposedPayload` has no field for any of them — so there is nothing a
+  mutation could remove; `headSha`'s exclusion is likewise now structural (see above), not a runtime
+  branch to mutate.
