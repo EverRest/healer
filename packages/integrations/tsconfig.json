@@ -8,6 +8,9 @@
   "references": [
     {
       "path": "../domain/architecture"
+    },
+    {
+      "path": "../boundary-contract"
     }
   ]
 }
