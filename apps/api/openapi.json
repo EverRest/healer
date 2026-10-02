@@ -439,6 +439,37 @@
             "required": true,
             "in": "header",
             "schema": { "type": "string" }
+          },
+          {
+            "name": "minStrength",
+            "required": false,
+            "in": "query",
+            "description": "explanation filter only — FR-016; never reaches an impact or policy path",
+            "schema": { "type": "number" }
+          },
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "layer",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "nodeKind",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "graphVersion",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "number" }
           }
         ],
         "responses": { "200": { "description": "" } },
@@ -456,16 +487,16 @@
             "schema": { "type": "string" }
           },
           {
-            "name": "graphVersion",
-            "required": true,
-            "in": "query",
-            "schema": { "type": "string" }
-          },
-          {
             "name": "x-tenant-id",
             "required": true,
             "in": "header",
             "schema": { "type": "string" }
+          },
+          {
+            "name": "graphVersion",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "number" }
           }
         ],
         "responses": { "200": { "description": "" } },

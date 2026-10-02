@@ -24,6 +24,7 @@ import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantIsolated, assertTenantIsolatedList } from '../../test/tenant-isolation.js';
 import { applySqlFile, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
+import { buildOpenApiDocument } from './src/openapi.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 
 /**
@@ -168,6 +169,60 @@ describe('/graph/nodes (004 T041)', () => {
         .set('X-Tenant-Id', tenantId)
         .expect(404);
     }
+  });
+
+  it('rejects bad query values with 400 that names the offending parameter', async () => {
+    const tenantId = randomUUID();
+    await seedNode(tenantId);
+    const minStrength = await request(app.getHttpServer())
+      .get(path('/graph/nodes?minStrength=abc'))
+      .set('X-Tenant-Id', tenantId)
+      .expect(400);
+    expect(minStrength.body.message).toContain('minStrength');
+    for (const query of [
+      'minStrength=99999',
+      'graphVersion=3',
+      'graphVersion=0',
+      'graphVersion=2147483648',
+    ]) {
+      await request(app.getHttpServer())
+        .get(path(`/graph/nodes?${query}`))
+        .set('X-Tenant-Id', tenantId)
+        .expect(400);
+    }
+  });
+
+  it('the detail endpoint accepts graphVersion only: any other parameter is a 400, not ignored', async () => {
+    const tenantId = randomUUID();
+    const id = await seedNode(tenantId);
+    for (const query of [`tenantId=${randomUUID()}`, 'minStrength=10', 'graphVersion=abc']) {
+      const response = await request(app.getHttpServer())
+        .get(path(`/graph/nodes/${id}?${query}`))
+        .set('X-Tenant-Id', tenantId)
+        .expect(400);
+      expect(response.body.message).toContain(query.split('=')[0]);
+    }
+    await request(app.getHttpServer())
+      .get(path(`/graph/nodes/${id}?graphVersion=99`))
+      .set('X-Tenant-Id', tenantId)
+      .expect(400);
+  });
+
+  it('documents every query parameter in the OpenAPI document, all optional', async () => {
+    const document = await buildOpenApiDocument();
+    const params = (route: string) =>
+      (
+        (document.paths[route] as { get: { parameters: { name: string; required?: boolean }[] } })
+          .get.parameters ?? []
+      ).filter((p) => (p as { in?: string }).in === 'query');
+    const list = params('/api/v1/graph/nodes');
+    expect(list.map((p) => p.name).sort()).toEqual(
+      ['graphVersion', 'layer', 'minStrength', 'nodeKind', 'state'].sort(),
+    );
+    expect(list.every((p) => p.required === false)).toBe(true);
+    const detail = params('/api/v1/graph/nodes/{nodeId}');
+    expect(detail.map((p) => p.name)).toEqual(['graphVersion']);
+    expect(detail.every((p) => p.required === false)).toBe(true);
   });
 
   describe('tenant isolation (FR-024)', () => {

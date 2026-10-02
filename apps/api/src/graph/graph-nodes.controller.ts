@@ -8,6 +8,7 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
+import { ApiQuery } from '@nestjs/swagger';
 import {
   InvalidGraphFilterError,
   type GraphReadRepository,
@@ -15,7 +16,11 @@ import {
 } from '@healer/domain-architecture';
 import { NotFoundError, scope } from '@healer/shared';
 import { resolveTenant, UUID_PATTERN } from '../policy/policy-http.js';
-import { graphNodeQuerySchema, graphVersionSchema } from './graph-nodes.dto.js';
+import {
+  describeIssue,
+  graphNodeDetailQuerySchema,
+  graphNodeQuerySchema,
+} from './graph-nodes.dto.js';
 
 export const GRAPH_READ_REPOSITORY = Symbol('GRAPH_READ_REPOSITORY');
 
@@ -30,6 +35,16 @@ export class GraphNodesController {
   constructor(@Inject(GRAPH_READ_REPOSITORY) private readonly graph: GraphReadRepository) {}
 
   @Get()
+  @ApiQuery({ name: 'graphVersion', required: false, type: Number })
+  @ApiQuery({ name: 'nodeKind', required: false, type: String })
+  @ApiQuery({ name: 'layer', required: false, type: String })
+  @ApiQuery({ name: 'state', required: false, type: String })
+  @ApiQuery({
+    name: 'minStrength',
+    required: false,
+    type: Number,
+    description: 'explanation filter only — FR-016; never reaches an impact or policy path',
+  })
   async list(
     @Query() query: Record<string, unknown>,
     @Headers('x-tenant-id') tenantIdHeader?: string,
@@ -37,9 +52,7 @@ export class GraphNodesController {
     const context = resolveTenant(tenantIdHeader);
     const parsed = graphNodeQuerySchema.safeParse(query);
     if (!parsed.success) {
-      throw new BadRequestException(
-        `invalid query: ${parsed.error.issues[0]?.message ?? 'malformed'}`,
-      );
+      throw new BadRequestException(`invalid query: ${describeIssue(parsed.error)}`);
     }
     try {
       return await this.graph.listNodes(scope(context, parsed.data));
@@ -50,26 +63,28 @@ export class GraphNodesController {
   }
 
   @Get(':nodeId')
+  @ApiQuery({ name: 'graphVersion', required: false, type: Number })
   async get(
     @Param('nodeId') nodeId: string,
-    @Query('graphVersion') graphVersionRaw?: string,
+    @Query() query: Record<string, unknown>,
     @Headers('x-tenant-id') tenantIdHeader?: string,
   ): Promise<Omit<ReadEnvelope<unknown>, 'items'> & { node: unknown; edges: unknown }> {
     const context = resolveTenant(tenantIdHeader);
-    const graphVersion = graphVersionSchema.safeParse(graphVersionRaw);
-    if (!graphVersion.success) throw new BadRequestException('graphVersion must be an integer');
+    const parsed = graphNodeDetailQuerySchema.safeParse(query);
+    if (!parsed.success) {
+      throw new BadRequestException(`invalid query: ${describeIssue(parsed.error)}`);
+    }
     if (!UUID_PATTERN.test(nodeId)) throw new NotFoundException(`node ${nodeId} not found`);
+    const { graphVersion } = parsed.data;
     try {
       // contracts/openapi.yaml: the envelope fields plus `node` and `edges` at the top level.
       const { items, ...envelope } = await this.graph.getNode(
-        scope(context, {
-          id: nodeId,
-          ...(graphVersion.data !== undefined ? { graphVersion: graphVersion.data } : {}),
-        }),
+        scope(context, { id: nodeId, ...(graphVersion !== undefined ? { graphVersion } : {}) }),
       );
       return { ...envelope, node: items.node, edges: items.edges };
     } catch (error) {
       if (error instanceof NotFoundError) throw new NotFoundException(`node ${nodeId} not found`);
+      if (error instanceof InvalidGraphFilterError) throw new BadRequestException(error.message);
       throw error;
     }
   }
