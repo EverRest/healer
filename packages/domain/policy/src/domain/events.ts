@@ -175,7 +175,9 @@ export function budgetDegradedEvent(
     readonly scope: BudgetScope;
     readonly periodKey: string;
     readonly step: number;
-    readonly entryApplied: boolean;
+    /** The entry of the declared degradation order — a closed-list key (`DEGRADATION_ORDER`),
+     *  never prose. */
+    readonly entryApplied: string;
     readonly evidenceId: string;
   },
 ): DomainEvent {

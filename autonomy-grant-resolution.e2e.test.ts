@@ -14,6 +14,7 @@ import {
   PrismaApprovalRequestRepository,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -87,6 +88,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
   let autonomyEpochs: PrismaAutonomyEpochRepository;
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
+  let budgets: PrismaBudgetRepository;
   let approvals: PrismaApprovalRequestRepository;
 
   beforeAll(async () => {
@@ -109,6 +111,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma);
     approvals = new PrismaApprovalRequestRepository(prisma);
   }, 180_000);
 
@@ -151,7 +154,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       );
 
       const forA = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
           decisionInput: decisionInputFor(componentA),
         }),
       );
@@ -160,7 +163,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // Quickstart 11: grant for component A, propose for component B → refused, reason naming
       // the missing grant.
       const forB = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
           decisionInput: decisionInputFor(componentB),
         }),
       );
@@ -182,7 +185,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       );
 
       const before = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
           decisionInput: decisionInputFor('component-a'),
         }),
       );
@@ -198,7 +201,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // Nothing "pushed" this evaluation anything — it is simply a fresh call, re-reading the
       // (now empty) grant table, exactly as T041/T042 require.
       const after = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
           decisionInput: decisionInputFor('component-a'),
         }),
       );
@@ -250,7 +253,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // today's epoch — RequestApproval itself is Phase 7 (out of scope); this is the row shape
       // it will write, built directly since there is no command yet to call.
       const bound = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
           decisionInput: decisionInputFor('component-a'),
           binding: { workflowRunId: randomUUID() },
         }),

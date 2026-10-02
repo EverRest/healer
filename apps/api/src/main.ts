@@ -23,10 +23,14 @@ import {
 } from '@healer/domain-evidence';
 import {
   PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
   type AutonomyGrantRepository,
+  type BudgetLimitRepository,
+  type BudgetRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
@@ -65,6 +69,11 @@ import {
   AUTONOMY_GRANT_REPOSITORY,
   AutonomyGrantsController,
 } from './policy/autonomy-grants.controller.js';
+import {
+  BUDGET_LIMIT_REPOSITORY,
+  BUDGET_REPOSITORY,
+  BudgetsController,
+} from './policy/budgets.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -113,6 +122,8 @@ export function createApiModule(
   policyActions: PolicyActionRepository,
   runnerRegistrations: RunnerRegistrationRepository,
   autonomyGrants: AutonomyGrantRepository,
+  budgets: BudgetRepository,
+  budgetLimits: BudgetLimitRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -124,6 +135,7 @@ export function createApiModule(
       PolicyEvaluationController,
       RunnersController,
       AutonomyGrantsController,
+      BudgetsController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -139,6 +151,8 @@ export function createApiModule(
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
       { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
       { provide: AUTONOMY_GRANT_REPOSITORY, useValue: autonomyGrants },
+      { provide: BUDGET_REPOSITORY, useValue: budgets },
+      { provide: BUDGET_LIMIT_REPOSITORY, useValue: budgetLimits },
     ],
   })
   class ApiModule {}
@@ -170,6 +184,8 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
     new PrismaAutonomyGrantRepository(prisma),
+    new PrismaBudgetRepository(prisma),
+    new PrismaBudgetLimitRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

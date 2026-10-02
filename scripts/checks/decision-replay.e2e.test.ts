@@ -6,6 +6,7 @@ import {
   publishRuleset,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -82,6 +83,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
     const decisions = new PrismaPolicyDecisionRepository(prisma);
     const autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     const autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    const budgets = new PrismaBudgetRepository(prisma);
     const actions = new PrismaPolicyActionRepository(prisma);
     for (const action of SEED_POLICY_ACTIONS) {
       await prisma.policyAction.create({
@@ -110,7 +112,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
         publishedBy: 'pavlo',
       });
       await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -136,6 +138,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
     const decisions = new PrismaPolicyDecisionRepository(prisma);
     const autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     const autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    const budgets = new PrismaBudgetRepository(prisma);
     const actions = new PrismaPolicyActionRepository(prisma);
 
     await withCorrelation(newCorrelationId(), async () => {
@@ -159,7 +162,7 @@ describe('check:decision-replay against a real Postgres (002 T030, FR-002, SC-00
         publishedBy: 'pavlo',
       });
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         tenant,
         {
           decisionInput: buildDecisionInput(),

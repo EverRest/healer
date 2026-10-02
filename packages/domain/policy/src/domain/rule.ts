@@ -30,4 +30,7 @@ export interface ResolvedRuleset {
   readonly version: number;
   readonly rules: readonly Rule[];
   readonly cooldownBounds?: CooldownBounds;
+  /** `budget_limit.escalation_attempt_cap` (FR-013, T066), compared against the
+   *  `escalation.attemptCount` input. */
+  readonly escalationAttemptCap?: number;
 }

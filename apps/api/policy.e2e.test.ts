@@ -18,6 +18,8 @@ import {
   publishRuleset,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -121,6 +123,7 @@ describe('/policy (002 T027-T030, T032)', () => {
   let autonomyEpochs: PrismaAutonomyEpochRepository;
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
+  let budgets: PrismaBudgetRepository;
 
   const path = (p: string) => `/api/v1${p}`;
 
@@ -148,6 +151,7 @@ describe('/policy (002 T027-T030, T032)', () => {
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma);
 
     const ApiModule = createApiModule(
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
@@ -163,6 +167,8 @@ describe('/policy (002 T027-T030, T032)', () => {
       actions,
       new PrismaRunnerRegistrationRepository(prisma),
       autonomyGrants,
+      budgets,
+      new PrismaBudgetLimitRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -188,7 +194,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       const tenant = TenantContext.forTrustedInternalUse(tenantId);
       await publishUnder(tenantId);
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         tenant,
         {
           decisionInput: buildDecisionInput(overrides),
@@ -480,7 +486,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       ]);
       const decision = await withCorrelation(newCorrelationId(), async () => {
         const { decision } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           TenantContext.forTrustedInternalUse(tenantId),
           {
             decisionInput: buildDecisionInput(),

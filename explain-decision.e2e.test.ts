@@ -8,6 +8,7 @@ import {
   publishRuleset,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -197,6 +198,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
   let autonomyEpochs: PrismaAutonomyEpochRepository;
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
+  let budgets: PrismaBudgetRepository;
 
   beforeAll(async () => {
     pg = await startPostgres();
@@ -208,6 +210,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     decisions = new PrismaPolicyDecisionRepository(prisma);
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
 
     // `policy_action` is global (batch 9 C1(b) made `actions` a required dependency of both
@@ -233,7 +236,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
 
     for (const { input } of MATRIX) {
       await withCorrelation('corr-explain', () =>
-        explainDecision({ rulesets, actions, autonomyGrants }, CONTEXT, { decisionInput: input }),
+        explainDecision({ rulesets, actions, autonomyGrants, budgets }, CONTEXT, { decisionInput: input }),
       );
     }
 
@@ -245,10 +248,10 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     '$name: ExplainDecision and EvaluateAndBind agree on outcome, matched rules and reason codes (quickstart 31)',
     async ({ input }) => {
       const explained = await withCorrelation('corr-explain-cmp', () =>
-        explainDecision({ rulesets, actions, autonomyGrants }, CONTEXT, { decisionInput: input }),
+        explainDecision({ rulesets, actions, autonomyGrants, budgets }, CONTEXT, { decisionInput: input }),
       );
       const bound = await withCorrelation('corr-bind-cmp', () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, CONTEXT, {
+        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, CONTEXT, {
           decisionInput: input,
         }),
       );

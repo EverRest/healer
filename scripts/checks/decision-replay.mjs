@@ -42,7 +42,7 @@ function formatMismatch(row, replayed) {
  * `decision-replay.e2e.test.ts`; `decision-replay.test.ts` proves `formatMismatch` and the
  * ruleset-not-found path against a fake repository.
  * @param {import('@healer/domain-policy').ReadOnlyPolicyRulesetRepository} rulesets
- * @param {{ id: string, tenantId: string, decisionInput: unknown, rulesetVersion: number, outcome: string, matchedRuleKeys: readonly string[] }} row
+ * @param {{ id: string, tenantId: string, decisionInput: unknown, rulesetVersion: number, outcome: string, matchedRuleKeys: readonly string[], budgetState?: unknown }} row
  * @returns {Promise<string | null>} a violation message, or null when the replay agrees with history
  */
 export async function replayOne(rulesets, row) {
@@ -66,6 +66,9 @@ export async function replayOne(rulesets, row) {
       rulesetVersion: row.rulesetVersion,
       outcome: row.outcome,
       matchedRuleKeys: row.matchedRuleKeys,
+      // 002 T066: the escalation cap is bound from `budget_limit` at decision time and persisted
+      // in `budget_state`; a replay that omitted it would report every cap-denied decision.
+      ...(row.budgetState ? { budgetState: row.budgetState } : {}),
     });
     return identical ? null : formatMismatch(row, replayed);
   } catch (error) {
@@ -93,6 +96,7 @@ export async function findReplayMismatches(prisma, sampleSize = DEFAULT_SAMPLE_S
       rulesetVersion: true,
       outcome: true,
       matchedRuleKeys: true,
+      budgetState: true,
     },
   });
 

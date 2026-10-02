@@ -20,6 +20,20 @@ export interface BudgetState {
   readonly limit: number;
   readonly declaredMaxCost: number;
   readonly degradationStep: number;
+  // The three fields below are written by the binder (`EvaluateAndBind`), never by `evaluate()`:
+  // what the persisted decision needs so that (a) its declared spend stays an open charge against
+  // the right scope until the agent run it permitted lands (T060), and (b) a replay re-applies the
+  // same escalation cap (FR-002).
+  /** Spend this decision reserved — the caller's declared maximum, whichever dimension bound. */
+  readonly reservedSpend?: number;
+  readonly escalationAttemptCap?: number;
+  readonly binding?: {
+    readonly scopeType: 'issue' | 'tenant';
+    readonly scopeId: string;
+    readonly period: 'issue' | 'day' | 'month';
+    readonly periodKey: string;
+    readonly dimension: 'spend' | 'time';
+  };
 }
 
 export interface EvaluationTrace {
@@ -80,14 +94,34 @@ function applyCeiling(current: StepResult, input: DecisionInput): StepResult {
   return { outcome: 'deny', reasonCodes: addReasonCode(current.reasonCodes, 'CEILING_EXCEEDED') };
 }
 
-// Step 5: exhausted → DENY(BUDGET_EXHAUSTED); a degraded-but-not-exhausted budget only annotates
-// the trace (FR-011, FR-012) — the ex-ante "would this step cross the limit" check is Phase 6
-// (T059/T060), not part of this pure fold.
+// Step 5: the ex-ante predicate `consumed + declaredMaxCost <= limit` (R-11, T060): a check on
+// consumption alone always permits one more step than the budget allows, because the step that
+// discovers the limit is the step that exceeds it. `consumed >= limit` stays as the exhausted case
+// for a step that declares nothing. A degraded-but-not-exhausted budget only annotates the trace
+// (FR-011, FR-012). Consumed, limit and the degradation step are INPUTS — resolved by the
+// caller's budget aggregate, never read here (no clock, no repository).
 function applyBudget(current: StepResult, input: DecisionInput): StepResult {
-  if (input.budget.consumed < input.budget.limit) return current;
+  const { consumed, limit, declaredMaxCost } = input.budget;
+  if (consumed < limit && consumed + declaredMaxCost <= limit) return current;
   return {
     outcome: 'deny',
     reasonCodes: addReasonCode(current.reasonCodes, 'BUDGET_EXHAUSTED'),
+  };
+}
+
+// FR-013 (T066): escalation stops at the cap. `escalation.attemptCount` is an input counted from
+// 012's `workflow_run`; the cap comes from `budget_limit.escalation_attempt_cap` via the resolved
+// rule set. Absent cap = nothing to enforce here (the resolver always supplies one, falling back
+// to a fail-closed default).
+function applyEscalationCap(
+  current: StepResult,
+  input: DecisionInput,
+  cap: number | undefined,
+): StepResult {
+  if (cap === undefined || input.escalation.attemptCount < cap) return current;
+  return {
+    outcome: 'deny',
+    reasonCodes: addReasonCode(current.reasonCodes, 'ATTEMPT_CAP_REACHED'),
   };
 }
 
@@ -159,6 +193,7 @@ export function evaluate(
   const ceilingApplied = step.outcome !== foldResult;
   step = applyBudget(step, input);
   step = applyCooldown(step, input, ruleset.cooldownBounds);
+  step = applyEscalationCap(step, input, ruleset.escalationAttemptCap);
 
   const trace: EvaluationTrace = {
     matchedRules: matched.map((rule) => ({ ruleKey: rule.ruleKey, outcome: rule.outcome })),

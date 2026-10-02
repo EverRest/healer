@@ -5,7 +5,13 @@ import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-reposi
 import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type {
+  BudgetQuery,
+  BudgetRepository,
+  ResolvedBudget,
+} from '../../domain/budget-repository.js';
+import type {
   DecisionBinding,
+  NewRecordedDecision,
   PolicyDecisionRepository,
   RecordedDecision,
 } from '../../domain/policy-decision-repository.js';
@@ -14,8 +20,10 @@ import { computeProposalDigest } from '../../domain/proposal-digest.js';
 import {
   NoPublishedRulesetError,
   UnregisteredActionError,
-  resolveRulesetAndEvaluate,
+  evaluatePrepared,
+  prepareEvaluation,
 } from '../resolve-ruleset-and-evaluate.js';
+import { markDegradation } from './mark-degradation.js';
 
 // Re-exported so existing callers/tests importing these errors from here keep working — both now
 // live in `resolve-ruleset-and-evaluate.ts` since `ExplainDecision` (T024) throws them too.
@@ -27,6 +35,7 @@ export interface EvaluateAndBindRepos {
   readonly autonomyEpochs: AutonomyEpochRepository;
   readonly actions: PolicyActionRepository;
   readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
+  readonly budgets: BudgetRepository;
 }
 
 export interface EvaluateAndBindResult {
@@ -60,31 +69,54 @@ export async function evaluateAndBind(
   context: TenantContext,
   input: { readonly decisionInput: DecisionInput; readonly binding?: DecisionBinding },
 ): Promise<EvaluateAndBindResult> {
-  // `decisionInput` here is the *corrected* one (batch 9 C1(b)) — `action.actionClass` overwritten
-  // with the registry's real value, not whatever `input.decisionInput` claimed. The digest and the
-  // persisted row are both built from this, never from the caller's original claim: persisting the
-  // uncorrected input would let a replay reintroduce the exact bug this fix closes.
-  const { decision, trace, decisionInput } = await resolveRulesetAndEvaluate(
-    repos,
-    context,
-    input.decisionInput,
-  );
-  const proposalDigest = computeProposalDigest(decisionInput);
-  const autonomyEpoch = await repos.autonomyEpochs.current(scope(context, {}));
+  // `prepared.decisionInput` is the *corrected* one (batch 9 C1(b), T039) — `action.actionClass`
+  // and `autonomy.level` overwritten with the registry's and the grants' real values — and the
+  // budget group is overwritten the same way below (T056, T060). The digest and the persisted row
+  // are built from the corrected input, never from the caller's claim: persisting the uncorrected
+  // input would let a replay reintroduce the exact bug this fix closes.
+  const prepared = await prepareEvaluation(repos, context, input.decisionInput);
+  const binding = input.binding ?? {};
+  const query = scope<BudgetQuery>(context, {
+    ...(binding.issueId !== undefined ? { issueId: binding.issueId } : {}),
+    ...(binding.workflowRunId !== undefined ? { workflowRunId: binding.workflowRunId } : {}),
+    asOf: input.decisionInput.evaluatedAt,
+  });
 
-  const recorded = await repos.decisions.record(
-    scope(context, {
+  const build = (budget: ResolvedBudget): NewRecordedDecision => {
+    const { decision, decisionInput, budgetState } = evaluatePrepared(prepared, budget);
+    return {
       id: randomUUID(),
       decision,
       decisionInput,
-      proposalDigest,
-      budgetState: trace.budgetState,
+      proposalDigest: computeProposalDigest(decisionInput),
+      budgetState,
       actionKey: decisionInput.action.actionKey,
       targetRef: decisionInput.target.targetRef,
       fingerprint: decisionInput.target.fingerprint,
-      binding: input.binding ?? {},
-    }),
-  );
+      binding,
+    };
+  };
+
+  // A step that declares a cost is a *charge*: the decision's declared maximum has to be visible
+  // to the next evaluation the moment this one commits, so resolve-and-persist run under one
+  // serialization lock (T060). A step that declares none charges nothing and needs no lock.
+  let budget: ResolvedBudget;
+  let recorded: RecordedDecision;
+  if (input.decisionInput.budget.declaredMaxCost > 0) {
+    ({ budget, decision: recorded } = await repos.budgets.bindCharged(query, (b) =>
+      scope(context, build(b)),
+    ));
+  } else {
+    budget = await repos.budgets.resolve(query);
+    recorded = await repos.decisions.record(scope(context, build(budget)));
+  }
+
+  const autonomyEpoch = await repos.autonomyEpochs.current(scope(context, {}));
+  await markDegradation(repos.budgets, context, {
+    budget,
+    ...(binding.issueId !== undefined ? { issueId: binding.issueId } : {}),
+    asOf: input.decisionInput.evaluatedAt,
+  });
 
   return { decision: recorded, autonomyEpoch };
 }

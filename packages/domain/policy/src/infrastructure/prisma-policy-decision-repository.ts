@@ -20,7 +20,7 @@ import type { ReasonCode } from '../domain/reason-code.js';
 
 /** `record` publishes `PolicyDecisionRecorded` — a missing correlation scope is a caller error,
  *  the same rule every other outbox-publishing write in this package follows. */
-function assertCorrelated(): void {
+export function assertCorrelated(): void {
   if (currentCorrelationId() === undefined) {
     throw new Error(
       'EvaluateAndBind publishes PolicyDecisionRecorded: call it inside a correlated scope (withCorrelation)',
@@ -50,6 +50,49 @@ function toDomain(row: DecisionRow): RecordedDecision {
     ceilingApplied: row.ceilingApplied,
     evaluatedAt: row.evaluatedAt,
   };
+}
+
+/** The insert plus its outbox event, inside the caller's transaction — what `record` does, and what
+ *  `PrismaBudgetRepository.bindCharged` does under its serialization lock so the charge and the
+ *  decision that declares it commit together (T060). Callers `assertCorrelated()` first. */
+export async function recordDecisionInTx(
+  tx: Prisma.TransactionClient,
+  where: TenantScoped<NewRecordedDecision>,
+): Promise<RecordedDecision> {
+  const { tenantId } = where;
+  const created = await tx.policyDecision.create({
+    data: {
+      id: where.id,
+      tenantId,
+      issueId: where.binding.issueId ?? null,
+      workflowRunId: where.binding.workflowRunId ?? null,
+      workflowState: where.binding.workflowState ?? null,
+      actionKey: where.actionKey,
+      targetRef: where.targetRef ?? null,
+      fingerprint: where.fingerprint ?? null,
+      proposalDigest: where.proposalDigest,
+      decisionInput: where.decisionInput as unknown as Prisma.InputJsonValue,
+      rulesetVersion: where.decision.rulesetVersion,
+      matchedRuleKeys: [...where.decision.matchedRuleKeys],
+      outcome: where.decision.outcome,
+      reasonCodes: [...where.decision.reasonCodes],
+      ceilingApplied: where.decision.ceilingApplied,
+      budgetState: where.budgetState as unknown as Prisma.InputJsonValue,
+      evaluatedAt: where.decision.evaluatedAt,
+    },
+  });
+  await enqueue(
+    new PrismaOutboxTransaction(tx),
+    policyDecisionRecordedEvent(tenantId, {
+      decisionId: where.id,
+      actionKey: where.actionKey,
+      outcome: where.decision.outcome,
+      rulesetVersion: where.decision.rulesetVersion,
+      reasonCodes: where.decision.reasonCodes,
+      ...(where.binding.issueId !== undefined ? { issueId: where.binding.issueId } : {}),
+    }),
+  );
+  return toDomain(created);
 }
 
 /** Every column `findById`/`list` read back (data-model.md `policy.policy_decision`) — a
@@ -132,43 +175,7 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
 
   async record(where: TenantScoped<NewRecordedDecision>): Promise<RecordedDecision> {
     assertCorrelated();
-    const { tenantId } = where;
-    const event = policyDecisionRecordedEvent(tenantId, {
-      decisionId: where.id,
-      actionKey: where.actionKey,
-      outcome: where.decision.outcome,
-      rulesetVersion: where.decision.rulesetVersion,
-      reasonCodes: where.decision.reasonCodes,
-      ...(where.binding.issueId !== undefined ? { issueId: where.binding.issueId } : {}),
-    });
-
-    const row = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.policyDecision.create({
-        data: {
-          id: where.id,
-          tenantId,
-          issueId: where.binding.issueId ?? null,
-          workflowRunId: where.binding.workflowRunId ?? null,
-          workflowState: where.binding.workflowState ?? null,
-          actionKey: where.actionKey,
-          targetRef: where.targetRef ?? null,
-          fingerprint: where.fingerprint ?? null,
-          proposalDigest: where.proposalDigest,
-          decisionInput: where.decisionInput as unknown as Prisma.InputJsonValue,
-          rulesetVersion: where.decision.rulesetVersion,
-          matchedRuleKeys: [...where.decision.matchedRuleKeys],
-          outcome: where.decision.outcome,
-          reasonCodes: [...where.decision.reasonCodes],
-          ceilingApplied: where.decision.ceilingApplied,
-          budgetState: where.budgetState as unknown as Prisma.InputJsonValue,
-          evaluatedAt: where.decision.evaluatedAt,
-        },
-      });
-      await enqueue(new PrismaOutboxTransaction(tx), event);
-      return created;
-    });
-
-    return toDomain(row);
+    return this.prisma.$transaction((tx) => recordDecisionInTx(tx, where));
   }
 
   async consume(where: TenantScoped<ConsumeDecisionInput>): Promise<void> {

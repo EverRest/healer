@@ -1,6 +1,7 @@
 import type { TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
+import type { ReadOnlyBudgetRepository } from '../../domain/budget-repository.js';
 import type { Decision, EvaluationTrace } from '../../domain/evaluate.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
@@ -29,6 +30,9 @@ export interface ExplainDecisionRepos {
   readonly rulesets: ReadOnlyPolicyRulesetRepository;
   readonly actions: PolicyActionRepository;
   readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
+  /** Read side only (T056): a dry run resolves the tenant's real, current budget figures — the
+   *  same derived aggregate an enforcing evaluation reads — and charges nothing. */
+  readonly budgets: ReadOnlyBudgetRepository;
 }
 
 export async function explainDecision(

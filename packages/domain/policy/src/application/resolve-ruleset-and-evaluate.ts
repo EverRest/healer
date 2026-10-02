@@ -1,6 +1,17 @@
 import { HealerError, scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../domain/decision-input.js';
-import { evaluate, type Decision, type EvaluationTrace } from '../domain/evaluate.js';
+import { bindingBudget } from '../domain/budget-figures.js';
+import type {
+  BudgetQuery,
+  ReadOnlyBudgetRepository,
+  ResolvedBudget,
+} from '../domain/budget-repository.js';
+import {
+  evaluate,
+  type BudgetState,
+  type Decision,
+  type EvaluationTrace,
+} from '../domain/evaluate.js';
 import type { ReadOnlyAutonomyGrantRepository } from '../domain/autonomy-grant-repository.js';
 import type { PolicyActionRepository } from '../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../domain/policy-ruleset-repository.js';
@@ -48,10 +59,72 @@ export class UnregisteredActionError extends HealerError {
   }
 }
 
-export interface ResolveRulesetAndEvaluateRepos {
+export interface PrepareEvaluationRepos {
   readonly rulesets: ReadOnlyPolicyRulesetRepository;
   readonly actions: PolicyActionRepository;
   readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
+}
+
+export interface ResolveRulesetAndEvaluateRepos extends PrepareEvaluationRepos {
+  /** T056/T060: consumed, limit, degradation step and the escalation count are resolved here from
+   *  the derived aggregate, never trusted from the caller — the same move `autonomyGrants` makes
+   *  for `autonomy.level` and `actions` makes for `actionClass`. */
+  readonly budgets: ReadOnlyBudgetRepository;
+}
+
+/** What `evaluate()` needs once everything except the budget is resolved. The budget is the one
+ *  input that must be read **inside** the charge's lock when the step declares a cost (T060), so
+ *  the two halves are separable: `prepareEvaluation` (reads, no lock) then `evaluatePrepared`
+ *  (pure). */
+export interface PreparedEvaluation {
+  readonly version: number;
+  readonly rules: readonly Rule[];
+  readonly decisionInput: DecisionInput;
+}
+
+export interface EvaluatedWithBudget {
+  readonly decision: Decision;
+  readonly trace: EvaluationTrace;
+  readonly decisionInput: DecisionInput;
+  /** What the decision row persists as `budget_state`: the trace's figures plus the binder's
+   *  extras (open-charge amount, escalation cap, binding scope). */
+  readonly budgetState: BudgetState;
+}
+
+/** Pure: resolve the binding budget, hand `evaluate()` the figures as inputs, and return what to
+ *  persist. No clock, no repository. */
+export function evaluatePrepared(
+  prepared: PreparedEvaluation,
+  budget: ResolvedBudget,
+): EvaluatedWithBudget {
+  const declared = prepared.decisionInput.budget.declaredMaxCost;
+  const bound = bindingBudget(budget.scopes, declared);
+  const decisionInput: DecisionInput = {
+    ...prepared.decisionInput,
+    budget: bound.budget,
+    escalation: { attemptCount: budget.escalation.attemptCount },
+  };
+  const { decision, trace } = evaluate(
+    {
+      version: prepared.version,
+      rules: prepared.rules,
+      escalationAttemptCap: budget.escalation.cap,
+    },
+    decisionInput,
+  );
+  const budgetState: BudgetState = {
+    ...trace.budgetState,
+    reservedSpend: declared,
+    escalationAttemptCap: budget.escalation.cap,
+    binding: {
+      scopeType: bound.scope.scopeType,
+      scopeId: bound.scope.scopeId,
+      period: bound.scope.period,
+      periodKey: bound.scope.periodKey,
+      dimension: bound.dimension,
+    },
+  };
+  return { decision, trace, decisionInput, budgetState };
 }
 
 /**
@@ -85,11 +158,23 @@ export async function resolveRulesetAndEvaluate(
   repos: ResolveRulesetAndEvaluateRepos,
   context: TenantContext,
   decisionInput: DecisionInput,
-): Promise<{
-  readonly decision: Decision;
-  readonly trace: EvaluationTrace;
-  readonly decisionInput: DecisionInput;
-}> {
+  binding: Omit<BudgetQuery, 'asOf'> = {},
+): Promise<EvaluatedWithBudget> {
+  const prepared = await prepareEvaluation(repos, context, decisionInput);
+  // Unlocked read: a dry run, or a step that declares no cost and so charges nothing, needs no
+  // serialization — only the charge itself (`BudgetRepository.bindCharged`) does.
+  const budget = await repos.budgets.resolve(
+    scope(context, { ...binding, asOf: decisionInput.evaluatedAt }),
+  );
+  return evaluatePrepared(prepared, budget);
+}
+
+/** Everything except the budget: registry class, grant level, current rule set. */
+export async function prepareEvaluation(
+  repos: PrepareEvaluationRepos,
+  context: TenantContext,
+  decisionInput: DecisionInput,
+): Promise<PreparedEvaluation> {
   const action = await repos.actions.findByKey(decisionInput.action.actionKey);
   if (action === null) throw new UnregisteredActionError(decisionInput.action.actionKey);
 
@@ -126,6 +211,5 @@ export async function resolveRulesetAndEvaluate(
     reasonCode: r.reasonCode,
   }));
 
-  const { decision, trace } = evaluate({ version: latest.version, rules }, correctedInput);
-  return { decision, trace, decisionInput: correctedInput };
+  return { version: latest.version, rules, decisionInput: correctedInput };
 }

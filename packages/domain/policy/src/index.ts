@@ -115,3 +115,54 @@ export { PrismaAutonomyEpochRepository } from './infrastructure/prisma-autonomy-
 export { PrismaAutonomyGrantRepository } from './infrastructure/prisma-autonomy-grant-repository.js';
 export { PrismaApprovalRequestRepository } from './infrastructure/prisma-approval-request-repository.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
+
+// 002 Phase 6 (US4) — budgets and degradation.
+export {
+  assertWithinBudgetBounds,
+  BUDGET_BOUNDS,
+  BUDGET_DEFAULTS,
+  BudgetBoundExceededError,
+  type BudgetLimitWrite,
+  type BudgetPeriod,
+} from './domain/budget-bounds.js';
+export { bindingBudget, scopeStanding, type ScopeFigures } from './domain/budget-figures.js';
+export { periodKeyFor, periodWindow } from './domain/budget-period.js';
+export {
+  DEGRADATION_ORDER,
+  EXHAUSTED_ENTRY,
+  degradationStepOf,
+  entryForStep,
+  stepsToMark,
+  type DegradationEntry,
+} from './domain/degradation.js';
+export {
+  ESCALATION_TO_STATE,
+  type BudgetLimit,
+  type BudgetLimitRepository,
+  type BudgetQuery,
+  type BudgetRepository,
+  type MarkDegradationInput,
+  type MarkDegradationResult,
+  type PutBudgetLimit,
+  type ReadOnlyBudgetRepository,
+  type ResolvedBudget,
+} from './domain/budget-repository.js';
+export {
+  BudgetScopePeriodError,
+  PUT_BUDGET_AUDIT_ACTION,
+  putBudgetLimit,
+  type PutBudgetLimitCommand,
+} from './application/commands/put-budget-limit.js';
+export { markDegradation } from './application/commands/mark-degradation.js';
+export {
+  getBudgetState,
+  type BudgetState as BudgetStateView,
+  type BudgetStateQuery,
+} from './application/queries/get-budget-state.js';
+export {
+  budgetLockKey,
+  degradationEvidenceId,
+  MARK_DEGRADATION_STEP,
+  PrismaBudgetRepository,
+} from './infrastructure/prisma-budget-repository.js';
+export { PrismaBudgetLimitRepository } from './infrastructure/prisma-budget-limit-repository.js';

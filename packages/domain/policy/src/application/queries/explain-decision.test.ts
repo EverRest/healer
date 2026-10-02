@@ -13,6 +13,7 @@ import type {
   ReadOnlyPolicyRulesetRepository,
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
+import { FakeReadOnlyBudgetRepository } from '../../domain/test-support/fake-budget-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import {
   NoPublishedRulesetError,
@@ -143,6 +144,7 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
       rulesets: new ReadOnlyFakeRulesetRepo(published()),
       actions: new FakeActionRepo(),
       autonomyGrants: new FakeAutonomyGrantRepo(),
+      budgets: new FakeReadOnlyBudgetRepository(),
     };
     // @ts-expect-error — `rulesets` is `ReadOnlyPolicyRulesetRepository`; `publish` is not a
     // member of that type. If this stops being a type error (e.g. someone widens
@@ -161,6 +163,7 @@ describe('explainDecision (T024)', () => {
         rulesets: new ReadOnlyFakeRulesetRepo(published()),
         actions: new FakeActionRepo(),
         autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeReadOnlyBudgetRepository(),
       },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
@@ -177,6 +180,7 @@ describe('explainDecision (T024)', () => {
           rulesets: new ReadOnlyFakeRulesetRepo(null),
           actions: new FakeActionRepo(),
           autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeReadOnlyBudgetRepository(),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -207,6 +211,7 @@ describe('explainDecision (T024)', () => {
         rulesets: new ReadOnlyFakeRulesetRepo(rulesetMatchingRealClass),
         actions,
         autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeReadOnlyBudgetRepository(),
       },
       CONTEXT,
       {
@@ -225,6 +230,7 @@ describe('explainDecision (T024)', () => {
           rulesets: new ReadOnlyFakeRulesetRepo(published()),
           actions: new FakeActionRepo(new Map()),
           autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeReadOnlyBudgetRepository(),
         },
         CONTEXT,
         {

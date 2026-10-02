@@ -161,6 +161,30 @@ Per-issue limits, and the per-tenant-period limits inherited from 012's `tenant_
 `tenant_budget.soft_threshold_pcts` is the same shape, which is what makes the per-tenant-period
 limits inheritable rather than convertible.
 
+Scope and period pair as `issue`/`issue` (the per-issue limit, with `scope_id` NULL meaning "every
+issue of the tenant" and an issue id meaning an override for that one) or `tenant`/`day|month`
+(`scope_id` NULL). Unique on `(tenant_id, scope_type, coalesce(scope_id, nil-uuid), period)`; the PUT
+is an upsert on that key. **Which limit applies** (T057, pure, `budget-limits.ts`): for the issue, its
+own row, then the per-issue default row, then the product default; for a tenant period, a
+`budget_limit` row, then 012's `tenant_budget` row (inherited as it stands; its `time_limit` is read
+as milliseconds), then the product default. There is no path to "unbounded".
+
+**Product bounds (T088, FR-021).** Literal maxima as CHECK constraints in migration
+`20261003090000_budget_limit_bounds`, the same values as constants in
+`packages/domain/policy/src/domain/budget-bounds.ts`, with `budget-bounds.test.ts` failing if the two
+disagree: `escalation_attempt_cap` 0–5; `spend_limit` 50 (issue) / 500 (day) / 5000 (month);
+`time_limit_ms` 4 h / 24 h / 20 days; `soft_threshold_pcts` at most 5 entries, each within 1–99. The
+fail-closed defaults for every unset value sit in the same file (`BUDGET_DEFAULTS`): spend 2 / 20 /
+200, time 1 h / 8 h / 80 h, thresholds 50·75·90, escalation cap 2.
+
+**Consumption** is derived on every call, never stored:
+spend = Σ `agent_run.cost` + the declared maximum of every allow `policy_decision` that has not yet
+been matched by a *finished* `agent_run` (its open charge, `budget_state.reservedSpend`, R-11);
+time = Σ `workflow_run` elapsed (to `updated_at` when terminal, to the evaluation instant while
+live). A tenant period is keyed by the **workflow run's start** (`workflow_run.started_at`, found
+for an agent run through `correlation_id`, for a decision through `workflow_run_id`), so a run that
+straddles midnight stays in the window in force when it was requested (T062).
+
 ## policy.action_limit
 
 The rate limits, cooldowns and attempt caps of FR-014, **owned here and nowhere else** (C-11): the
@@ -185,6 +209,16 @@ R-10). Default values are placeholders until the stage-0 benchmark exists.
 
 The idempotency key for "this degradation step has already been recorded as evidence" (R-12).
 Carries no state of its own; the state is the evidence record.
+
+`scope_id` is the issue id for `scope_type = issue` and the tenant id for `scope_type = tenant`
+(the column is NOT NULL). `step` runs 1..n for the n soft thresholds and **n + 1 is exhaustion**
+(entry `ai_steps_refused`), recorded like any other step. The mark is inserted with
+`ON CONFLICT DO NOTHING` in the same transaction as the evidence record: a concurrent writer of the
+same key blocks on the primary key until the first commits, then skips, so exactly one transaction
+writes the evidence. The evidence id is a deterministic function of the key, so even a retry after a
+crash names the same row. The record's `produced_by_step` is `policy.mark_degradation`; its payload
+carries the scope, period key, step, entry applied, dimension (`spend`/`time`) and consumed and
+limit figures — and, on a per-issue exhaustion, the agent runs completed so far.
 
 ## State transitions
 

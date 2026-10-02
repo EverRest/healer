@@ -16,8 +16,9 @@ import {
   type PolicyActionRepository,
   type PolicyRulesetRepository,
   type ReadOnlyAutonomyGrantRepository,
+  type ReadOnlyBudgetRepository,
 } from '@healer/domain-policy';
-import { AUTONOMY_GRANT_REPOSITORY, resolveTenant } from './policy-http.js';
+import { AUTONOMY_GRANT_REPOSITORY, BUDGET_REPOSITORY, resolveTenant } from './policy-http.js';
 import { parseDryRunRequest } from './dry-run.dto.js';
 import { POLICY_RULESET_REPOSITORY } from './policy-rulesets.controller.js';
 
@@ -38,6 +39,7 @@ export class PolicyEvaluationController {
     @Inject(POLICY_ACTION_REPOSITORY) private readonly actions: PolicyActionRepository,
     @Inject(AUTONOMY_GRANT_REPOSITORY)
     private readonly autonomyGrants: ReadOnlyAutonomyGrantRepository,
+    @Inject(BUDGET_REPOSITORY) private readonly budgets: ReadOnlyBudgetRepository,
   ) {}
 
   @Post('dry-run')
@@ -56,7 +58,12 @@ export class PolicyEvaluationController {
 
     try {
       const { decision, trace } = await explainDecision(
-        { rulesets: this.rulesets, actions: this.actions, autonomyGrants: this.autonomyGrants },
+        {
+          rulesets: this.rulesets,
+          actions: this.actions,
+          autonomyGrants: this.autonomyGrants,
+          budgets: this.budgets,
+        },
         context,
         { decisionInput: parsed.data },
       );

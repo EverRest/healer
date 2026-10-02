@@ -66,6 +66,25 @@ describe('replayDecision (T028, FR-002)', () => {
     expect(result.replayed.outcome).toBe('allow');
   });
 
+  it('re-applies the escalation cap the decision was bound with, so a cap-denied decision replays identically (FR-013)', async () => {
+    const repos = { rulesets: new FakeRulesetRepo(new Map([[1, published()]])) };
+    const stored = {
+      decisionInput: buildDecisionInput({ escalation: { attemptCount: 2 } }),
+      rulesetVersion: 1,
+      outcome: 'deny' as const,
+      matchedRuleKeys: ['allow-code-change'],
+    };
+    expect((await replayDecision(repos, CONTEXT, stored)).identical).toBe(false);
+    expect(
+      (
+        await replayDecision(repos, CONTEXT, {
+          ...stored,
+          budgetState: { escalationAttemptCap: 2 },
+        })
+      ).identical,
+    ).toBe(true);
+  });
+
   it('reports (not throws) a differing outcome — an incident, not a test failure', async () => {
     const repos = { rulesets: new FakeRulesetRepo(new Map([[1, published()]])) };
     const result = await replayDecision(repos, CONTEXT, {

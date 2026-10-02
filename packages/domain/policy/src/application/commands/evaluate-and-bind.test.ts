@@ -20,6 +20,7 @@ import type {
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
+import { FakeBudgetRepository } from '../../domain/test-support/fake-budget-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import {
   evaluateAndBind,
@@ -173,6 +174,7 @@ describe('evaluateAndBind (T021)', () => {
         autonomyEpochs: new FakeEpochRepo(0n),
         actions: new FakeActionRepo(),
         autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeBudgetRepository(decisions),
       },
       CONTEXT,
       {
@@ -202,6 +204,7 @@ describe('evaluateAndBind (T021)', () => {
         autonomyEpochs: new FakeEpochRepo(3n),
         actions: new FakeActionRepo(),
         autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeBudgetRepository(new FakeDecisionRepo()),
       },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
@@ -218,6 +221,7 @@ describe('evaluateAndBind (T021)', () => {
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(),
           autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeBudgetRepository(new FakeDecisionRepo()),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -239,6 +243,7 @@ describe('evaluateAndBind (T021)', () => {
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(),
           autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeBudgetRepository(new FakeDecisionRepo()),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -254,6 +259,7 @@ describe('evaluateAndBind (T021)', () => {
       autonomyEpochs: new FakeEpochRepo(0n),
       actions: new FakeActionRepo(),
       autonomyGrants: new FakeAutonomyGrantRepo(),
+      budgets: new FakeBudgetRepository(decisions),
     };
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
     await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
@@ -287,6 +293,7 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
         autonomyEpochs: new FakeEpochRepo(0n),
         actions,
         autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeBudgetRepository(decisions),
       },
       CONTEXT,
       {
@@ -313,6 +320,7 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(new Map()),
           autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeBudgetRepository(new FakeDecisionRepo()),
         },
         CONTEXT,
         {
@@ -333,6 +341,7 @@ describe('evaluateAndBind — actionClass is derived from the registry, not the 
           autonomyEpochs: new FakeEpochRepo(0n),
           actions: new FakeActionRepo(new Map()),
           autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeBudgetRepository(new FakeDecisionRepo()),
         },
         CONTEXT,
         {
