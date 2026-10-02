@@ -23,6 +23,10 @@ export interface BudgetState {
   readonly degradationStep: number;
   readonly degradationApplied: readonly string[];
   readonly state: 'within' | 'degraded' | 'exhausted';
+  /** Configuration replaced by a fail-closed value (an unknown degradation entry, an out-of-range
+   *  threshold in 012's tenant_budget) — what is enforced is not what was written, and a reader
+   *  is told so. */
+  readonly warnings: readonly string[];
 }
 
 /** `GET /budgets/state` (T067, FR-011): the derived aggregate shaped for a reader. Nothing here is
@@ -65,5 +69,6 @@ export async function getBudgetState(
     degradationStep: standing.crossed,
     degradationApplied: applied,
     state: standing.exhausted ? 'exhausted' : standing.crossed > 0 ? 'degraded' : 'within',
+    warnings: budget.warnings,
   };
 }

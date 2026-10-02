@@ -82,6 +82,7 @@ const noopBudgets: BudgetRepository = {
   resolve: () => Promise.reject(new Error('not implemented in this test')),
   bindCharged: () => Promise.reject(new Error('not implemented in this test')),
   markDegradation: () => Promise.reject(new Error('not implemented in this test')),
+  releaseAbandonedCharges: () => Promise.reject(new Error('not implemented in this test')),
 };
 const noopBudgetLimits: BudgetLimitRepository = {
   list: () => Promise.resolve([]),

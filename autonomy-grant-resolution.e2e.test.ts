@@ -23,6 +23,7 @@ import {
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer/shared';
 import { buildDecisionInput } from './packages/domain/policy/src/domain/test-support/fixtures.js';
+import { seedBase, seedIssue, seedWorkflowRun } from './test/budget-fixtures.js';
 import { applySqlFile, startPostgres, type StartedPostgres } from './test/containers.js';
 
 /**
@@ -96,6 +97,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await seedBase(pg);
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     await prisma.policyAction.create({
       data: {
@@ -111,7 +113,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
-    budgets = new PrismaBudgetRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
     approvals = new PrismaApprovalRequestRepository(prisma);
   }, 180_000);
 
@@ -268,13 +270,18 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // "Approve": a require_approval decision, parked as a pending approval_request recording
       // today's epoch — RequestApproval itself is Phase 7 (out of scope); this is the row shape
       // it will write, built directly since there is no command yet to call.
+      const run = await seedWorkflowRun(pg, {
+        tenantId: context.tenantId,
+        issueId: await seedIssue(pg, context.tenantId),
+        startedAt: new Date().toISOString(),
+      });
       const bound = await withCorrelation(newCorrelationId(), () =>
         evaluateAndBind(
           { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           context,
           {
             decisionInput: decisionInputFor('component-a'),
-            binding: { workflowRunId: randomUUID() },
+            binding: { workflowRunId: run.id },
           },
         ),
       );

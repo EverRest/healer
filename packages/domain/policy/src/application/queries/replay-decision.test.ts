@@ -69,7 +69,7 @@ describe('replayDecision (T028, FR-002)', () => {
   it('re-applies the escalation cap the decision was bound with, so a cap-denied decision replays identically (FR-013)', async () => {
     const repos = { rulesets: new FakeRulesetRepo(new Map([[1, published()]])) };
     const stored = {
-      decisionInput: buildDecisionInput({ escalation: { attemptCount: 2 } }),
+      decisionInput: buildDecisionInput({ escalation: { attemptCount: 2, escalating: true } }),
       rulesetVersion: 1,
       outcome: 'deny' as const,
       matchedRuleKeys: ['allow-code-change'],

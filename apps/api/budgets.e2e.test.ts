@@ -28,7 +28,7 @@ import {
   assertTenantIsolatedList,
   assertTenantScopedEnqueue,
 } from '../../test/tenant-isolation.js';
-import { applySqlFile, startPostgres, type StartedPostgres } from '../../test/containers.js';
+import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { seedAgentRun, seedBase, seedIssue } from '../../test/budget-fixtures.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
@@ -140,6 +140,79 @@ describe('/budgets (002 T067)', () => {
       });
     });
 
+    it('a partial write starts from the limit in force, including 012 tenant_budget — never from the product default', async () => {
+      const tenantId = randomUUID();
+      await query(
+        pg,
+        `insert into "tenant"."tenant" (id, name, status) values ('${tenantId}', 't', 'active');
+         insert into "tenant"."tenant_budget"
+           (tenant_id, period, spend_limit, time_limit, soft_threshold_pcts, degradation_order, updated_at)
+         values ('${tenantId}', 'day', 30, 5000000, '{60,80}', '{cheaper_tier}', now())`,
+      );
+      await put(tenantId, { scopeType: 'tenant', period: 'day', escalationAttemptCap: 1 }).expect(
+        200,
+      );
+      const listed = await request(app.getHttpServer())
+        .get(path('/budgets'))
+        .set('X-Tenant-Id', tenantId);
+      expect(listed.body.items[0]).toMatchObject({
+        spendLimit: 30,
+        timeLimitMs: 5_000_000,
+        softThresholdPcts: [60, 80],
+        escalationAttemptCap: 1,
+      });
+    });
+
+    it('concurrent partial writes of different fields are both kept — the merge is inside the transaction', async () => {
+      const tenantId = randomUUID();
+      await Promise.all([
+        put(tenantId, { scopeType: 'tenant', period: 'day', spendLimit: 7 }).expect(200),
+        put(tenantId, { scopeType: 'tenant', period: 'day', escalationAttemptCap: 3 }).expect(200),
+      ]);
+      const listed = await request(app.getHttpServer())
+        .get(path('/budgets'))
+        .set('X-Tenant-Id', tenantId);
+      expect(listed.body.items[0]).toMatchObject({ spendLimit: 7, escalationAttemptCap: 3 });
+    });
+
+    it('an unset (NULL) soft-threshold array is reported as what is enforced, not as empty', async () => {
+      const tenantId = randomUUID();
+      await query(
+        pg,
+        `insert into "policy"."budget_limit"
+           (id, tenant_id, scope_type, scope_id, period, spend_limit, time_limit_ms, soft_threshold_pcts,
+            escalation_attempt_cap, updated_at, updated_by)
+         values ('${randomUUID()}', '${tenantId}', 'tenant', null, 'day', 5, 1000, null, 1, now(), 'sql')`,
+      );
+      const listed = await request(app.getHttpServer())
+        .get(path('/budgets'))
+        .set('X-Tenant-Id', tenantId);
+      expect(listed.body.items[0].softThresholdPcts).toEqual([50, 75, 90]);
+    });
+
+    it.each([[[0]], [[100]], [[-5]], [[10, 20, 30, 40, 50, 60]], [[2147483648]]])(
+      'refuses soft thresholds %j with 422, never a silent drop and never a 500',
+      async (softThresholdPcts) => {
+        await put(randomUUID(), { scopeType: 'tenant', period: 'day', softThresholdPcts }).expect(
+          422,
+        );
+      },
+    );
+
+    it('refuses to rewrite an inherited limit that is itself above a product bound with a partial write', async () => {
+      const tenantId = randomUUID();
+      await query(
+        pg,
+        `insert into "tenant"."tenant" (id, name, status) values ('${tenantId}', 't', 'active');
+         insert into "tenant"."tenant_budget"
+           (tenant_id, period, spend_limit, time_limit, soft_threshold_pcts, degradation_order, updated_at)
+         values ('${tenantId}', 'day', 9999, 1000, '{50}', '{cheaper_tier}', now())`,
+      );
+      await put(tenantId, { scopeType: 'tenant', period: 'day', escalationAttemptCap: 1 }).expect(
+        422,
+      );
+    });
+
     // Quickstart 41 / T088: stop rules have bounds, refused at the configuration write.
     it('refuses an escalation attempt cap above the product bound with 422', async () => {
       const res = await put(randomUUID(), {
@@ -193,7 +266,8 @@ describe('/budgets (002 T067)', () => {
         orderBy: { occurredAt: 'asc' },
       });
       expect(entries.map((e) => e.actorRef)).toEqual(['alice', 'bob']);
-      expect(entries[0]?.reason).toContain('spendLimit unset -> 5');
+      // the "before" is the limit in force — here the product default, never an unrecorded gap
+      expect(entries[0]?.reason).toContain('spendLimit 20 -> 5');
       expect(entries[1]?.reason).toContain('spendLimit 5 -> 8');
     });
   });
@@ -229,6 +303,14 @@ describe('/budgets (002 T067)', () => {
         .set('X-Tenant-Id', tenantId)
         .expect(200);
       expect(res.body).toMatchObject({ state: 'exhausted', periodKey: 'issue' });
+    });
+
+    it('an unknown or other-tenant workflow run is 404, never a fresh window', async () => {
+      await request(app.getHttpServer())
+        .get(path('/budgets/state'))
+        .query({ scopeType: 'tenant', workflowRunId: randomUUID() })
+        .set('X-Tenant-Id', randomUUID())
+        .expect(404);
     });
 
     it('needs scopeType, and a scopeId for an issue', async () => {

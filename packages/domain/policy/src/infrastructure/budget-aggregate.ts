@@ -1,7 +1,9 @@
-import type { Prisma } from '@healer/prisma-client';
+import { NotFoundError } from '@healer/shared';
+import { Prisma } from '@healer/prisma-client';
 import type { BudgetPeriod } from '../domain/budget-bounds.js';
 import type { ScopeFigures } from '../domain/budget-figures.js';
 import {
+  budgetConfigWarnings,
   effectiveLimit,
   resolveDegradationOrder,
   tightestEscalationCap,
@@ -12,6 +14,9 @@ import {
 import { periodKeyFor, periodWindow } from '../domain/budget-period.js';
 import {
   ESCALATION_TO_STATE,
+  EvaluationInstantError,
+  PARKED_STATE_PREFIX,
+  PARKED_STATES,
   type BudgetQuery,
   type ResolvedBudget,
 } from '../domain/budget-repository.js';
@@ -40,13 +45,44 @@ type Db = Prisma.TransactionClient;
  *  `started_at >= window.start` sound.) */
 async function pinnedInstant(db: Db, tenantId: string, query: BudgetQuery): Promise<Date> {
   if (query.workflowRunId === undefined) return query.asOf;
+  // An unknown, malformed or other-tenant run is an error, never a quiet fall-back to the caller's
+  // instant: falling back would hand a bogus run id a fresh budget window, and counting nothing for
+  // it would hide the mistake. Not-found, not forbidden (FR-018).
+  if (!UUID.test(query.workflowRunId)) throw new NotFoundError('WorkflowRun');
   const rows = await db.$queryRaw<{ started_at: Date }[]>`
     SELECT started_at FROM "workflow"."workflow_run"
     WHERE tenant_id = ${tenantId}::uuid AND id = ${query.workflowRunId}::uuid`;
-  return rows[0]?.started_at ?? query.asOf;
+  if (rows[0] === undefined) throw new NotFoundError('WorkflowRun');
+  return rows[0].started_at;
 }
 
-async function loadLimits(
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What a *named* issue and an *enforcing* evaluation require before anything is read or charged. */
+async function assertEvaluable(
+  db: Db,
+  tenantId: string,
+  query: BudgetQuery,
+  maxSkewMs: number,
+): Promise<void> {
+  if (query.issueId !== undefined) {
+    if (!UUID.test(query.issueId)) throw new NotFoundError('Issue');
+    const rows = await db.$queryRaw<{ one: number }[]>`
+      SELECT 1 AS one FROM "issue"."issue"
+      WHERE tenant_id = ${tenantId}::uuid AND id = ${query.issueId}::uuid`;
+    if (rows[0] === undefined) throw new NotFoundError('Issue');
+  }
+  if (query.enforcing === true && Number.isFinite(maxSkewMs)) {
+    // The instant selects the budget window (a run-less evaluation is keyed by it), so an
+    // enforcing evaluation whose instant is far from the database clock is a way to spend in a
+    // window that is not the present one.
+    const [now] = await db.$queryRaw<{ now: Date }[]>`SELECT now() AS now`;
+    const skew = Math.abs(query.asOf.getTime() - (now?.now ?? query.asOf).getTime());
+    if (skew > maxSkewMs) throw new EvaluationInstantError(skew, maxSkewMs);
+  }
+}
+
+export async function loadLimits(
   db: Db,
   tenantId: string,
   issueId: string | undefined,
@@ -106,8 +142,25 @@ export interface Consumption {
   readonly timeMs: number;
 }
 
-// "Elapsed" of a run: to its last update when terminal, to the caller's instant while live.
-// Waiting on a human counts — T056 says elapsed — which is the conservative reading.
+/**
+ * The **active** elapsed time of a run, in ms (T056, review H1): from its start to its last update
+ * when terminal, to the caller's instant while live — minus the time it spent *parked*. A run is
+ * parked from a transition into a state named `awaiting_*` (or in `PARKED_STATES`) until its next
+ * transition; waiting on an approver or a callback is not execution, and charging it would let one
+ * slow human exhaust an issue's time budget. Derived from `workflow_transition`, the history 012
+ * already keeps — no second record of waiting. SQL text, shared by the tenant and issue queries.
+ */
+function activeElapsedMs(asOf: Date): Prisma.Sql {
+  const end = Prisma.sql`(CASE WHEN wr.terminal_state IS NOT NULL THEN wr.updated_at ELSE ${asOf}::timestamptz END)`;
+  return Prisma.sql`GREATEST(0, EXTRACT(EPOCH FROM (${end} - wr.started_at)) * 1000 - COALESCE((
+    SELECT SUM(GREATEST(0, EXTRACT(EPOCH FROM (LEAST(COALESCE(t.next_at, ${end}), ${end}) - t.occurred_at)) * 1000))
+    FROM (SELECT tr.to_state, tr.occurred_at,
+                 lead(tr.occurred_at) OVER (ORDER BY tr.occurred_at, tr.id) AS next_at
+          FROM "workflow"."workflow_transition" tr
+          WHERE tr.tenant_id = wr.tenant_id AND tr.run_id = wr.id) t
+    WHERE starts_with(t.to_state, ${PARKED_STATE_PREFIX}::text)
+       OR t.to_state IN (${Prisma.join([...PARKED_STATES])})), 0))`;
+}
 
 export async function tenantConsumption(
   db: Db,
@@ -139,9 +192,7 @@ export async function tenantConsumption(
                       WHERE ar.tenant_id = pd.tenant_id AND ar.policy_decision_id = pd.id
                         AND ar.finished_at IS NOT NULL)`;
   const [time] = await db.$queryRaw<{ v: number }[]>`
-    SELECT COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM (
-             CASE WHEN wr.terminal_state IS NOT NULL THEN wr.updated_at ELSE ${asOf}::timestamptz END
-             - wr.started_at)) * 1000)), 0)::float8 AS v
+    SELECT COALESCE(SUM(${activeElapsedMs(asOf)}), 0)::float8 AS v
     FROM "workflow"."workflow_run" wr
     WHERE wr.tenant_id = ${tenantId}::uuid
       AND wr.started_at >= ${window.start}::timestamptz AND wr.started_at < ${window.end}::timestamptz`;
@@ -166,9 +217,7 @@ export async function issueConsumption(
                       WHERE ar.tenant_id = pd.tenant_id AND ar.policy_decision_id = pd.id
                         AND ar.finished_at IS NOT NULL)`;
   const [time] = await db.$queryRaw<{ v: number }[]>`
-    SELECT COALESCE(SUM(GREATEST(0, EXTRACT(EPOCH FROM (
-             CASE WHEN wr.terminal_state IS NOT NULL THEN wr.updated_at ELSE ${asOf}::timestamptz END
-             - wr.started_at)) * 1000)), 0)::float8 AS v
+    SELECT COALESCE(SUM(${activeElapsedMs(asOf)}), 0)::float8 AS v
     FROM "workflow"."workflow_run" wr
     WHERE wr.tenant_id = ${tenantId}::uuid AND wr.issue_id = ${issueId}::uuid`;
   return { spend: (finished?.v ?? 0) + (open?.v ?? 0), timeMs: time?.v ?? 0 };
@@ -217,7 +266,9 @@ export async function resolveBudget(
   db: Db,
   tenantId: string,
   query: BudgetQuery,
+  maxSkewMs: number,
 ): Promise<ResolvedBudget> {
+  await assertEvaluable(db, tenantId, query, maxSkewMs);
   const pinned = await pinnedInstant(db, tenantId, query);
   const { rows, tenantBudgets } = await loadLimits(db, tenantId, query.issueId);
 
@@ -261,5 +312,6 @@ export async function resolveBudget(
       cap: tightestEscalationCap(caps),
     },
     degradationOrder: resolveDegradationOrder(tenantBudgets),
+    warnings: budgetConfigWarnings(tenantBudgets),
   };
 }

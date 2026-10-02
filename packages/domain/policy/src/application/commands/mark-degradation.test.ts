@@ -32,6 +32,7 @@ const budgetOf = (...scopes: ScopeFigures[]): ResolvedBudget => ({
   scopes,
   escalation: { attemptCount: 0, cap: 2 },
   degradationOrder: DEGRADATION_ORDER,
+  warnings: [],
 });
 
 function recorder() {

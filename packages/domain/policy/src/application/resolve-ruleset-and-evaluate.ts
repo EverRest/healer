@@ -102,7 +102,14 @@ export function evaluatePrepared(
   const decisionInput: DecisionInput = {
     ...prepared.decisionInput,
     budget: bound.budget,
-    escalation: { attemptCount: budget.escalation.attemptCount },
+    // The count is resolved from the run, never the caller's; whether the proposal *is* an
+    // escalation is the caller's structural statement and is kept.
+    escalation: {
+      attemptCount: budget.escalation.attemptCount,
+      ...(prepared.decisionInput.escalation.escalating !== undefined
+        ? { escalating: prepared.decisionInput.escalation.escalating }
+        : {}),
+    },
   };
   const { decision, trace } = evaluate(
     {

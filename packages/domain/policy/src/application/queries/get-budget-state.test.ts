@@ -26,6 +26,7 @@ const repoOf = (...scopes: ScopeFigures[]) => {
     scopes,
     escalation: { attemptCount: 0, cap: 2 },
     degradationOrder: DEGRADATION_ORDER,
+    warnings: [],
   };
   return new FakeReadOnlyBudgetRepository(budget);
 };
@@ -89,6 +90,19 @@ describe('getBudgetState', () => {
       (await getBudgetState(repo, CONTEXT, { scopeType: 'tenant', period: 'month', asOf }))
         ?.spendLimit,
     ).toBe(999);
+  });
+
+  it('surfaces configuration that was replaced by a fail-closed value', async () => {
+    const repo = new FakeReadOnlyBudgetRepository({
+      scopes: [scopeOf({})],
+      escalation: { attemptCount: 0, cap: 2 },
+      degradationOrder: DEGRADATION_ORDER,
+      warnings: [
+        'tenant_budget(day).degradation_order names unknown entries [x]; the declared order applies',
+      ],
+    });
+    const state = await getBudgetState(repo, CONTEXT, { scopeType: 'tenant', asOf });
+    expect(state?.warnings).toHaveLength(1);
   });
 
   it('selects the issue scope when asked about an issue', async () => {

@@ -38,8 +38,19 @@ export interface ExplainDecisionRepos {
 export async function explainDecision(
   repos: ExplainDecisionRepos,
   context: TenantContext,
-  input: { readonly decisionInput: DecisionInput },
+  input: {
+    readonly decisionInput: DecisionInput;
+    /** The issue and run the proposal would be bound to. Named, the dry run resolves the same
+     *  budget scopes and escalation count the enforcing evaluation does (R-08, quickstart 31) — an
+     *  over-budget issue is DENY in both. Absent, only the tenant's budgets apply. */
+    readonly binding?: { readonly issueId?: string; readonly workflowRunId?: string };
+  },
 ): Promise<{ readonly decision: Decision; readonly trace: EvaluationTrace }> {
-  const { decision, trace } = await resolveRulesetAndEvaluate(repos, context, input.decisionInput);
+  const { decision, trace } = await resolveRulesetAndEvaluate(
+    repos,
+    context,
+    input.decisionInput,
+    input.binding,
+  );
   return { decision, trace };
 }

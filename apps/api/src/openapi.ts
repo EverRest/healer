@@ -90,6 +90,8 @@ const noopBudgets: BudgetRepository = {
   resolve: () => Promise.reject(new Error('not implemented for contract generation')),
   bindCharged: () => Promise.reject(new Error('not implemented for contract generation')),
   markDegradation: () => Promise.reject(new Error('not implemented for contract generation')),
+  releaseAbandonedCharges: () =>
+    Promise.reject(new Error('not implemented for contract generation')),
 };
 const noopBudgetLimits: BudgetLimitRepository = {
   list: () => Promise.resolve([]),

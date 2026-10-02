@@ -159,10 +159,10 @@ describe('evaluateAndBind — budget resolution (T056, T060, T066)', () => {
   it('the escalation count and cap come from the resolved budget, not the caller (FR-013)', async () => {
     const { repos } = reposWith(roomyBudget({ escalation: { attemptCount: 2, cap: 2 } }));
     const result = await evaluateAndBind(repos, CONTEXT, {
-      decisionInput: buildDecisionInput({ escalation: { attemptCount: 0 } }),
+      decisionInput: buildDecisionInput({ escalation: { attemptCount: 0, escalating: true } }),
     });
     expect(result.decision.outcome).toBe('deny');
-    expect(result.decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+    expect(result.decision.reasonCodes).toContain('ESCALATION_CAP_REACHED');
   });
 
   it('marks the degradation steps the evaluation found, attached to the bound issue', async () => {
@@ -185,6 +185,68 @@ describe('evaluateAndBind — budget resolution (T056, T060, T066)', () => {
     });
     expect(result.decision.reasonCodes).toContain('BUDGET_EXHAUSTED');
     expect(budgets.marks.map((m) => m.step)).toEqual([1, 2, 3, 4]);
+  });
+
+  describe('after the decision commits (review H2/C2, I3)', () => {
+    it('a failing degradation mark is logged, not thrown: the committed decision is still returned', async () => {
+      const { repos, budgets, decisions } = reposWith(nearlyFull(60));
+      budgets.markError = new Error('evidence write failed');
+      const logged: Record<string, unknown>[] = [];
+      const result = await evaluateAndBind(
+        { ...repos, log: { error: (fields) => void logged.push(fields) } },
+        CONTEXT,
+        { decisionInput: buildDecisionInput(), binding: { issueId: 'issue-1' } },
+      );
+      expect(result.decision.outcome).toBe('allow');
+      expect(decisions.recorded).toHaveLength(1);
+      expect(logged).toHaveLength(1);
+      expect(String(logged[0]?.['err'])).toContain('evidence write failed');
+    });
+
+    it('reads the autonomy epoch before anything is charged, so a revocation during the wait is not hidden', async () => {
+      const { repos, decisions } = reposWith(roomyBudget());
+      let recordedAtRead = -1;
+      const result = await evaluateAndBind(
+        {
+          ...repos,
+          autonomyEpochs: {
+            current: async () => {
+              recordedAtRead = decisions.recorded.length;
+              return 7n;
+            },
+            bump: async () => 8n,
+          },
+        },
+        CONTEXT,
+        { decisionInput: buildDecisionInput() },
+      );
+      expect(recordedAtRead).toBe(0);
+      expect(result.autonomyEpoch).toBe(7n);
+    });
+
+    it('a charged step carries a request key; a step that charges nothing does not', async () => {
+      const { repos, decisions } = reposWith(roomyBudget());
+      await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
+      await evaluateAndBind(repos, CONTEXT, {
+        decisionInput: buildDecisionInput({
+          budget: { consumed: 0, limit: 100, declaredMaxCost: 0, degradationStep: 0 },
+        }),
+      });
+      expect(decisions.recorded[0]?.requestKey).toMatch(/^[0-9a-f]{64}$/);
+      expect(decisions.recorded[1]?.requestKey).toBeUndefined();
+    });
+
+    it("the caller's statement that a proposal escalates survives resolution; the count does not", async () => {
+      const { repos } = reposWith(roomyBudget({ escalation: { attemptCount: 2, cap: 2 } }));
+      const refused = await evaluateAndBind(repos, CONTEXT, {
+        decisionInput: buildDecisionInput({ escalation: { attemptCount: 0, escalating: true } }),
+      });
+      expect(refused.decision.reasonCodes).toContain('ESCALATION_CAP_REACHED');
+      const unaffected = await evaluateAndBind(repos, CONTEXT, {
+        decisionInput: buildDecisionInput({ escalation: { attemptCount: 0 } }),
+      });
+      expect(unaffected.decision.outcome).toBe('allow');
+    });
   });
 
   it('resolves the budget for the bound run and issue, at the decision instant', async () => {

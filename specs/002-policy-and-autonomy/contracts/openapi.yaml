@@ -238,7 +238,12 @@ components:
             attemptCount:
               {
                 type: integer,
-                description: "owned by 012's workflow_run — counted from that run's escalation transitions, never stored as a counter here (FR-013)",
+                description: "resolved from 012's workflow_run — counted from that run's escalation transitions, never stored as a counter here, and the caller's value is replaced (FR-013)",
+              }
+            escalating:
+              {
+                type: boolean,
+                description: 'this proposal is an escalation to a stronger tier; the escalation attempt cap applies to escalating proposals only. Absent means false',
               }
         declaredMaxCost: { type: number, description: 'the ceiling charged ex ante (R-11)' }
         evaluatedAt:
@@ -294,7 +299,7 @@ components:
             invalidatedReason:
               type: string
               nullable: true
-              enum: [epoch_bump, approval_expired, digest_mismatch, null]
+              enum: [epoch_bump, approval_expired, digest_mismatch, charge_abandoned, null]
     AutonomyGrant:
       type: object
       required: [id, actionKey, level, grantedBy, grantedAt]

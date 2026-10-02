@@ -6,6 +6,7 @@ import {
   BUDGET_BOUNDS,
   BUDGET_DEFAULTS,
   BudgetBoundExceededError,
+  BudgetThresholdsInvalidError,
 } from './budget-bounds.js';
 
 // T088 (FR-021): a literal maximum in the migration, the same value as a constant in code, and a
@@ -98,6 +99,43 @@ describe('budget product bounds (T088, FR-021)', () => {
       ).toThrow(BudgetBoundExceededError);
     },
   );
+
+  it('the soft-threshold count maximum in the migration equals the constant in code', () => {
+    const m = sql.match(/cardinality\("soft_threshold_pcts"\) <= (\d+)/);
+    expect(m, 'migration must bound the threshold count with a literal').not.toBeNull();
+    expect(Number(m?.[1])).toBe(BUDGET_BOUNDS.maxSoftThresholds);
+  });
+
+  describe('soft thresholds are refused, never silently dropped', () => {
+    const w = (softThresholdPcts: number[]) => ({ period: 'day' as const, softThresholdPcts });
+
+    it('accepts up to the bound, each an integer in 1..99', () => {
+      expect(() => assertWithinBudgetBounds(w([50, 75, 90]))).not.toThrow();
+      expect(() => assertWithinBudgetBounds(w([1, 2, 3, 4, 99]))).not.toThrow();
+      expect(() => assertWithinBudgetBounds(w([]))).not.toThrow();
+    });
+
+    it.each([[[0]], [[100]], [[-1]], [[50.5]], [[2 ** 40]], [[Number.NaN]]])(
+      'refuses the out-of-range value %j',
+      (pcts) => {
+        expect(() => assertWithinBudgetBounds(w(pcts))).toThrow(BudgetThresholdsInvalidError);
+      },
+    );
+
+    it('refuses more thresholds than the bound', () => {
+      expect(() => assertWithinBudgetBounds(w([10, 20, 30, 40, 50, 60]))).toThrow(
+        BudgetThresholdsInvalidError,
+      );
+    });
+
+    it('is a 422-shaped error (VALIDATION), not a crash', () => {
+      try {
+        assertWithinBudgetBounds(w([0]));
+      } catch (error) {
+        expect((error as { code?: string }).code).toBe('VALIDATION');
+      }
+    });
+  });
 
   it('refuses negative limits', () => {
     expect(() => assertWithinBudgetBounds({ period: 'day', spendLimit: -1 })).toThrow(

@@ -210,7 +210,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     decisions = new PrismaPolicyDecisionRepository(prisma);
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
-    budgets = new PrismaBudgetRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
     actions = new PrismaPolicyActionRepository(prisma);
 
     // `policy_action` is global (batch 9 C1(b) made `actions` a required dependency of both

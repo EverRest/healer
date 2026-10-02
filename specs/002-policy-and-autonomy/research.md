@@ -220,27 +220,30 @@ of a table we already have, and it has to be reconciled against that table to be
 ## R-11 · Charge the declared ceiling before the step, reconcile after it
 
 **Decision**: every AI step declares its maximum cost before running. The budget predicate tests
-`consumed + declared_max ≤ limit`, not `consumed ≤ limit`. Actual cost lands in `agent_run` and the
-next evaluation reads it.
+`consumed + declared_max ≤ limit`, not `consumed ≤ limit`. The declared maximum of an *allowed* step
+is carried by its persisted `policy_decision` (`budget_state.reservedSpend`) as an **open charge**
+that counts against the budget until a finished `agent_run` references the decision, at which point
+the actual cost replaces it. Resolving the budget and persisting the decision happen in one
+transaction under a bounded per-tenant advisory lock (ADR 0015), and a retry of the same step returns
+the decision it already minted (`request_key`) rather than charging again. An allowed step that
+never starts is released by `releaseAbandonedCharges` (`invalidated_reason = 'charge_abandoned'`).
 
 **Rationale**: SC-006 requires spend to stay *within* the period budget under a flood, and a check
 on consumption alone always permits one more step than the budget allows — the step that discovers
 the limit is the step that exceeds it. Charging the declared ceiling ex ante bounds the overshoot at
-zero without a reservation table or a two-phase commit.
+zero. Two things the ex-ante check does *not* do on its own, both found by running it: under READ
+COMMITTED two concurrent steps both read `consumed = 90`, both pass `90 + 10 <= 100` and both commit
+(17 of 20 charges against a limit of 10 were allowed), so the charge has to be visible to the next
+reader before the step runs and the read-then-write has to be serialised; and a retry of a lost
+response must not mint a second charge. Neither needs a reservation table, a counter or a
+two-phase commit — the open charge is derived from rows that exist for other reasons.
 
-**Corrected during implementation (T060):** the first draft of this paragraph also said "or a
-lock", on the reasoning that the ex-ante check alone makes the tenant-period aggregate safe under
-concurrency. It does not: under READ COMMITTED two concurrent steps both read `consumed = 90`, both
-pass `90 + 10 <= 100`, and both commit. The charge has to be *visible to the next reader before it
-runs*, and the read-then-write has to be serialised. So the declared maximum of an allowed step is
-carried by its persisted `policy_decision` (`budget_state.reservedSpend`) — an *open charge*, derived
-like everything else and replaced by the actual cost the moment a finished `agent_run` references the
-decision — and resolve-and-persist run under a per-tenant advisory lock. Still no reservation table
-and no counter; the cost of the design is that a decision whose step never runs stays charged until
-something invalidates it (fail-closed, and recorded as an open item in QUESTIONS.md).
-
-**Alternatives**: a reservation row released on completion (a distributed lease, with the leak that
-every lease design has when a worker dies); checking consumption only (guaranteed to overshoot).
+**Alternatives**: a reservation row or lease held across the step (008 R-16's shape: right for a
+long apply, wrong for a read-modify-write of milliseconds, and it leaks when a worker dies);
+SERIALIZABLE isolation (unbounded retries on contention); a stored counter (the second number R-10
+exists to prevent); checking consumption only (guaranteed to overshoot). **Known limit**: a step
+that was consumed (started) but whose run never finishes keeps its charge — the append-only trigger
+forbids invalidating a consumed decision — until the run writer finalises the `agent_run`.
 
 ## R-12 · Degradation is derived state, marked once
 

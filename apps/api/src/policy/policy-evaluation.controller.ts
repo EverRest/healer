@@ -5,7 +5,9 @@ import {
   Headers,
   HttpCode,
   Inject,
+  NotFoundException,
   Post,
+  Query,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import {
@@ -18,7 +20,13 @@ import {
   type ReadOnlyAutonomyGrantRepository,
   type ReadOnlyBudgetRepository,
 } from '@healer/domain-policy';
-import { AUTONOMY_GRANT_REPOSITORY, BUDGET_REPOSITORY, resolveTenant } from './policy-http.js';
+import {
+  AUTONOMY_GRANT_REPOSITORY,
+  BUDGET_REPOSITORY,
+  resolveTenant,
+  UUID_PATTERN,
+} from './policy-http.js';
+import { NotFoundError } from '@healer/shared';
 import { parseDryRunRequest } from './dry-run.dto.js';
 import { POLICY_RULESET_REPOSITORY } from './policy-rulesets.controller.js';
 
@@ -47,8 +55,20 @@ export class PolicyEvaluationController {
   async dryRun(
     @Body() body: unknown,
     @Headers('x-tenant-id') tenantIdHeader?: string,
+    /** Optional binding: named, the dry run resolves the same issue budget and escalation count
+     *  the enforcing evaluation would (R-08, quickstart 31). */
+    @Query('issueId') issueId?: string,
+    @Query('workflowRunId') workflowRunId?: string,
   ): Promise<unknown> {
     const context = resolveTenant(tenantIdHeader);
+    for (const [name, value] of [
+      ['issueId', issueId],
+      ['workflowRunId', workflowRunId],
+    ] as const) {
+      if (value !== undefined && !UUID_PATTERN.test(value)) {
+        throw new UnprocessableEntityException(`${name} must be a UUID`);
+      }
+    }
     const parsed = parseDryRunRequest(body);
     if (!parsed.success) {
       throw new UnprocessableEntityException(
@@ -65,7 +85,13 @@ export class PolicyEvaluationController {
           budgets: this.budgets,
         },
         context,
-        { decisionInput: parsed.data },
+        {
+          decisionInput: parsed.data,
+          binding: {
+            ...(issueId !== undefined ? { issueId } : {}),
+            ...(workflowRunId !== undefined ? { workflowRunId } : {}),
+          },
+        },
       );
       return {
         outcome: decision.outcome,
@@ -79,6 +105,7 @@ export class PolicyEvaluationController {
         reasonCodes: trace.reasonCodes,
       };
     } catch (error) {
+      if (error instanceof NotFoundError) throw new NotFoundException(error.message);
       if (error instanceof NoPublishedRulesetError || error instanceof UnregisteredActionError) {
         throw new UnprocessableEntityException(error.message);
       }

@@ -111,17 +111,20 @@ function applyBudget(current: StepResult, input: DecisionInput): StepResult {
 
 // FR-013 (T066): escalation stops at the cap. `escalation.attemptCount` is an input counted from
 // 012's `workflow_run`; the cap comes from `budget_limit.escalation_attempt_cap` via the resolved
-// rule set. Absent cap = nothing to enforce here (the resolver always supplies one, falling back
-// to a fail-closed default).
+// rule set. It applies to an *escalating* proposal only (`escalation.escalating`) and carries its
+// own reason code, distinct from the per-action attempt cap of FR-014 (`ATTEMPT_CAP_REACHED`).
+// Absent cap = nothing to enforce here (the resolver always supplies one, falling back to a
+// fail-closed default).
 function applyEscalationCap(
   current: StepResult,
   input: DecisionInput,
   cap: number | undefined,
 ): StepResult {
-  if (cap === undefined || input.escalation.attemptCount < cap) return current;
+  if (cap === undefined || input.escalation.escalating !== true) return current;
+  if (input.escalation.attemptCount < cap) return current;
   return {
     outcome: 'deny',
-    reasonCodes: addReasonCode(current.reasonCodes, 'ATTEMPT_CAP_REACHED'),
+    reasonCodes: addReasonCode(current.reasonCodes, 'ESCALATION_CAP_REACHED'),
   };
 }
 

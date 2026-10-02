@@ -11,17 +11,16 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import {
-  BUDGET_DEFAULTS,
   BudgetBoundExceededError,
+  BudgetThresholdsInvalidError,
   BudgetScopePeriodError,
   getBudgetState,
   putBudgetLimit,
-  type BudgetLimit,
   type BudgetLimitRepository,
   type BudgetRepository,
 } from '@healer/domain-policy';
 import type { IssueRepository } from '@healer/domain-issues';
-import { newCorrelationId, scope, withCorrelation } from '@healer/shared';
+import { newCorrelationId, NotFoundError, scope, withCorrelation } from '@healer/shared';
 import { budgetStateQuerySchema, putBudgetRequestSchema } from './budgets.dto.js';
 import {
   BUDGET_REPOSITORY,
@@ -73,33 +72,31 @@ export class BudgetsController {
     }
     const req = parsed.data;
 
-    // A partial write keeps what is already configured; where nothing is, the fail-closed
-    // default (FR-021) — an omitted field never becomes "unbounded".
-    const existing: BudgetLimit | undefined = (await this.limits.list(scope(context, {}))).find(
-      (l) => l.scopeType === req.scopeType && l.period === req.period,
-    );
+    // A partial write is merged over the limit **in force** (the stored row, else 012's
+    // tenant_budget, else the product default) inside the repository's transaction — never here,
+    // where a concurrent write could be lost and an inherited limit reverted to a default.
     try {
       await withCorrelation(newCorrelationId(), () =>
         putBudgetLimit(this.limits, context, {
           scopeType: req.scopeType,
           period: req.period,
-          spendLimit:
-            req.spendLimit ?? existing?.spendLimit ?? BUDGET_DEFAULTS.spendLimit[req.period],
-          timeLimitMs:
-            req.timeLimitMs ?? existing?.timeLimitMs ?? BUDGET_DEFAULTS.timeLimitMs[req.period],
-          softThresholdPcts:
-            req.softThresholdPcts ??
-            existing?.softThresholdPcts ??
-            BUDGET_DEFAULTS.softThresholdPcts,
-          escalationAttemptCap:
-            req.escalationAttemptCap ??
-            existing?.escalationAttemptCap ??
-            BUDGET_DEFAULTS.escalationAttemptCap,
+          ...(req.spendLimit !== undefined ? { spendLimit: req.spendLimit } : {}),
+          ...(req.timeLimitMs !== undefined ? { timeLimitMs: req.timeLimitMs } : {}),
+          ...(req.softThresholdPcts !== undefined
+            ? { softThresholdPcts: req.softThresholdPcts }
+            : {}),
+          ...(req.escalationAttemptCap !== undefined
+            ? { escalationAttemptCap: req.escalationAttemptCap }
+            : {}),
           updatedBy: actor,
         }),
       );
     } catch (error) {
-      if (error instanceof BudgetBoundExceededError || error instanceof BudgetScopePeriodError) {
+      if (
+        error instanceof BudgetBoundExceededError ||
+        error instanceof BudgetThresholdsInvalidError ||
+        error instanceof BudgetScopePeriodError
+      ) {
         throw new UnprocessableEntityException(error.message);
       }
       throw error;
@@ -128,13 +125,20 @@ export class BudgetsController {
       const issue = await this.issues.findById(scope(context, { id: q.scopeId }));
       if (issue === null) throw new NotFoundException(`issue ${q.scopeId} not found`);
     }
-    const state = await getBudgetState(this.budgets, context, {
-      scopeType: q.scopeType,
-      ...(q.scopeId !== undefined ? { scopeId: q.scopeId } : {}),
-      ...(q.period !== undefined ? { period: q.period } : {}),
-      ...(q.workflowRunId !== undefined ? { workflowRunId: q.workflowRunId } : {}),
-      asOf: new Date(),
-    });
+    let state;
+    try {
+      state = await getBudgetState(this.budgets, context, {
+        scopeType: q.scopeType,
+        ...(q.scopeId !== undefined ? { scopeId: q.scopeId } : {}),
+        ...(q.period !== undefined ? { period: q.period } : {}),
+        ...(q.workflowRunId !== undefined ? { workflowRunId: q.workflowRunId } : {}),
+        asOf: new Date(),
+      });
+    } catch (error) {
+      // An unknown or other-tenant workflow run is not-found, never a silent fresh window.
+      if (error instanceof NotFoundError) throw new NotFoundException(error.message);
+      throw error;
+    }
     if (state === null) throw new NotFoundException('no budget scope matches the request');
     return state;
   }

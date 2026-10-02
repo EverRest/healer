@@ -168,11 +168,12 @@ export async function seedTransition(
   tenantId: string,
   runId: string,
   toState: string,
+  occurredAt?: string,
 ): Promise<void> {
   await query(
     pg,
-    `insert into "workflow"."workflow_transition" (id, tenant_id, run_id, from_state, to_state, cause)
-     values ('${randomUUID()}', '${tenantId}', '${runId}', 'x', '${toState}', 'job')`,
+    `insert into "workflow"."workflow_transition" (id, tenant_id, run_id, from_state, to_state, cause, occurred_at)
+     values ('${randomUUID()}', '${tenantId}', '${runId}', 'x', '${toState}', 'job', ${occurredAt ? `'${occurredAt}'` : 'now()'})`,
   );
 }
 

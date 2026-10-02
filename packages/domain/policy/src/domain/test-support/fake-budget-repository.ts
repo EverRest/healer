@@ -34,14 +34,17 @@ export function roomyBudget(overrides: Partial<ResolvedBudget> = {}): ResolvedBu
     scopes: [tenantDay],
     escalation: { attemptCount: 0, cap: 2 },
     degradationOrder: DEGRADATION_ORDER,
+    warnings: [],
     ...overrides,
   };
 }
 
 /** The read side alone — what `ExplainDecisionRepos` names, so a dry run cannot reach a write. */
 export class FakeReadOnlyBudgetRepository implements ReadOnlyBudgetRepository {
+  readonly queries: BudgetQuery[] = [];
   constructor(private readonly budget: ResolvedBudget = roomyBudget()) {}
-  async resolve(): Promise<ResolvedBudget> {
+  async resolve(where: TenantScoped<BudgetQuery>): Promise<ResolvedBudget> {
+    this.queries.push(where);
     return this.budget;
   }
 }
@@ -73,7 +76,20 @@ export class FakeBudgetRepository implements BudgetRepository {
     return { budget: this.budget, decision };
   }
 
+  readonly released: Date[] = [];
+  async releaseAbandonedCharges(
+    where: TenantScoped<{ readonly olderThan: Date }>,
+  ): Promise<number> {
+    this.released.push(where.olderThan);
+    return 0;
+  }
+
+  /** Set to make every `markDegradation` fail, as a database outage after the decision committed
+   *  would. */
+  markError: Error | undefined;
+
   async markDegradation(where: TenantScoped<MarkDegradationInput>): Promise<MarkDegradationResult> {
+    if (this.markError !== undefined) throw this.markError;
     this.marks.push(where);
     return { marked: true, evidenceId: `evidence-${where.step}` };
   }

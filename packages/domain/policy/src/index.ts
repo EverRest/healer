@@ -118,10 +118,14 @@ export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
 
 // 002 Phase 6 (US4) — budgets and degradation.
 export {
+  ABANDONED_CHARGE_TTL_MS,
   assertWithinBudgetBounds,
   BUDGET_BOUNDS,
   BUDGET_DEFAULTS,
+  BUDGET_LOCK_WAIT_MS,
   BudgetBoundExceededError,
+  BudgetThresholdsInvalidError,
+  MAX_EVALUATION_SKEW_MS,
   type BudgetLimitWrite,
   type BudgetPeriod,
 } from './domain/budget-bounds.js';
@@ -136,7 +140,11 @@ export {
   type DegradationEntry,
 } from './domain/degradation.js';
 export {
+  BudgetContentionError,
   ESCALATION_TO_STATE,
+  EvaluationInstantError,
+  PARKED_STATE_PREFIX,
+  PARKED_STATES,
   type BudgetLimit,
   type BudgetLimitRepository,
   type BudgetQuery,
@@ -153,6 +161,13 @@ export {
   putBudgetLimit,
   type PutBudgetLimitCommand,
 } from './application/commands/put-budget-limit.js';
+export { INVALIDATED_REASONS, type InvalidatedReason } from './domain/invalidated-reason.js';
+export { computeRequestKey } from './domain/request-key.js';
+export { budgetConfigWarnings } from './domain/budget-limits.js';
+export {
+  releaseAbandonedCharges,
+  type ReleaseAbandonedChargesCommand,
+} from './application/commands/release-abandoned-charges.js';
 export { markDegradation } from './application/commands/mark-degradation.js';
 export {
   getBudgetState,
@@ -164,6 +179,7 @@ export {
   degradationEvidenceId,
   MARK_DEGRADATION_STEP,
   PrismaBudgetRepository,
+  type PrismaBudgetRepositoryOptions,
 } from './infrastructure/prisma-budget-repository.js';
 export { PrismaBudgetLimitRepository } from './infrastructure/prisma-budget-limit-repository.js';
 // The two aggregates behind `resolve`, exported so `check:budget-reconcile` (T069) can compare

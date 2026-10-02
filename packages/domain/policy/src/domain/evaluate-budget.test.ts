@@ -54,19 +54,24 @@ describe('evaluate — ex-ante budget predicate (T059, T060)', () => {
 describe('evaluate — escalation attempt cap (T066)', () => {
   const cap = 2;
 
-  it('denies with ATTEMPT_CAP_REACHED once the escalation attempt count reaches the cap', () => {
+  // The cap bounds *escalation*, so it applies to an escalating proposal only: a tenant whose cap is
+  // 0, or a run that has already escalated twice, must still be able to take every other action.
+  const escalating = (attemptCount: number) => ({ attemptCount, escalating: true });
+
+  it('denies an escalating proposal with its own reason once the attempt count reaches the cap', () => {
     const { decision } = evaluate(
       rulesetOf({ escalationAttemptCap: cap }),
-      buildDecisionInput({ escalation: { attemptCount: 2 } }),
+      buildDecisionInput({ escalation: escalating(2) }),
     );
     expect(decision.outcome).toBe('deny');
-    expect(decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+    expect(decision.reasonCodes).toContain('ESCALATION_CAP_REACHED');
+    expect(decision.reasonCodes).not.toContain('ATTEMPT_CAP_REACHED');
   });
 
-  it('allows while the count is below the cap', () => {
+  it('allows an escalating proposal while the count is below the cap', () => {
     const { decision } = evaluate(
       rulesetOf({ escalationAttemptCap: cap }),
-      buildDecisionInput({ escalation: { attemptCount: 1 } }),
+      buildDecisionInput({ escalation: escalating(1) }),
     );
     expect(decision.outcome).toBe('allow');
   });
@@ -74,16 +79,23 @@ describe('evaluate — escalation attempt cap (T066)', () => {
   it('a cap of zero stops escalation before it starts', () => {
     const { decision } = evaluate(
       rulesetOf({ escalationAttemptCap: 0 }),
-      buildDecisionInput({ escalation: { attemptCount: 0 } }),
+      buildDecisionInput({ escalation: escalating(0) }),
     );
-    expect(decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+    expect(decision.reasonCodes).toContain('ESCALATION_CAP_REACHED');
   });
 
-  it('enforces nothing when the rule set carries no cap (the resolver always supplies one)', () => {
-    const { decision } = evaluate(
-      rulesetOf(),
-      buildDecisionInput({ escalation: { attemptCount: 99 } }),
-    );
+  it('a non-escalating proposal is never refused by the cap, whatever the count and however low the cap', () => {
+    for (const count of [0, 2, 99]) {
+      const { decision } = evaluate(
+        rulesetOf({ escalationAttemptCap: 0 }),
+        buildDecisionInput({ escalation: { attemptCount: count } }),
+      );
+      expect(decision.outcome).toBe('allow');
+    }
+  });
+
+  it('enforces nothing when the rule set carries no cap', () => {
+    const { decision } = evaluate(rulesetOf(), buildDecisionInput({ escalation: escalating(99) }));
     expect(decision.outcome).toBe('allow');
   });
 });

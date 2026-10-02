@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BUDGET_DEFAULTS } from './budget-bounds.js';
 import {
+  budgetConfigWarnings,
   effectiveLimit,
   normaliseThresholds,
   resolveDegradationOrder,
@@ -112,6 +113,34 @@ describe('tightestEscalationCap (FR-013)', () => {
   });
   it('falls back to the fail-closed default when no limit sets one', () => {
     expect(tightestEscalationCap([null, null])).toBe(BUDGET_DEFAULTS.escalationAttemptCap);
+  });
+});
+
+describe('budgetConfigWarnings — a replaced configuration is surfaced, never silent', () => {
+  const tb = (over: Partial<TenantBudgetRow>): TenantBudgetRow => ({ ...inherited, ...over });
+
+  it('says nothing about a valid configuration', () => {
+    expect(budgetConfigWarnings([inherited])).toEqual([]);
+  });
+
+  it('names an unknown degradation entry and says the declared order applies', () => {
+    const w = budgetConfigWarnings([
+      tb({ degradationOrder: ['cheaper_tier', 'delete_everything'] }),
+    ]);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/tenant_budget\(day\)/);
+    expect(w[0]).toMatch(/delete_everything/);
+  });
+
+  it('names out-of-range soft thresholds that were ignored', () => {
+    const w = budgetConfigWarnings([tb({ period: 'month', softThresholdPcts: [50, 0, 150] })]);
+    expect(w).toHaveLength(1);
+    expect(w[0]).toMatch(/tenant_budget\(month\)/);
+    expect(w[0]).toMatch(/0, 150/);
+  });
+
+  it('treats null thresholds (unset) as fine', () => {
+    expect(budgetConfigWarnings([tb({ softThresholdPcts: null })])).toEqual([]);
   });
 });
 

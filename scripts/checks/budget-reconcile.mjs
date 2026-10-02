@@ -25,6 +25,11 @@ import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 const SPEND_EPSILON = 1e-6; // cost is numeric(12,6)
 const TIME_EPSILON_MS = 1;
 
+// Mirrors PARKED_STATE_PREFIX / PARKED_STATES (packages/domain/policy budget-repository.ts): the
+// reconcile restates the convention on purpose — it is the independent recomputation — and the e2e
+// scenario with a parked run fails if the two disagree.
+const isParkedState = (toState) => toState.startsWith('awaiting_') || toState === 'needs_human';
+
 const dayKey = (d) => d.toISOString().slice(0, 10);
 const monthKey = (d) => d.toISOString().slice(0, 7);
 
@@ -79,9 +84,24 @@ export function recompute(rows, asOf) {
     if (d.issueId) bump(issue, `${d.tenantId}|${d.issueId}`, d.reservedSpend, 0);
   }
 
+  const byRun = new Map();
+  for (const t of rows.transitions) {
+    const k = `${t.tenantId}|${t.runId}`;
+    byRun.set(k, [...(byRun.get(k) ?? []), t]);
+  }
   for (const w of rows.workflowRuns) {
     const end = w.terminal ? w.updatedAt : asOf;
-    const elapsed = Math.max(0, end.getTime() - w.startedAt.getTime());
+    const transitions = (byRun.get(`${w.tenantId}|${w.id}`) ?? []).sort(
+      (a, b) => a.occurredAt - b.occurredAt,
+    );
+    // Parked: from a transition into a waiting state until the next transition (or the end).
+    let parked = 0;
+    transitions.forEach((t, i) => {
+      if (!isParkedState(t.toState)) return;
+      const until = transitions[i + 1]?.occurredAt ?? end;
+      parked += Math.max(0, Math.min(until, end) - t.occurredAt);
+    });
+    const elapsed = Math.max(0, end.getTime() - w.startedAt.getTime() - parked);
     addTenant(w.tenantId, w.startedAt, 0, elapsed);
     if (w.issueId) bump(issue, `${w.tenantId}|${w.issueId}`, 0, elapsed);
   }
@@ -114,6 +134,33 @@ export function findUnmeasuredCostRuns(runs) {
   return out;
 }
 
+/**
+ * A run that names a `policy_decision_id` must name an *allowed* decision of its *own tenant*: the
+ * link is what replaces a charge with an actual cost, so a dangling, foreign or denied one means
+ * the charge it should have replaced is still counted (or was never made).
+ * @param {{ id: string, tenantId: string, policyDecisionId: string | null }[]} runs
+ * @param {{ id: string, tenantId: string, outcome: string }[]} decisions
+ * @returns {string[]}
+ */
+export function findUnlinkedDecisionRuns(runs, decisions) {
+  const byId = new Map(decisions.map((d) => [d.id, d]));
+  const out = [];
+  for (const r of runs) {
+    if (!r.policyDecisionId) continue;
+    const d = byId.get(r.policyDecisionId);
+    const where = `agent_run ${r.id} (tenant ${r.tenantId})`;
+    if (!d) out.push(`${where}: policy_decision_id ${r.policyDecisionId} names no decision`);
+    else if (d.tenantId !== r.tenantId) {
+      out.push(`${where}: policy_decision_id ${r.policyDecisionId} belongs to another tenant`);
+    } else if (d.outcome !== 'allow') {
+      out.push(
+        `${where}: policy_decision_id ${r.policyDecisionId} is a ${d.outcome}, not an allow`,
+      );
+    }
+  }
+  return out;
+}
+
 async function loadRows(prisma) {
   const runs = await prisma.$queryRaw`
     SELECT id::text AS id, tenant_id::text AS "tenantId", issue_id::text AS "issueId",
@@ -133,7 +180,11 @@ async function loadRows(prisma) {
            outcome::text AS outcome, invalidated_reason AS "invalidatedReason",
            (budget_state->>'reservedSpend')::float8 AS "reservedSpend"
     FROM "policy"."policy_decision"`;
-  return { runs, workflowRuns, decisions };
+  const transitions = await prisma.$queryRaw`
+    SELECT tenant_id::text AS "tenantId", run_id::text AS "runId", to_state AS "toState",
+           occurred_at AS "occurredAt"
+    FROM "workflow"."workflow_transition"`;
+  return { runs, workflowRuns, decisions, transitions };
 }
 
 function windowOf(period, key) {
@@ -146,17 +197,30 @@ function windowOf(period, key) {
 
 /**
  * @param {import('../../prisma/generated/client/index.js').PrismaClient} prisma
- * @param {{ asOf?: Date, derive?: { tenant?: Function, issue?: Function } }} [options] `derive`
- *   overrides the SQL aggregate under test — how the e2e test proves a disagreement is reported.
+ * @param {{ asOf?: Date, tenantIds?: string[], derive?: { tenant?: Function, issue?: Function } }} [options]
+ *   `derive` overrides the SQL aggregate under test — how the e2e test proves a disagreement is
+ *   reported. `tenantIds` scopes the check to those tenants (a shared test database holds rows other
+ *   scenarios planted on purpose); absent, every tenant is checked, which is what production wants.
  * @returns {Promise<string[]>} one message per discrepancy or unmeasured-cost run
  */
 export async function findBudgetDiscrepancies(prisma, options = {}) {
   const asOf = options.asOf ?? new Date();
   const deriveTenant = options.derive?.tenant ?? deriveTenantConsumption;
   const deriveIssue = options.derive?.issue ?? deriveIssueConsumption;
-  const rows = await loadRows(prisma);
+  const all = await loadRows(prisma);
+  const keep = options.tenantIds ? new Set(options.tenantIds) : null;
+  const inScope = (r) => keep === null || keep.has(r.tenantId);
+  const rows = {
+    runs: all.runs.filter(inScope),
+    workflowRuns: all.workflowRuns.filter(inScope),
+    decisions: all.decisions.filter(inScope),
+    transitions: all.transitions.filter(inScope),
+  };
   const violations = [];
 
+  // The decision table is read unscoped for the link check: a run naming another tenant's
+  // decision is exactly what it must see.
+  violations.push(...findUnlinkedDecisionRuns(rows.runs, all.decisions));
   const reservedById = new Map(rows.decisions.map((d) => [d.id, d.reservedSpend]));
   violations.push(
     ...findUnmeasuredCostRuns(

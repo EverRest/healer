@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { scope, type TenantContext } from '@healer/shared';
+import { createLogger, scope, type TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
 import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
@@ -17,6 +17,7 @@ import type {
 } from '../../domain/policy-decision-repository.js';
 import type { PolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
+import { computeRequestKey } from '../../domain/request-key.js';
 import {
   NoPublishedRulesetError,
   UnregisteredActionError,
@@ -36,7 +37,12 @@ export interface EvaluateAndBindRepos {
   readonly actions: PolicyActionRepository;
   readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
   readonly budgets: BudgetRepository;
+  /** Where a failed post-commit step is reported (structured, tenant-tagged). Defaults to a pino
+   *  logger; a test passes its own. */
+  readonly log?: { error(fields: Record<string, unknown>, message: string): void };
 }
+
+const defaultLog = createLogger({ serviceName: 'domain-policy' });
 
 export interface EvaluateAndBindResult {
   readonly decision: RecordedDecision;
@@ -74,13 +80,22 @@ export async function evaluateAndBind(
   // budget group is overwritten the same way below (T056, T060). The digest and the persisted row
   // are built from the corrected input, never from the caller's claim: persisting the uncorrected
   // input would let a replay reintroduce the exact bug this fix closes.
+  //
+  // The epoch is read **first** (review I3): read after a lock wait it would be newer than the
+  // grants this evaluation resolved, and a revocation that landed during the wait would be hidden
+  // behind an epoch the result claims to have been evaluated under. It is also read before
+  // anything is charged, so its failure cannot strand a committed decision.
+  const autonomyEpoch = await repos.autonomyEpochs.current(scope(context, {}));
   const prepared = await prepareEvaluation(repos, context, input.decisionInput);
   const binding = input.binding ?? {};
   const query = scope<BudgetQuery>(context, {
     ...(binding.issueId !== undefined ? { issueId: binding.issueId } : {}),
     ...(binding.workflowRunId !== undefined ? { workflowRunId: binding.workflowRunId } : {}),
     asOf: input.decisionInput.evaluatedAt,
+    enforcing: true,
   });
+  const charges = input.decisionInput.budget.declaredMaxCost > 0;
+  const requestKey = charges ? computeRequestKey(input.decisionInput) : undefined;
 
   let refusedBy: MarkDegradationCommand['refusedBy'];
   const build = (budget: ResolvedBudget): NewRecordedDecision => {
@@ -99,6 +114,7 @@ export async function evaluateAndBind(
       targetRef: decisionInput.target.targetRef,
       fingerprint: decisionInput.target.fingerprint,
       binding,
+      ...(requestKey !== undefined ? { requestKey } : {}),
     };
   };
 
@@ -107,22 +123,32 @@ export async function evaluateAndBind(
   // serialization lock (T060). A step that declares none charges nothing and needs no lock.
   let budget: ResolvedBudget;
   let recorded: RecordedDecision;
-  if (input.decisionInput.budget.declaredMaxCost > 0) {
+  if (charges) {
     ({ budget, decision: recorded } = await repos.budgets.bindCharged(query, (b) =>
       scope(context, build(b)),
     ));
   } else {
-    budget = await repos.budgets.resolve(query);
+    budget = await repos.budgets.resolve(query); // `enforcing`: instant, issue and run are checked
     recorded = await repos.decisions.record(scope(context, build(budget)));
   }
 
-  const autonomyEpoch = await repos.autonomyEpochs.current(scope(context, {}));
-  await markDegradation(repos.budgets, context, {
-    budget,
-    ...(binding.issueId !== undefined ? { issueId: binding.issueId } : {}),
-    asOf: input.decisionInput.evaluatedAt,
-    ...(refusedBy !== undefined ? { refusedBy } : {}),
-  });
+  // After the commit, so best-effort: the decision exists and a retry would charge again, which is
+  // the worse failure. A step that could not be recorded is derived, not remembered — the next
+  // evaluation in the scope finds it missing and records it — so the failure is reported
+  // (structured, tenant-tagged) and not thrown.
+  try {
+    await markDegradation(repos.budgets, context, {
+      budget,
+      ...(binding.issueId !== undefined ? { issueId: binding.issueId } : {}),
+      asOf: input.decisionInput.evaluatedAt,
+      ...(refusedBy !== undefined ? { refusedBy } : {}),
+    });
+  } catch (err) {
+    (repos.log ?? defaultLog).error(
+      { tenantId: context.tenantId, decisionId: recorded.id, err: String(err) },
+      'recording a budget degradation step failed after the decision committed; the next evaluation records it',
+    );
+  }
 
   return { decision: recorded, autonomyEpoch };
 }

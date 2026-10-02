@@ -79,6 +79,7 @@ export async function recordDecisionInTx(
       ceilingApplied: where.decision.ceilingApplied,
       budgetState: where.budgetState as unknown as Prisma.InputJsonValue,
       evaluatedAt: where.decision.evaluatedAt,
+      requestKey: where.requestKey ?? null,
     },
   });
   await enqueue(
@@ -93,6 +94,35 @@ export async function recordDecisionInTx(
     }),
   );
   return toDomain(created);
+}
+
+/** The live (not invalidated) allowed decision already minted for this charged step, if any — what
+ *  makes `EvaluateAndBind` idempotent for a step that declares a cost (T060). Only a decision
+ *  bound to a run *and* a state with a request key can be matched; anything else is a new
+ *  request. The partial unique index in migration 20261003110000 backstops this lookup. */
+export async function findLiveChargedDecision(
+  tx: Prisma.TransactionClient,
+  where: TenantScoped<NewRecordedDecision>,
+): Promise<RecordedDecision | null> {
+  const { workflowRunId, workflowState } = where.binding;
+  if (
+    where.requestKey === undefined ||
+    workflowRunId === undefined ||
+    workflowState === undefined
+  ) {
+    return null;
+  }
+  const row = await tx.policyDecision.findFirst({
+    where: {
+      tenantId: where.tenantId,
+      workflowRunId,
+      workflowState,
+      requestKey: where.requestKey,
+      outcome: 'allow',
+      invalidatedReason: null,
+    },
+  });
+  return row === null ? null : toDomain(row);
 }
 
 /** Every column `findById`/`list` read back (data-model.md `policy.policy_decision`) — a

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   seedAgentRun,
@@ -79,7 +80,9 @@ describe('check:budget-reconcile (002 T069)', () => {
       correlationId: later.correlationId,
       startedAt: '2026-10-01T23:50:00Z',
     });
-    await seedTransition(h.pg, tenantId, later.id, 'collecting');
+    // parked awaiting a human for 15 minutes of that terminal run: SQL and JS must both exclude it
+    await seedTransition(h.pg, tenantId, later.id, 'awaiting_approval', '2026-10-02T00:30:00Z');
+    await seedTransition(h.pg, tenantId, later.id, 'executing', '2026-10-02T00:45:00Z');
     // an allowed step whose run has not landed (open charge) and one whose run has
     const open = await h.bind(
       ctx,
@@ -100,8 +103,34 @@ describe('check:budget-reconcile (002 T069)', () => {
   }
 
   it('finds nothing when the aggregate and the rows agree — across midnight, in flight, landed, terminal and live', async () => {
-    await busyTenant();
-    expect(await findBudgetDiscrepancies(h.prisma, { asOf: AS_OF })).toEqual([]);
+    const { tenantId } = await busyTenant();
+    // scoped to this tenant: the other scenarios in this file plant violations on purpose
+    expect(await findBudgetDiscrepancies(h.prisma, { asOf: AS_OF, tenantIds: [tenantId] })).toEqual(
+      [],
+    );
+  });
+
+  it("flags a run whose policy_decision_id names no decision, another tenant's decision, or a deny", async () => {
+    const a = await h.newTenant();
+    const b = await h.newTenant();
+    await h.setLimit(b.ctx, { spendLimit: 100 });
+    const theirs = await h.bind(b.ctx, 1);
+    const ghost = await seedAgentRun(h.pg, {
+      tenantId: a.tenantId,
+      cost: 1,
+      policyDecisionId: randomUUID(),
+    });
+    const foreign = await seedAgentRun(h.pg, {
+      tenantId: a.tenantId,
+      cost: 1,
+      policyDecisionId: theirs.decision.id,
+    });
+    const violations = await findBudgetDiscrepancies(h.prisma, {
+      asOf: AS_OF,
+      tenantIds: [a.tenantId],
+    });
+    expect(violations.some((v) => v.includes(ghost) && v.includes('names no decision'))).toBe(true);
+    expect(violations.some((v) => v.includes(foreign) && v.includes('another tenant'))).toBe(true);
   });
 
   it('an agent run that precedes its workflow is charged to the window it actually ran in', async () => {

@@ -37,7 +37,7 @@ addressable, that entry *is* the diff (FR-020).
 | rule_key | text | stable across versions, so a rule can be followed through history |
 | predicates | jsonb | conjunction of `(field, operator, value)` from the closed vocabulary (R-02) |
 | outcome | enum | `allow` · `require_approval` · `deny` |
-| reason_code | enum | carried into the decision; never free text. Closed set: `NO_MATCHING_RULE` · `CEILING_EXCEEDED` · `NO_AUTONOMY_GRANT` · `GRANT_REVOKED` · `ENVIRONMENT_RESTRICTED` · `COMPONENT_RESTRICTED` · `ISSUE_KIND_RESTRICTED` · `IMPACT_CLASS_RESTRICTED` · `EVIDENCE_INCOMPLETE` · `NO_ADOPTED_EXPECTATION` · `UNDO_NOT_ATTESTED` · `BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` · `APPROVAL_REQUIRED` · `APPROVAL_EXPIRED` · `TARGET_BLOCKED` · `CATEGORY_NOT_ALLOWLISTED` · `TOPIC_BLOCKED`. Adding one is a spec change, so a decision can never carry a reason nobody planned for |
+| reason_code | enum | carried into the decision; never free text. Closed set: `NO_MATCHING_RULE` · `CEILING_EXCEEDED` · `NO_AUTONOMY_GRANT` · `GRANT_REVOKED` · `ENVIRONMENT_RESTRICTED` · `COMPONENT_RESTRICTED` · `ISSUE_KIND_RESTRICTED` · `IMPACT_CLASS_RESTRICTED` · `EVIDENCE_INCOMPLETE` · `NO_ADOPTED_EXPECTATION` · `UNDO_NOT_ATTESTED` · `BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` · `ESCALATION_CAP_REACHED` · `APPROVAL_REQUIRED` · `APPROVAL_EXPIRED` · `TARGET_BLOCKED` · `CATEGORY_NOT_ALLOWLISTED` · `TOPIC_BLOCKED`. Adding one is a spec change, so a decision can never carry a reason nobody planned for |
 | note | text | tenant-facing explanation, shown in the approval summary |
 
 Unique `(ruleset_id, rule_key)`. `predicates` is schema-validated on publish: an unknown field, an
@@ -118,9 +118,10 @@ write that makes revocation immediate.
 | reason_codes | text[] | |
 | ceiling_applied | bool | true when the clamp changed the outcome (R-05) |
 | budget_state | jsonb | consumed, limit, declared max of the next step, degradation step |
+| request_key | text? | a *charged* step's idempotency key: the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step returns the decision it already minted instead of charging twice (T060) |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
-| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `digest_mismatch` |
+| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `digest_mismatch` · `charge_abandoned` |
 
 `UPDATE` is rejected except for `consumed_at` and `invalidated_reason` transitioning from null.
 
@@ -176,6 +177,23 @@ disagree: `escalation_attempt_cap` 0–5; `spend_limit` 50 (issue) / 500 (day) /
 `time_limit_ms` 4 h / 24 h / 20 days; `soft_threshold_pcts` at most 5 entries, each within 1–99. The
 fail-closed defaults for every unset value sit in the same file (`BUDGET_DEFAULTS`): spend 2 / 20 /
 200, time 1 h / 8 h / 80 h, thresholds 50·75·90, escalation cap 2.
+
+**Binding is validated, not assumed.** A named issue or workflow run that does not exist for the
+tenant (or is another tenant's) is a not-found error before anything is read or charged — never a
+fresh window or a zero count. An *enforcing* evaluation also refuses an `evaluated_at` more than
+`MAX_EVALUATION_SKEW_MS` (5 min) from the database clock, because the instant selects the window
+and a backdated one would be a fresh budget; a dry run replays history and is not so bound.
+
+**Time counts active run time only.** `workflow_run` elapsed excludes the intervals a run was
+*parked*: from a transition into a state named `awaiting_*` (or `needs_human`) until its next
+transition, derived from `workflow_transition`. 012's workflow definitions have not named their
+waiting states, so the prefix is policy's one declaration of the convention.
+
+**Abandoned charges.** An allowed, never-consumed decision with no `agent_run` older than
+`ABANDONED_CHARGE_TTL_MS` (2 h) is released by `releaseAbandonedCharges`
+(`invalidated_reason = 'charge_abandoned'`), which stops its open charge counting. No production
+caller schedules it. A *consumed* decision cannot be invalidated (the terminal XOR), so a step that
+started and never finished keeps its charge until its run is finalised.
 
 **Consumption** is derived on every call, never stored:
 spend = Σ `agent_run.cost` + the declared maximum of every allow `policy_decision` that has not yet

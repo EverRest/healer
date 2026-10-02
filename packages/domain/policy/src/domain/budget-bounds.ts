@@ -15,6 +15,7 @@ export type BudgetPeriod = 'issue' | 'day' | 'month';
 
 export const BUDGET_BOUNDS = {
   maxEscalationAttemptCap: 5,
+  maxSoftThresholds: 5,
   maxSpendLimit: { issue: 50, day: 500, month: 5000 },
   maxTimeLimitMs: { issue: 14_400_000, day: 86_400_000, month: 1_728_000_000 },
 } as const;
@@ -39,11 +40,22 @@ export class BudgetBoundExceededError extends HealerError {
   }
 }
 
+export class BudgetThresholdsInvalidError extends HealerError {
+  constructor(reason: string) {
+    super(
+      'VALIDATION',
+      `softThresholdPcts: ${reason}; each must be an integer in 1..99, at most ${BUDGET_BOUNDS.maxSoftThresholds} of them`,
+    );
+    this.name = 'BudgetThresholdsInvalidError';
+  }
+}
+
 export interface BudgetLimitWrite {
   readonly period: BudgetPeriod;
   readonly spendLimit?: number;
   readonly timeLimitMs?: number;
   readonly escalationAttemptCap?: number;
+  readonly softThresholdPcts?: readonly number[];
 }
 
 /** Refuses a configuration write that crosses a product bound (FR-021). The database CHECKs say
@@ -62,6 +74,16 @@ export function assertWithinBudgetBounds(write: BudgetLimitWrite): void {
       throw new BudgetBoundExceededError('timeLimitMs', bound);
     }
   }
+  if (write.softThresholdPcts !== undefined) {
+    const pcts = write.softThresholdPcts;
+    if (pcts.length > BUDGET_BOUNDS.maxSoftThresholds) {
+      throw new BudgetThresholdsInvalidError(`${pcts.length} thresholds`);
+    }
+    const bad = pcts.find((p) => !(Number.isInteger(p) && p >= 1 && p <= 99));
+    if (bad !== undefined || pcts.some((p) => Number.isNaN(p))) {
+      throw new BudgetThresholdsInvalidError(`${String(bad)} is out of range`);
+    }
+  }
   if (write.escalationAttemptCap !== undefined) {
     const bound = BUDGET_BOUNDS.maxEscalationAttemptCap;
     if (!(write.escalationAttemptCap >= 0 && write.escalationAttemptCap <= bound)) {
@@ -69,3 +91,17 @@ export function assertWithinBudgetBounds(write: BudgetLimitWrite): void {
     }
   }
 }
+
+// Timing constants of the charge path. Starting values pending the stage-0 benchmark, declared here
+// once like every other bound in this file.
+
+/** How long a charge waits for the tenant's budget lock before failing retryably (T060). */
+export const BUDGET_LOCK_WAIT_MS = 5_000;
+
+/** How far an *enforcing* evaluation's instant may be from the database clock. The instant selects
+ *  the budget window, so an unbounded one is a way to spend in a window that is not the present. */
+export const MAX_EVALUATION_SKEW_MS = 300_000;
+
+/** How long an allowed, never-started AI step may hold its declared maximum before
+ *  `releaseAbandonedCharges` may release it. Longer than any single step's wall-clock budget. */
+export const ABANDONED_CHARGE_TTL_MS = 2 * 3_600_000;

@@ -334,6 +334,18 @@
             "required": true,
             "in": "header",
             "schema": { "type": "string" }
+          },
+          {
+            "name": "issueId",
+            "required": true,
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "workflowRunId",
+            "required": true,
+            "in": "query",
+            "schema": { "type": "string" }
           }
         ],
         "responses": { "200": { "description": "" } },

@@ -184,7 +184,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
     new PrismaAutonomyGrantRepository(prisma),
-    new PrismaBudgetRepository(prisma),
+    new PrismaBudgetRepository(prisma, { log: logger }),
     new PrismaBudgetLimitRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });

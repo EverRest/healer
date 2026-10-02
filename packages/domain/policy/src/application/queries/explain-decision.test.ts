@@ -13,7 +13,10 @@ import type {
   ReadOnlyPolicyRulesetRepository,
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
-import { FakeReadOnlyBudgetRepository } from '../../domain/test-support/fake-budget-repository.js';
+import {
+  FakeReadOnlyBudgetRepository,
+  roomyBudget,
+} from '../../domain/test-support/fake-budget-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import {
   NoPublishedRulesetError,
@@ -153,6 +156,68 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
     // enforced by the compiler on every `pnpm run typecheck`.
     const _unreachable = repos.rulesets.publish;
     void _unreachable;
+  });
+});
+
+describe('explainDecision resolves the same binding as the enforcing path (R-08, quickstart 31)', () => {
+  const exhaustedIssue = roomyBudget({
+    scopes: [
+      {
+        ...roomyBudget().scopes[0]!,
+        scopeType: 'issue',
+        scopeId: 'issue-1',
+        period: 'issue',
+        periodKey: 'issue',
+        spendConsumed: 2,
+        spendLimit: 2,
+      },
+    ],
+  });
+  const repos = (budgets: FakeReadOnlyBudgetRepository) => ({
+    rulesets: new ReadOnlyFakeRulesetRepo(published()),
+    actions: new FakeActionRepo(),
+    autonomyGrants: new FakeAutonomyGrantRepo(),
+    budgets,
+  });
+
+  it('names the issue and the run to the budget resolver, at the input instant', async () => {
+    const budgets = new FakeReadOnlyBudgetRepository(exhaustedIssue);
+    const input = buildDecisionInput();
+    await explainDecision(repos(budgets), CONTEXT, {
+      decisionInput: input,
+      binding: { issueId: 'issue-1', workflowRunId: 'run-1' },
+    });
+    expect(budgets.queries[0]).toMatchObject({
+      issueId: 'issue-1',
+      workflowRunId: 'run-1',
+      asOf: input.evaluatedAt,
+    });
+    expect(budgets.queries[0]?.enforcing).toBeUndefined(); // a dry run replays history
+  });
+
+  it('an over-budget issue is DENY on the dry run, as it is when enforcing', async () => {
+    const result = await explainDecision(
+      repos(new FakeReadOnlyBudgetRepository(exhaustedIssue)),
+      CONTEXT,
+      { decisionInput: buildDecisionInput(), binding: { issueId: 'issue-1' } },
+    );
+    expect(result.decision.outcome).toBe('deny');
+    expect(result.decision.reasonCodes).toContain('BUDGET_EXHAUSTED');
+    expect(result.trace.budgetState).toMatchObject({ consumed: 2, limit: 2 });
+  });
+
+  it("the caller-supplied budget figures are ignored — only the declared maximum is the step's own", async () => {
+    const result = await explainDecision(
+      repos(new FakeReadOnlyBudgetRepository(exhaustedIssue)),
+      CONTEXT,
+      {
+        decisionInput: buildDecisionInput({
+          budget: { consumed: 0, limit: 1_000_000, declaredMaxCost: 1, degradationStep: 0 },
+        }),
+        binding: { issueId: 'issue-1' },
+      },
+    );
+    expect(result.trace.budgetState).toMatchObject({ consumed: 2, limit: 2, declaredMaxCost: 1 });
   });
 });
 

@@ -115,3 +115,29 @@ export function resolveDegradationOrder(tenantBudgets: readonly TenantBudgetRow[
   if (declared && declared.every((entry) => known.includes(entry))) return [...declared];
   return [...DEGRADATION_ORDER];
 }
+
+/** Conditions in 012's `tenant_budget` that were replaced by a fail-closed value — an unknown
+ *  degradation entry (the declared order applies instead), a soft threshold outside 1..99 (it is
+ *  ignored). The replacement is correct; *silently* replacing it would leave a tenant believing a
+ *  configuration is in force that is not, so each one is reported to readers and logged. */
+export function budgetConfigWarnings(tenantBudgets: readonly TenantBudgetRow[]): string[] {
+  const known: readonly string[] = DEGRADATION_ORDER;
+  const warnings: string[] = [];
+  for (const b of tenantBudgets) {
+    const unknown = b.degradationOrder.filter((entry) => !known.includes(entry));
+    if (unknown.length > 0) {
+      warnings.push(
+        `tenant_budget(${b.period}).degradation_order names unknown entries [${unknown.join(', ')}]; the declared order applies`,
+      );
+    }
+    const dropped = (b.softThresholdPcts ?? []).filter(
+      (p) => !(Number.isInteger(p) && p >= 1 && p <= 99),
+    );
+    if (dropped.length > 0) {
+      warnings.push(
+        `tenant_budget(${b.period}).soft_threshold_pcts has out-of-range values [${dropped.join(', ')}]; they are ignored`,
+      );
+    }
+  }
+  return warnings;
+}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { findUnmeasuredCostRuns, recompute } from './budget-reconcile.mjs';
+import {
+  findUnlinkedDecisionRuns,
+  findUnmeasuredCostRuns,
+  recompute,
+} from './budget-reconcile.mjs';
 
 // `check:budget-reconcile` (002 T069, R-10): the budget aggregate is SQL; this is the same
 // definition recomputed in JS from the raw rows, so a disagreement between the two is a bug in one
@@ -8,7 +12,7 @@ import { findUnmeasuredCostRuns, recompute } from './budget-reconcile.mjs';
 const T = '00000000-0000-0000-8000-0000000000a1';
 const iso = (s: string) => new Date(s);
 
-const base = { runs: [], workflowRuns: [], decisions: [] };
+const base = { runs: [], workflowRuns: [], decisions: [], transitions: [] };
 
 describe('recompute — spend', () => {
   it('buckets finished agent_run cost by the UTC day and month of its pinned start', () => {
@@ -204,6 +208,76 @@ describe('recompute — time', () => {
     expect(tenant.get(`${T}|day|2026-10-02`)?.timeMs).toBe(1_800_000 + 600_000);
     expect(issue.get(`${T}|i1`)?.timeMs).toBe(2_400_000);
     expect(issue.get(`${T}|i2`)?.timeMs).toBe(0); // started after the check instant: clamped, not negative
+  });
+});
+
+describe('recompute — time excludes parked intervals', () => {
+  const wf = (over: object = {}) => ({
+    tenantId: T,
+    id: 'w1',
+    issueId: 'i1',
+    correlationId: 'c1',
+    startedAt: iso('2026-10-02T10:00:00Z'),
+    updatedAt: iso('2026-10-02T10:00:00Z'),
+    terminal: false,
+    ...over,
+  });
+  const tr = (toState: string, at: string) => ({
+    tenantId: T,
+    runId: 'w1',
+    toState,
+    occurredAt: iso(at),
+  });
+
+  it('a run parked in awaiting_* until its next transition is not charged for the wait', () => {
+    const { issue } = recompute(
+      {
+        ...base,
+        workflowRuns: [wf()],
+        transitions: [
+          tr('awaiting_approval', '2026-10-02T10:05:00Z'),
+          tr('executing', '2026-10-03T10:00:00Z'),
+        ],
+      },
+      iso('2026-10-03T10:10:00Z'),
+    );
+    // 10:00 → 10:05 active, parked for a day, 10:00 → 10:10 active again
+    expect(issue.get(`${T}|i1`)?.timeMs).toBe(5 * 60_000 + 10 * 60_000);
+  });
+
+  it('a run still parked at the instant is charged nothing for the open wait; needs_human parks too', () => {
+    const { issue } = recompute(
+      { ...base, workflowRuns: [wf()], transitions: [tr('needs_human', '2026-10-02T10:30:00Z')] },
+      iso('2026-10-02T14:00:00Z'),
+    );
+    expect(issue.get(`${T}|i1`)?.timeMs).toBe(30 * 60_000);
+  });
+
+  it('other states do not park', () => {
+    const { issue } = recompute(
+      { ...base, workflowRuns: [wf()], transitions: [tr('collecting', '2026-10-02T10:30:00Z')] },
+      iso('2026-10-02T11:00:00Z'),
+    );
+    expect(issue.get(`${T}|i1`)?.timeMs).toBe(3_600_000);
+  });
+});
+
+describe('findUnlinkedDecisionRuns', () => {
+  const decision = { id: 'd1', tenantId: T, outcome: 'allow' };
+  const run = (over: object = {}) => ({ id: 'r1', tenantId: T, policyDecisionId: 'd1', ...over });
+
+  it('accepts a run linked to an allowed decision of its own tenant, and a run linked to none', () => {
+    expect(findUnlinkedDecisionRuns([run(), run({ policyDecisionId: null })], [decision])).toEqual(
+      [],
+    );
+  });
+
+  it.each([
+    ['names no decision at all', run({ policyDecisionId: 'ghost' }), [decision]],
+    ['names another tenant\x27s decision', run(), [{ ...decision, tenantId: 'other' }]],
+    ['names a decision that was not an allow', run(), [{ ...decision, outcome: 'deny' }]],
+  ])('flags a run that %s', (_l, r, ds) => {
+    expect(findUnlinkedDecisionRuns([r], ds)).toHaveLength(1);
   });
 });
 

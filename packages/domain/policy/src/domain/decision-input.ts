@@ -108,6 +108,11 @@ export const decisionInputSchema = z
     escalation: z
       .object({
         attemptCount: z.number().int().nonnegative(),
+        // This proposal *is* an escalation to a stronger tier (FR-013), stated by the calling
+        // feature as a structural fact. The escalation attempt cap applies to escalating proposals
+        // only (T066) — a cap of 0, or a run that already escalated, must not lock out every other
+        // action. Absent means false. Nothing produces `true` yet: 006/008 own the escalation flow.
+        escalating: z.boolean().optional(),
       })
       .strict(),
     // Not `z.date()` alone (batch 9 C2, review finding): `decision_input` round-trips through

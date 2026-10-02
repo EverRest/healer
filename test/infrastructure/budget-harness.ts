@@ -55,7 +55,9 @@ export async function startBudgetHarness() {
   await seedBase(pg);
   const prisma = new PrismaClient({ datasourceUrl: pg.url });
   const rulesets = new PrismaPolicyRulesetRepository(prisma);
-  const budgets = new PrismaBudgetRepository(prisma);
+  const budgets = new PrismaBudgetRepository(prisma, {
+    maxEvaluationSkewMs: Number.POSITIVE_INFINITY,
+  });
   const limits = new PrismaBudgetLimitRepository(prisma);
   const repos: EvaluateAndBindRepos = {
     rulesets,

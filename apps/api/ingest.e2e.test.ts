@@ -28,6 +28,9 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type AutonomyGrantRepository,
+  type BudgetLimitRepository,
+  type BudgetRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
@@ -389,6 +392,23 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     findById: () => Promise.resolve(null),
     list: () => Promise.resolve([]),
   };
+  const noopAutonomyGrants: AutonomyGrantRepository = {
+    findActive: () => Promise.resolve([]),
+    findById: () => Promise.resolve(null),
+    list: () => Promise.resolve([]),
+    create: () => Promise.reject(new Error('not implemented in this test')),
+    revoke: () => Promise.reject(new Error('not implemented in this test')),
+  };
+  const noopBudgets: BudgetRepository = {
+    resolve: () => Promise.reject(new Error('not implemented in this test')),
+    bindCharged: () => Promise.reject(new Error('not implemented in this test')),
+    markDegradation: () => Promise.reject(new Error('not implemented in this test')),
+    releaseAbandonedCharges: () => Promise.reject(new Error('not implemented in this test')),
+  };
+  const noopBudgetLimits: BudgetLimitRepository = {
+    list: () => Promise.resolve([]),
+    put: () => Promise.reject(new Error('not implemented in this test')),
+  };
   const noopPolicyActions: PolicyActionRepository = {
     findByKey: () => Promise.resolve(null),
     list: () => Promise.resolve([]),
@@ -409,6 +429,11 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopPolicyDecisions,
       noopPolicyActions,
       noopRunnerRegistrations,
+      // The remaining three parameters of createApiModule, spelled out: omitting them type-checked
+      // nowhere (e2e files are not under tsc) and silently injected `undefined`.
+      noopAutonomyGrants,
+      noopBudgets,
+      noopBudgetLimits,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto';
 import { currentCorrelationId, type TenantScoped } from '@healer/shared';
-import type { PrismaClient } from '@healer/prisma-client';
+import type { Prisma, PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction, type DomainEvent } from '@healer/events';
-import type {
-  BudgetQuery,
-  BudgetRepository,
-  MarkDegradationInput,
-  MarkDegradationResult,
-  ResolvedBudget,
+import {
+  BudgetContentionError,
+  type BudgetQuery,
+  type BudgetRepository,
+  type MarkDegradationInput,
+  type MarkDegradationResult,
+  type ResolvedBudget,
 } from '../domain/budget-repository.js';
+import { BUDGET_LOCK_WAIT_MS, MAX_EVALUATION_SKEW_MS } from '../domain/budget-bounds.js';
 import { EXHAUSTED_ENTRY } from '../domain/degradation.js';
 import { budgetDegradedEvent, budgetExhaustedEvent } from '../domain/events.js';
 import type {
@@ -16,7 +18,11 @@ import type {
   RecordedDecision,
 } from '../domain/policy-decision-repository.js';
 import { resolveBudget } from './budget-aggregate.js';
-import { assertCorrelated, recordDecisionInTx } from './prisma-policy-decision-repository.js';
+import {
+  assertCorrelated,
+  findLiveChargedDecision,
+  recordDecisionInTx,
+} from './prisma-policy-decision-repository.js';
 
 /** The producer attribution on every `budget_degradation` evidence record (001 R-06): the step
  *  that wrote it, never a caller's say-so. */
@@ -25,6 +31,10 @@ export const MARK_DEGRADATION_STEP = 'policy.mark_degradation';
 /** Placeholder retention for a degradation record — it explains a reduced-context diagnosis, so
  *  it has to outlive the diagnosis it qualifies. QUESTIONS.md "002 Phase 6". */
 const EVIDENCE_RETENTION_DAYS = 400;
+
+/** How many completed agent runs a per-issue exhaustion record lists; past it the record says it
+ *  was cut (`completedAgentRunsTruncated`) rather than looking complete. */
+const COMPLETED_RUNS_CAP = 50;
 
 /** The advisory-lock key serialising budget charges for one tenant. Exported so a test can hold
  *  the lock open and prove a concurrent charge waits behind it. */
@@ -51,9 +61,24 @@ export function degradationEvidenceId(m: {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-// A charge waits on the lock inside its own transaction, so a flood queues rather than fails: the
-// default 5 s interactive-transaction timeout would abort the tail of a 400-deep queue.
-const CHARGE_TX = { maxWait: 60_000, timeout: 120_000 } as const;
+// The lock wait itself is bounded (BUDGET_LOCK_WAIT_MS, via `lock_timeout`), so the transaction
+// budget only has to cover that plus the work: a flood queues for seconds, never for a minute of
+// pooled connections.
+const CHARGE_TX = { maxWait: 10_000, timeout: 30_000 } as const;
+
+/** Postgres `lock_not_available` (55P03), however Prisma wraps it. */
+function isLockTimeout(error: unknown): boolean {
+  const text = `${(error as { message?: string })?.message ?? ''} ${JSON.stringify((error as { meta?: unknown })?.meta ?? '')}`;
+  return text.includes('55P03') || /lock timeout/i.test(text);
+}
+
+export interface PrismaBudgetRepositoryOptions {
+  /** How far an enforcing evaluation's instant may be from the database clock; `Infinity`
+   *  disables the check (tests that evaluate at fixed historical instants). */
+  readonly maxEvaluationSkewMs?: number;
+  /** Structured warning sink for configuration that was replaced by a fail-closed value. */
+  readonly log?: { warn(fields: Record<string, unknown>, message: string): void };
+}
 
 /**
  * `BudgetRepository` over Postgres (T056, T060, T064).
@@ -63,13 +88,46 @@ const CHARGE_TX = { maxWait: 60_000, timeout: 120_000 } as const;
  * `consumed = 90`, both pass `90 + 10 <= 100`, and both commit — the lock is what makes the second
  * caller read after the first has committed its declared maximum. An advisory lock rather than a
  * `FOR UPDATE` on a row because no row is guaranteed to exist: a tenant that never configured a
- * budget runs on the fail-closed defaults and has no `budget_limit` row to lock.
+ * budget runs on the fail-closed defaults and has no `budget_limit` row to lock. The wait is
+ * bounded (ADR 0015).
  */
 export class PrismaBudgetRepository implements BudgetRepository {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly maxSkewMs: number;
+
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly options: PrismaBudgetRepositoryOptions = {},
+  ) {
+    this.maxSkewMs = options.maxEvaluationSkewMs ?? MAX_EVALUATION_SKEW_MS;
+  }
+
+  private surface(tenantId: string, budget: ResolvedBudget): ResolvedBudget {
+    for (const warning of budget.warnings) {
+      this.options.log?.warn(
+        { tenantId, warning },
+        'budget configuration replaced by a fail-closed value',
+      );
+    }
+    return budget;
+  }
 
   async resolve(where: TenantScoped<BudgetQuery>): Promise<ResolvedBudget> {
-    return this.prisma.$transaction((tx) => resolveBudget(tx, where.tenantId, where));
+    const budget = await this.prisma.$transaction((tx) =>
+      resolveBudget(tx, where.tenantId, where, this.maxSkewMs),
+    );
+    return this.surface(where.tenantId, budget);
+  }
+
+  /** Takes the tenant's budget lock, waiting at most `BUDGET_LOCK_WAIT_MS`. */
+  private async lock(tx: Prisma.TransactionClient, tenantId: string): Promise<void> {
+    await tx.$executeRaw`SELECT set_config('lock_timeout', ${`${BUDGET_LOCK_WAIT_MS}ms`}, true)`;
+    try {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${budgetLockKey(tenantId)}, 0))`;
+    } catch (error) {
+      if (isLockTimeout(error)) throw new BudgetContentionError();
+      throw error;
+    }
+    await tx.$executeRaw`SELECT set_config('lock_timeout', '0', true)`;
   }
 
   async bindCharged(
@@ -77,11 +135,46 @@ export class PrismaBudgetRepository implements BudgetRepository {
     decide: (budget: ResolvedBudget) => TenantScoped<NewRecordedDecision>,
   ): Promise<{ readonly budget: ResolvedBudget; readonly decision: RecordedDecision }> {
     assertCorrelated();
+    const result = await this.prisma
+      .$transaction(async (tx) => {
+        await this.lock(tx, where.tenantId);
+        const budget = await resolveBudget(
+          tx,
+          where.tenantId,
+          { ...where, enforcing: true },
+          this.maxSkewMs,
+        );
+        const built = decide(budget);
+        // A retry of the same step: return the live allowed decision already minted instead of
+        // charging a second time. Under the lock, so two retries cannot both miss it.
+        const existing = await findLiveChargedDecision(tx, built);
+        if (existing !== null) return { budget, decision: existing };
+        return { budget, decision: await recordDecisionInTx(tx, built) };
+      }, CHARGE_TX)
+      .catch((error: unknown) => {
+        if (isLockTimeout(error)) throw new BudgetContentionError();
+        throw error;
+      });
+    return { budget: this.surface(where.tenantId, result.budget), decision: result.decision };
+  }
+
+  async releaseAbandonedCharges(
+    where: TenantScoped<{ readonly olderThan: Date }>,
+  ): Promise<number> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${budgetLockKey(where.tenantId)}, 0))`;
-      const budget = await resolveBudget(tx, where.tenantId, where);
-      const decision = await recordDecisionInTx(tx, decide(budget));
-      return { budget, decision };
+      await this.lock(tx, where.tenantId);
+      // Allowed, never consumed, no agent run at all, older than the cutoff: the step never
+      // started, so nothing will ever replace the charge with an actual cost. Only
+      // `invalidated_reason` changes, which the append-only trigger permits from null.
+      return tx.$executeRaw`
+        UPDATE "policy"."policy_decision" pd
+        SET invalidated_reason = 'charge_abandoned'
+        WHERE pd.tenant_id = ${where.tenantId}::uuid AND pd.outcome = 'allow'
+          AND pd.invalidated_reason IS NULL AND pd.consumed_at IS NULL
+          AND pd.evaluated_at < ${where.olderThan}::timestamptz
+          AND COALESCE((pd.budget_state->>'reservedSpend')::numeric, 0) > 0
+          AND NOT EXISTS (SELECT 1 FROM "agent"."agent_run" ar
+                          WHERE ar.tenant_id = pd.tenant_id AND ar.policy_decision_id = pd.id)`;
     }, CHARGE_TX);
   }
 
@@ -112,7 +205,7 @@ export class PrismaBudgetRepository implements BudgetRepository {
           ? await tx.$queryRaw<{ id: string; agent_kind: string; outcome: string }[]>`
               SELECT id::text AS id, agent_kind::text AS agent_kind, outcome FROM "agent"."agent_run"
               WHERE tenant_id = ${where.tenantId}::uuid AND issue_id = ${where.scopeId}::uuid
-              ORDER BY started_at LIMIT 50`
+              ORDER BY started_at LIMIT ${COMPLETED_RUNS_CAP + 1}`
           : [];
 
       // The deliverable (FR-012, R-12): an evidence record a reader can find a year later without
@@ -138,9 +231,10 @@ export class PrismaBudgetRepository implements BudgetRepository {
             dimension: where.dimension,
             consumed: where.consumed,
             limit: where.limit,
+            ...(completed.length > COMPLETED_RUNS_CAP ? { completedAgentRunsTruncated: true } : {}),
             ...(completed.length > 0
               ? {
-                  completedAgentRuns: completed.map((r) => ({
+                  completedAgentRuns: completed.slice(0, COMPLETED_RUNS_CAP).map((r) => ({
                     agentRunId: r.id,
                     agentKind: r.agent_kind,
                     outcome: r.outcome,

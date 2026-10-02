@@ -2699,11 +2699,18 @@ decided, recorded here so a reviewer can overrule them.
 3. **An advisory lock (`pg_advisory_xact_lock`), not `FOR UPDATE`.** There is no row guaranteed to
    exist to lock: a tenant that never configured a budget runs on the fail-closed defaults and has no
    `budget_limit` row, and policy tables carry no FK to `tenant.tenant`. Per-tenant, held for the
-   resolve-and-persist transaction only; a step that declares no cost takes no lock (tested).
-4. **A leaked charge.** A decision whose step never runs (worker died, step cancelled) stays charged
-   at its declared maximum — fail-closed, an over-count, never an under-count. Nothing releases it:
-   `policy_decision.invalidated_reason` has three reasons and none is "step abandoned", and adding
-   one is a spec change plus a sweeper. Open item for whoever builds the guarded-step handler.
+   resolve-and-persist transaction only, **bounded** (`lock_timeout` 5 s, then a retryable
+   `BudgetContentionError`/429; ADR 0015 reconciles it with 008 R-16 and ADR 0003); a step that
+   declares no cost takes no lock (tested).
+4. **A leaked charge, and its release.** A decision whose step never runs (worker died, step
+   cancelled) stays charged at its declared maximum — fail-closed, an over-count. Review: that must
+   not lock an issue out forever. `releaseAbandonedCharges` invalidates allowed, never-consumed,
+   never-run decisions older than `ABANDONED_CHARGE_TTL_MS` (2 h) with the new
+   `invalidated_reason = 'charge_abandoned'` — a closed list now declared once (`INVALIDATED_REASONS`,
+   with a test that data-model.md and openapi.yaml agree). **No production caller schedules it**
+   (no scheduler exists; the same gap as the approval sweep). **Limit**: a *consumed* decision cannot
+   be invalidated (the terminal XOR CHECK), so a step that started and never finished keeps its
+   charge until the run writer finalises the `agent_run`.
 5. **The declared maximum is the caller's.** An AI step declaring 0 charges nothing (and takes no
    lock), so an under-declaring caller delays the refusal by one step. The actual cost still lands
    in `agent_run` and the next evaluation reads it; `check:budget-reconcile` reports any run that
@@ -2716,8 +2723,12 @@ decided, recorded here so a reviewer can overrule them.
    (`reservedSpend`).
 7. **Units and a reading of "elapsed".** 012's `tenant_budget.time_limit` states no unit; it is read
    as milliseconds (matching `budget_limit.time_limit_ms`). `workflow_run` elapsed is to `updated_at`
-   when terminal and to the evaluation instant while live — a run waiting on an approval counts,
-   the conservative reading of T056's "elapsed". The time bounds fit an `INTEGER`: 4 h / 24 h /
+   when terminal and to the evaluation instant while live, **minus the time the run was parked**
+   (review H1: one slow approver must not exhaust an issue's time budget). Parked = from a
+   transition into a state named `awaiting_*` (or `needs_human`) until the next transition, derived
+   from `workflow_transition`. 012 has not named its waiting states, so the prefix is policy's one
+   declaration of the convention; a workflow that names them otherwise is charged for waiting
+   (conservative). Nothing produces such states yet either. The time bounds fit an `INTEGER`: 4 h / 24 h /
    20 days. Every bound and default (T088) is a starting value pending the stage-0 benchmark.
 8. **The pinned period key is `LEAST(own start, workflow start)`.** Pinning to the workflow's start
    alone (the first version) dropped the spend of an agent run that *predates* its workflow
@@ -2743,21 +2754,39 @@ decided, recorded here so a reviewer can overrule them.
     another, and a separate repository transaction could not be atomic with the mark. The evidence
     id is a deterministic function of the mark's key, and `EvidenceRecorded` is mirrored locally so
     the timeline's feed still hears of the record. `expires_at` is a 400-day placeholder.
-12. **The escalation attempt count is `workflow_transition` rows into `escalating`.** 012/006 own
+12. **The escalation attempt count is `workflow_transition` rows into `escalating` — and nothing
+    produces that state.** The cap predicate is built and tested against a quantity no workflow
+    increments yet (T066b, not built; un-ticked). Review: the cap applies to an *escalating*
+    proposal only (new optional `escalation.escalating` on the closed `DecisionInput`, a structural
+    statement by the calling feature; nothing sets it yet), so a cap of 0 stops escalation and
+    nothing else, and it has its own reason code `ESCALATION_CAP_REACHED` (distinct from the
+    per-action `ATTEMPT_CAP_REACHED`; a new value on the `policy_reason_code` enum, migration
+    `20261003110000`, whose down-script cannot remove it). 012/006 own
     the state graph and have not named an escalation state; `ESCALATION_TO_STATE` is the one place
     policy names it. A workflow that names it differently is simply not counted — change the
     constant, not the callers. The cap is the tightest `budget_limit.escalation_attempt_cap` that
     applies (012's `tenant_budget` has none), default 2 (fail closed), and is persisted in
     `budget_state` so a replay re-applies it (`replayDecision` takes an optional `budgetState`).
-13. **`PUT /budgets` merges.** The contract makes only `scopeType` and `period` required, so an
-    omitted field keeps what is configured and otherwise takes the fail-closed default — never
-    "unbounded". `scope_id` NULL means "every issue" for the per-issue limit; an issue-specific
+13. **`PUT /budgets` merges over the limit *in force*.** The contract makes only `scopeType` and
+    `period` required, so an omitted field keeps what is in force — the stored row, else 012's
+    `tenant_budget`, else the fail-closed default; never "unbounded", and never reverting an
+    inherited limit to a default (review #5). The merge happens inside the transaction that writes,
+    under a per-tenant configuration lock, so concurrent partial writes are both kept, and the
+    *merged* result is bounded. Soft thresholds outside 1–99, or more than 5, are 422 — never
+    silently dropped (`BUDGET_BOUNDS.maxSoftThresholds`, CHECK-agreed). A NULL threshold column is
+    reported as what is enforced (the default), not `[]`. 012 `tenant_budget` values that were
+    replaced by a fail-closed value (unknown degradation entry, out-of-range threshold) come back as
+    `warnings` on the resolved budget / `GET /budgets/state` and are logged. A refused write is not
+    audited (recorded, not built). `scope_id` NULL means "every issue" for the per-issue limit; an issue-specific
     override row is honoured by resolution but has no API yet. `GET /budgets/state` gained optional
     `period` (tenant day or month, default day) and `workflowRunId` (pins the period key); the
     contract yaml says so.
 14. **Every evaluation now overwrites `budget.{consumed, limit, degradationStep}` and
     `escalation.attemptCount`** from the aggregate, like `autonomy.level` and `actionClass` before
-    them (same required-dependency move: `budgets` on `EvaluateAndBindRepos` and
+    them (**the dry run now takes an optional `issueId`/`workflowRunId` query so it resolves the same
+    binding as the enforcing path**, review I4 — tested: an over-budget issue is deny in both; the
+    caller's budget figures are ignored and documented as such in evaluation.md) (same
+    required-dependency move: `budgets` on `EvaluateAndBindRepos` and
     `ExplainDecisionRepos`). Two existing e2e tests changed their *input plumbing*, and one its
     expectation: with nothing configured the per-issue default (2) binds, tighter than the 100 the
     test's input claimed (`policy-decision-repository.e2e.test.ts`). The dry-run endpoint resolves
@@ -2782,3 +2811,54 @@ decided, recorded here so a reviewer can overrule them.
     `apps/api/openapi.json` (`pnpm run generate:openapi`) rather than merging it by hand. Also appended
     here: `policy.update_budget` in `SEED_POLICY_ACTIONS` and `scripts/db-seed.mjs`, and
     `budget-flood.e2e.test.ts` in `HEAVY_E2E`.
+
+
+### Review round on the budgets work — outcomes and judgment calls
+
+Two independent reviews (code-reviewer, silent-failure-hunter), fixed in follow-up commits on the same
+branch; migration prefix `20261003110000_budget_hardening` (a reason-code enum value and
+`policy_decision.request_key` with a partial unique index). Items 1–15 above are amended in place where
+they changed.
+
+- **Idempotent charge.** A charged step carries `request_key` (the request with resolved fields and
+  the instant removed); under the lock a retry of the same `(tenant, run, state, request)` returns the
+  live allowed decision. Only a step bound to a run *and* a state can be deduplicated; a decision that
+  charged nothing is not (a retried deny is harmless). A deny is not deduplicated either, so a retry
+  after the budget was raised is evaluated afresh — deliberate.
+- **Failure after commit.** `markDegradation` failing is logged (`repos.log`, structured, tenant-tagged)
+  and swallowed: the next evaluation records the missing step (it is derived). The autonomy epoch is
+  read *before* anything is charged, so a revocation during the lock wait is not hidden and its failure
+  cannot strand a committed decision.
+- **Binding is validated inside the charge transaction.** An unknown, malformed or other-tenant issue
+  or workflow run is `NotFoundError` (404) before any charge commits — for evaluation, dry run and
+  `GET /budgets/state` alike. An *enforcing* evaluation also refuses an `evaluatedAt` more than 5 min
+  from the database clock (`EvaluationInstantError`, 422); a read is not bound, because a dry run
+  replays history. The bound is a repository option (`maxEvaluationSkewMs`, `Infinity` disables); the
+  e2e tests that evaluate at fixed historical instants pass `Infinity`, production wiring takes the
+  default, and a dedicated test proves the default refuses.
+- **Existing e2e tests changed** because bindings are now validated: they seed the issue and workflow
+  run they bind (`policy-decision-repository`, `autonomy-grant-resolution`).
+- **Issue deletion** now deletes the issue-scope marks, issue-scope limit overrides and the marks
+  whose evidence went with the issue (001's `prisma-issue-deletion.ts`, one statement pair). A
+  tenant-scope step whose evidence was the deleted issue's is recorded afresh by the next evaluation,
+  attached to an issue that exists.
+- **`completedAgentRuns`** is capped at 50 and says `completedAgentRunsTruncated: true` past it.
+- **`check:budget-reconcile`**: recomputes parked-aware time; flags a run whose `policy_decision_id`
+  names no decision, another tenant's decision, or a non-allow; takes `tenantIds` so a shared test
+  database's deliberate plants do not fail an unrelated assertion.
+- **ESCALATION state / T058b / T066b** un-ticked and split; T060 and T069 notes corrected (no
+  scheduled production caller for the release command or the reconcile).
+- **Not done, recorded.** (a) Exhaustion evidence can become false later (a limit raised after the
+  record): the record is a statement *at that step*, with the figures and period key it carries. (b)
+  An evaluation with no issue binds records no degradation step (evidence is per issue); the next one
+  with an issue does. (c) The finished-cost pin (by `correlation_id`) and the open-charge pin (by
+  `workflow_run_id`) can disagree when a decision's agent run lands under a different workflow run;
+  the reconcile compares each side against the same JS definition, so it would show the drift, but they
+  are not unified. (d) `check:budget-reconcile` does not iterate keys present only on the SQL side
+  (it walks the keys the raw rows imply). (e) A refused `PUT /budgets` is not audited. (f) A
+  `require_approval` decision reserves no charge: when approvals redeems it nothing is charged
+  ex ante — Phase 7 must either charge at redemption or declare approvals cost-free; approvals did
+  not add a charge. (g) `bindingBudget` breaks an exact spend/time ratio tie by a fixed order, not by
+  which dimension is closer to refusing in absolute terms.
+- **ADR 0015** records the lock decision and indexes it in docs/README.md; research R-11 is rewritten
+  as one consolidated decision rather than a decision plus an appended correction.

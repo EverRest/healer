@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -22,6 +21,7 @@ import {
 } from '@healer/domain-policy';
 import { TenantContext, scope, withCorrelation } from '@healer/shared';
 import { applySqlFile, startPostgres, type StartedPostgres } from './test/containers.js';
+import { seedBase, seedIssue, seedWorkflowRun } from './test/budget-fixtures.js';
 
 /** A valid, fully-populated `DecisionInput` — mirrors `packages/domain/policy/src/domain/
  *  test-support/fixtures.ts`'s `buildDecisionInput`, kept local rather than imported: that file
@@ -94,6 +94,14 @@ function allowRule(overrides: Partial<RuleBody> = {}): RuleBody {
   };
 }
 
+/** A real issue and a real workflow run for a tenant: an evaluation bound to either now refuses an
+ *  id that does not exist (review #6), so a test that binds one seeds one. */
+async function seededRun(pg: StartedPostgres, tenantId: string) {
+  const issueId = await seedIssue(pg, tenantId);
+  const run = await seedWorkflowRun(pg, { tenantId, issueId, startedAt: new Date().toISOString() });
+  return { issueId, runId: run.id };
+}
+
 describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   let pg: StartedPostgres;
   let prisma: PrismaClient;
@@ -109,12 +117,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await seedBase(pg);
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     rulesets = new PrismaPolicyRulesetRepository(prisma);
     decisions = new PrismaPolicyDecisionRepository(prisma);
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
-    budgets = new PrismaBudgetRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
     actions = new PrismaPolicyActionRepository(prisma);
 
     // `policy_action` is global, not tenant-scoped — seeded once for the whole database, same as
@@ -138,12 +147,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('records a decision bound to a workflow run/state and publishes PolicyDecisionRecorded', async () =>
     withCorrelation('corr-bind-1', async () => {
       const input = buildDecisionInput();
+      const { runId } = await seededRun(pg, TENANT_ID);
       const { decision } = await evaluateAndBind(
         { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: input,
-          binding: { workflowRunId: randomUUID(), workflowState: 'awaiting_execution' },
+          binding: { workflowRunId: runId, workflowState: 'awaiting_execution' },
         },
       );
 
@@ -339,7 +349,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   describe('findById / list (002 T028, FR-002, FR-017, FR-018)', () => {
     it('findById returns every stored field, including the recorded decisionInput and budgetState', async () =>
       withCorrelation('corr-read-1', async () => {
-        const issueId = randomUUID();
+        const { issueId } = await seededRun(pg, TENANT_ID);
         const { decision } = await evaluateAndBind(
           { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           CONTEXT,
@@ -446,7 +456,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
         await withCorrelation('corr-read-4-seed-ruleset', () =>
           publishRuleset(rulesets, tenant, { rules: [allowRule()], publishedBy: 'pavlo' }),
         );
-        const issueId = randomUUID();
+        const issueId = await seedIssue(pg, tenant.tenantId);
         const { decision: matching } = await evaluateAndBind(
           { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           tenant,

@@ -34,6 +34,7 @@ import {
   assertTenantScopedEnqueue,
 } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
+import { seedAgentRun, seedBase, seedIssue } from '../../test/budget-fixtures.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 
@@ -132,6 +133,7 @@ describe('/policy (002 T027-T030, T032)', () => {
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await seedBase(pg);
     // `policy_action` is global, seeded once for the whole database (mirrors `db-seed.mjs`'s own
     // copy of `SEED_POLICY_ACTIONS` — see that file's comment for why it is duplicated, not
     // imported, there; this test imports the real package since it runs under vitest, not plain
@@ -151,7 +153,7 @@ describe('/policy (002 T027-T030, T032)', () => {
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
-    budgets = new PrismaBudgetRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
 
     const ApiModule = createApiModule(
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
@@ -520,6 +522,50 @@ describe('/policy (002 T027-T030, T032)', () => {
 
       const after = await prisma.policyDecision.count({ where: { tenantId } });
       expect(after).toBe(before);
+    });
+
+    it("with an issue named, resolves that issue's budget as the enforcing path does: over budget is deny (R-08, quickstart 31)", async () => {
+      const tenantId = randomUUID();
+      await publishUnder(tenantId);
+      const issueId = await seedIssue(pg, tenantId);
+      await query(
+        pg,
+        `insert into "policy"."budget_limit"
+           (id, tenant_id, scope_type, scope_id, period, spend_limit, time_limit_ms, soft_threshold_pcts,
+            escalation_attempt_cap, updated_at, updated_by)
+         values ('${randomUUID()}', '${tenantId}', 'issue', null, 'issue', 1, 1000, '{50}', 1, now(), 'sql')`,
+      );
+      await seedAgentRun(pg, { tenantId, issueId, cost: 1 });
+      const before = await prisma.policyDecision.count({ where: { tenantId } });
+
+      const named = await request(app.getHttpServer())
+        .post(path(`/policy/dry-run?issueId=${issueId}`))
+        .set('X-Tenant-Id', tenantId)
+        .send(dryRunBody())
+        .expect(200);
+      expect(named.body.outcome).toBe('deny');
+      expect(named.body.reasonCodes).toContain('BUDGET_EXHAUSTED');
+      // the same input with no issue named sees only the tenant budgets
+      const unnamed = await request(app.getHttpServer())
+        .post(path('/policy/dry-run'))
+        .set('X-Tenant-Id', tenantId)
+        .send(dryRunBody())
+        .expect(200);
+      expect(unnamed.body.outcome).toBe('allow');
+      expect(await prisma.policyDecision.count({ where: { tenantId } })).toBe(before);
+    });
+
+    it('an unknown or other-tenant issue or run is 404, a malformed one 422', async () => {
+      const tenantId = randomUUID();
+      await publishUnder(tenantId);
+      const post = (q: string) =>
+        request(app.getHttpServer())
+          .post(path(`/policy/dry-run?${q}`))
+          .set('X-Tenant-Id', tenantId)
+          .send(dryRunBody());
+      await post(`issueId=${randomUUID()}`).expect(404);
+      await post(`workflowRunId=${randomUUID()}`).expect(404);
+      await post('issueId=nope').expect(422);
     });
 
     it('422s an unknown key, including a smuggled confidence field (quickstart 3, over HTTP)', async () => {

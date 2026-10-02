@@ -868,6 +868,8 @@ enum PolicyReasonCode {
   TARGET_BLOCKED
   CATEGORY_NOT_ALLOWLISTED
   TOPIC_BLOCKED
+  /// 002 T066: the escalation attempt cap (FR-013), distinct from the per-action ATTEMPT_CAP_REACHED.
+  ESCALATION_CAP_REACHED
 
   @@map("policy_reason_code")
   @@schema("policy")
@@ -980,8 +982,15 @@ model PolicyDecision {
   evaluatedAt       DateTime      @map("evaluated_at") @db.Timestamptz(6)
   /// Set when the guarded step executes against it.
   consumedAt        DateTime?     @map("consumed_at") @db.Timestamptz(6)
-  /// epoch_bump · approval_expired · digest_mismatch.
+  /// epoch_bump · approval_expired · digest_mismatch · charge_abandoned (the closed list is
+  /// `INVALIDATED_REASONS` in packages/domain/policy; data-model.md and openapi.yaml agree).
   invalidatedReason String?       @map("invalidated_reason")
+  /// 002 T060: identifies a *charged* step's request (the caller's proposal with the resolved
+  /// fields and the instant removed), so a retried EvaluateAndBind returns the decision it already
+  /// minted instead of charging twice. Null for a decision that charged nothing. The partial
+  /// unique index (tenant, run, state, request_key) is created in the migration — Prisma cannot
+  /// declare a partial index.
+  requestKey        String?       @map("request_key")
 
   approvalRequests ApprovalRequest[]
 
