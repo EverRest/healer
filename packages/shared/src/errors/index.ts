@@ -24,6 +24,8 @@ export const ERROR_CODES = [
   'CAPABILITY_MISSING',
   'WALL_CLOCK_EXCEEDED',
   'INTERNAL',
+  'HUMAN_ACTOR_REQUIRED',
+  'DRAFT_ITEM_SUPERSEDED',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -77,6 +79,13 @@ const STATUS: Record<ErrorCode, number> = {
   CAPABILITY_MISSING: 412,
   WALL_CLOCK_EXCEEDED: 500,
   INTERNAL: 500,
+  // 004 FR-010/SC-002: confirmation and rejection are human-actor-only. 403, not 422 — this is an
+  // authorization refusal (who is asking), not a validation failure (what they sent).
+  HUMAN_ACTOR_REQUIRED: 403,
+  // 004 R-07: a draft item's target moved under it (a manual edit landed between the run and the
+  // review) — the same "stale precondition, re-read and retry" shape as DIGEST_MISMATCH/
+  // STALE_AUTONOMY_EPOCH, so 409 alongside them.
+  DRAFT_ITEM_SUPERSEDED: 409,
 };
 
 export function httpStatusFor(code: ErrorCode): number {
