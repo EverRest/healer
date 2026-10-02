@@ -2680,20 +2680,43 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   `shared/config` or `apps/api` edit here, both off-limits to this split).
 - **T004's fixtures used `user-facing`/`event-driven`, not in data-model's `user_facing` list.**
   T048's all-fixtures-validate test was red on exactly that; fixtures now use `user_facing` /
-  `event_driven`. T047 itself was already satisfied by T004's loader (three fixtures); no new
-  fixture was added because T004's e2e asserts every component is `built_from` a repository, which
-  an `external` component (T051) deliberately is not.
+  `event_driven`. T047 itself was already satisfied by T004's loader (three fixtures); no
+  `external`-component fixture was added because T004's e2e asserts every component is `built_from`
+  a repository, which an `external` component (T051) deliberately is not.
 - **`exposes` endpoint rule is not specified anywhere.** Chose `component | deployment_unit ->
   endpoint` (a unit or component that serves an endpoint). `implements` is `endpoint -> component`
   (data-model). `calls`, `depends_on`, `serves_feature` are left unconstrained by this task.
-- **The edge-endpoint rule's reader.** There is no edge write path on master (Phase 3's confirmation
-  step), so nothing can refuse a bad edge at write time yet. The reader today is
-  `PrismaGraphStructureRepository.listEdgeEndpointViolations` (tenant-scoped, open edges), exercised
-  by e2e; Phase 3's confirmation write path should call `validateEdge`, and a continuous check
-  (Split A's `check:*` family) can call the lister. Not a DB trigger: T046 is "no migration".
+- **Readers (which guarantee has a production consumer).**
+  - *Wired:* `check:graph-structure` (`scripts/checks/graph-structure.mjs`, `pnpm run
+    check:graph-structure`, own file, own package.json line — not in Split A's check files) calls
+    `listEdgeEndpointViolations` and `listNaturalKeyCollisions` for every tenant and fails on any
+    result. Covers T046's endpoint-kind rules and T052's collisions.
+  - *Pending Phase 3 (no write path exists on master):* the confirmation write path calling
+    `validateEdge` and `validateComponentAttr` before writing; the discovery/draft step calling
+    `placeDeploymentUnit` (T051 has no production caller today) and `detectNaturalKeyCollisions`
+    for the human disambiguation; the composition root calling `parseCharacteristicVocabulary`
+    (T044). Not a DB trigger: T046 is "no migration".
 - **"External component" = `graph_node.node_kind = 'component'` with `component_type = 'external'`**
   (plus characteristic `third_party`), not `node_kind = 'external'` (which is a separate kind in the
-  schema, meant for external systems). `placeDeploymentUnit` reuses the unit's natural key.
-- **Collision definition (T052):** same `natural_key`, at least two distinct components, and at
-  least two distinct repositories across them. Same key in the same repository is a different
-  defect and is not reported here. Output is candidates only; there is no merge function.
+  schema, meant for external systems). `placeDeploymentUnit` reuses the unit's natural key for the
+  component; its `deploys` edge endpoints are `{ kind, naturalKey }` pairs (`component` ->
+  `deployment_unit`), so from/to are distinguishable and `validateEdge` is asserted on the
+  placement's own output rather than hard-coded kinds (review M5). It throws on an empty unit key
+  or name or an empty matched key (pass `null` for "no match").
+- **Collision definition (T052, tightened after review):** two or more DISTINCT component ids
+  sharing a canonical key (`trim().toLowerCase()`; candidates keep the key as written). Scope tag
+  `cross_repository` (2+ repositories across the group), `same_repository`, or `unrepositoried`
+  (some member has no repository and the group spans at most one). Entries are merged by
+  `componentId` first, so one component listed once per repository never collides with itself.
+  Output is candidates only; there is no merge function. The repository only considers open,
+  non-rejected components and edges.
+- **Kind-attribute validation:** optional text fields accept `undefined | null | non-blank string`
+  (trimmed); any other type is a validation error, never silently null; whitespace-only required
+  text is rejected. `validateEdge` is a total, fail-closed table over `EdgeType` (`calls`,
+  `depends_on`, `serves_feature` are explicitly `'unconstrained'`); unknown types are refused.
+- **Attribute writes require a live node:** `assertNode` demands the node be open
+  (`valid_to_version = 2147483647`) and not `rejected`, else not-found. Reads are not so filtered.
+- **Fixtures gained one `endpoint` each** (`api-route`, `orders-route`, `checkout-route`), with an
+  `implements` and an `exposes` edge, so every structural edge type is exercised by the query set;
+  T004's invariants (every component built_from and deployed) are unaffected because endpoints are
+  not components.

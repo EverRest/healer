@@ -27,9 +27,6 @@ describe('T042: a single-deployable system (n components, one unit) needs no spe
     ];
 
     expect(findEdgeViolations(nodes, edges)).toEqual([]);
-    const targets = new Set(edges.filter((e) => e.type === 'deploys').map((e) => e.to));
-    expect([...targets]).toEqual(['u']);
-    expect(edges.filter((e) => e.type === 'deploys')).toHaveLength(n);
   });
 });
 
@@ -87,12 +84,25 @@ describe('T046: structural separations are edges with fixed endpoint kinds (FR-0
     expect(validateEdge('deploys', 'component', 'repository').ok).toBe(false);
   });
 
-  it('non-structural edge types are not constrained here (their rules belong to their own tasks)', () => {
-    for (const type of EDGE_TYPES.filter(
-      (t) => !(STRUCTURAL_EDGE_TYPES as readonly string[]).includes(t),
-    ))
+  it('the three explicitly unconstrained edge types accept any pair (their rules belong to other tasks)', () => {
+    for (const type of ['calls', 'depends_on', 'serves_feature'] as const)
       expect(validateEdge(type, 'component', 'component')).toEqual({ ok: true });
   });
+
+  it('every known edge type is either structural or one of those three — the table is exhaustive', () => {
+    const unconstrained = ['calls', 'depends_on', 'serves_feature'];
+    expect([...EDGE_TYPES].sort()).toEqual([...STRUCTURAL_EDGE_TYPES, ...unconstrained].sort());
+  });
+
+  it.each(['bogus', 'constructor', 'toString', '__proto__', ''])(
+    'an unknown edge type %j is refused, never accepted (fails closed)',
+    (type) => {
+      expect(validateEdge(type as never, 'component', 'component')).toEqual({
+        ok: false,
+        reason: 'unknown edge type',
+      });
+    },
+  );
 
   it('findEdgeViolations names the offending edge and an edge to an unknown node', () => {
     const nodes = [comp('a'), repo('r')];

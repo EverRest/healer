@@ -9,6 +9,10 @@ import type {
   RepositoryAttrValue,
   Validated,
 } from '../domain/kind-attributes.js';
+import {
+  detectNaturalKeyCollisions,
+  type NaturalKeyCollision,
+} from '../domain/natural-key-collisions.js';
 import { findEdgeViolations, type EdgeViolation } from '../domain/structural-edges.js';
 
 const OPEN = 2147483647; // valid_to_version of a current row (R-04)
@@ -21,7 +25,14 @@ export class PrismaGraphStructureRepository implements GraphStructureRepository 
   /** The node must exist in THIS tenant and be of `kind` — anything else is not-found (FR-024). */
   private async assertNode(where: ByNode, kind: NodeKind): Promise<void> {
     const node = await this.prisma.graphNode.findFirst({
-      where: { id: where.nodeId, tenantId: where.tenantId, nodeKind: kind },
+      where: {
+        id: where.nodeId,
+        tenantId: where.tenantId,
+        nodeKind: kind,
+        // A superseded or rejected node is not a live target for attribute writes (R-04).
+        validToVersion: OPEN,
+        state: { not: 'rejected' },
+      },
       select: { id: true },
     });
     if (node === null) throw new NotFoundError('GraphNode');
@@ -111,6 +122,29 @@ export class PrismaGraphStructureRepository implements GraphStructureRepository 
       create: { nodeId: where.nodeId, tenantId: where.tenantId, ...attr },
       update: { ...attr },
     });
+  }
+
+  async listNaturalKeyCollisions(where: TenantScoped<object>): Promise<NaturalKeyCollision[]> {
+    const live = {
+      tenantId: where.tenantId,
+      validToVersion: OPEN,
+      state: { not: 'rejected' },
+    } as const;
+    const components = await this.prisma.graphNode.findMany({
+      where: { ...live, nodeKind: 'component' },
+      select: { id: true, naturalKey: true },
+    });
+    const builtFrom = await this.prisma.graphEdge.findMany({
+      where: { ...live, edgeType: 'built_from', fromNode: { ...live }, toNode: { ...live } },
+      select: { fromNodeId: true, toNodeId: true },
+    });
+    return detectNaturalKeyCollisions(
+      components.map((c) => ({
+        componentId: c.id,
+        naturalKey: c.naturalKey,
+        repositoryIds: builtFrom.filter((e) => e.fromNodeId === c.id).map((e) => e.toNodeId),
+      })),
+    );
   }
 
   async listEdgeEndpointViolations(where: TenantScoped<object>): Promise<EdgeViolation[]> {

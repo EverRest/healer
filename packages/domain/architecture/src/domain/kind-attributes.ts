@@ -51,9 +51,19 @@ type Raw = Readonly<Record<string, unknown>>;
 
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T =>
   typeof v === 'string' && (list as readonly string[]).includes(v);
-const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
-const optionalText = (v: unknown): string | null =>
-  typeof v === 'string' && v.length > 0 ? v : null;
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+
+/**
+ * `undefined | null` -> null; a non-blank string -> trimmed; anything else is a validation error
+ * (never silently null — a wrong-typed value must not look like an absent one).
+ */
+function optionalText(raw: Raw, field: string, errors: string[]): string | null {
+  const v = raw[field];
+  if (v === undefined || v === null) return null;
+  if (nonEmpty(v)) return v.trim();
+  errors.push(`${field} must be a non-blank string when present`);
+  return null;
+}
 
 function finish<T>(errors: string[], value: T): AttrValidation<T> {
   return errors.length > 0 ? { ok: false, errors } : { ok: true, value: value as Validated<T> };
@@ -77,10 +87,11 @@ export function validateComponentAttr(
   for (const c of given ?? [])
     if (typeof c !== 'string' || !vocabulary.terms.has(c))
       errors.push(`unknown characteristic ${JSON.stringify(c)}`);
+  const ownerRef = optionalText(raw, 'ownerRef', errors);
   return finish(errors, {
     componentType: raw.componentType as ComponentType,
     characteristics: [...new Set(given as string[])],
-    ownerRef: optionalText(raw.ownerRef),
+    ownerRef,
   });
 }
 
@@ -91,11 +102,12 @@ export function validateDeploymentUnitAttr(raw: Raw): AttrValidation<DeploymentU
   if (!oneOf(DEPLOYMENT_RUNTIME_KINDS, raw.runtimeKind))
     errors.push(`runtimeKind must be one of ${DEPLOYMENT_RUNTIME_KINDS.join(', ')}`);
   if (!nonEmpty(raw.runtimeRef)) errors.push('runtimeRef is required');
+  const currentVersion = optionalText(raw, 'currentVersion', errors);
   return finish(errors, {
     environment: raw.environment as string,
     runtimeKind: raw.runtimeKind as DeploymentRuntimeKind,
     runtimeRef: raw.runtimeRef as string,
-    currentVersion: optionalText(raw.currentVersion),
+    currentVersion,
   });
 }
 
@@ -118,10 +130,13 @@ export function validateEndpointAttr(raw: Raw): AttrValidation<EndpointAttrValue
   unknownKeys(raw, ['protocol', 'method', 'pathTemplate', 'contractRef'], errors);
   if (!oneOf(ENDPOINT_PROTOCOLS, raw.protocol))
     errors.push(`protocol must be one of ${ENDPOINT_PROTOCOLS.join(', ')}`);
+  const method = optionalText(raw, 'method', errors);
+  const pathTemplate = optionalText(raw, 'pathTemplate', errors);
+  const contractRef = optionalText(raw, 'contractRef', errors);
   return finish(errors, {
     protocol: raw.protocol as EndpointProtocol,
-    method: optionalText(raw.method),
-    pathTemplate: optionalText(raw.pathTemplate),
-    contractRef: optionalText(raw.contractRef),
+    method,
+    pathTemplate,
+    contractRef,
   });
 }

@@ -6,6 +6,7 @@ import type {
   RepositoryAttrValue,
   Validated,
 } from './kind-attributes.js';
+import type { NaturalKeyCollision } from './natural-key-collisions.js';
 import type { EdgeViolation } from './structural-edges.js';
 
 type ByNode = TenantScoped<{ readonly nodeId: string }>;
@@ -27,4 +28,6 @@ export interface GraphStructureRepository {
   saveEndpointAttr(where: ByNode, attr: Validated<EndpointAttrValue>): Promise<void>;
   /** Open edges whose endpoint kinds break `validateEdge` — what a continuous check consumes. */
   listEdgeEndpointViolations(where: TenantScoped<object>): Promise<EdgeViolation[]>;
+  /** Open, non-rejected components sharing a natural key — what a continuous check consumes (R-12). */
+  listNaturalKeyCollisions(where: TenantScoped<object>): Promise<NaturalKeyCollision[]>;
 }

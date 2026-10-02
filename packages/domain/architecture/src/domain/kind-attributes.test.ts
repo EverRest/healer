@@ -136,3 +136,63 @@ describe('T045: the other kind attributes validate their closed lists', () => {
     expect(r.ok === false && r.errors.length).toBe(3);
   });
 });
+
+describe('optional text fields and whitespace (review M1, M2)', () => {
+  it.each([
+    ['ownerRef', 42],
+    ['ownerRef', {}],
+    ['ownerRef', '   '],
+    ['ownerRef', ''],
+  ])('component %s = %j is a validation error, not a silent null', (field, value) => {
+    const r = validateComponentAttr(
+      { componentType: 'service', characteristics: [], [field]: value },
+      vocab,
+    );
+    expect(r).toEqual({ ok: false, errors: [expect.stringContaining(field)] });
+  });
+
+  it('undefined and null are the only "absent" values; a text value is trimmed', () => {
+    const base = { componentType: 'service', characteristics: [] };
+    expect(validateComponentAttr({ ...base, ownerRef: undefined }, vocab)).toMatchObject({
+      ok: true,
+      value: { ownerRef: null },
+    });
+    expect(validateComponentAttr({ ...base, ownerRef: null }, vocab)).toMatchObject({
+      ok: true,
+      value: { ownerRef: null },
+    });
+    expect(validateComponentAttr({ ...base, ownerRef: ' team-a ' }, vocab)).toMatchObject({
+      ok: true,
+      value: { ownerRef: 'team-a' },
+    });
+  });
+
+  it('endpoint and deployment-unit optional fields reject non-strings', () => {
+    expect(validateEndpointAttr({ protocol: 'http', method: 5 }).ok).toBe(false);
+    expect(validateEndpointAttr({ protocol: 'http', pathTemplate: '  ' }).ok).toBe(false);
+    expect(validateEndpointAttr({ protocol: 'http', contractRef: false }).ok).toBe(false);
+    expect(
+      validateDeploymentUnitAttr({
+        environment: 'prod',
+        runtimeKind: 'vm',
+        runtimeRef: 'r',
+        currentVersion: 7,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('whitespace-only required text is rejected', () => {
+    expect(
+      validateDeploymentUnitAttr({ environment: '  ', runtimeKind: 'vm', runtimeRef: 'r' }).ok,
+    ).toBe(false);
+    expect(
+      validateDeploymentUnitAttr({ environment: 'p', runtimeKind: 'vm', runtimeRef: ' \t' }).ok,
+    ).toBe(false);
+    expect(
+      validateRepositoryAttr({ vcs: 'gitlab', projectRef: ' ', defaultBranch: 'main' }).ok,
+    ).toBe(false);
+    expect(validateRepositoryAttr({ vcs: 'gitlab', projectRef: 'p', defaultBranch: '  ' }).ok).toBe(
+      false,
+    );
+  });
+});
