@@ -58,7 +58,9 @@ export async function seedPendingApproval(
   const autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
   const actions = new PrismaPolicyActionRepository(prisma);
   const autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
-  const budgets = new PrismaBudgetRepository(prisma);
+  const budgets = new PrismaBudgetRepository(prisma, {
+    maxEvaluationSkewMs: Number.POSITIVE_INFINITY,
+  });
   const approvals = new PrismaApprovalLifecycleRepository(prisma);
   const inCorrelation = <T>(fn: () => Promise<T>) => withCorrelation(newCorrelationId(), fn);
 

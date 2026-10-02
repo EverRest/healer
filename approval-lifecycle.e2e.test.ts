@@ -113,7 +113,7 @@ describe('approval lifecycle (T070-T074)', () => {
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
-    budgets = new PrismaBudgetRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
     lifecycle = new PrismaApprovalLifecycleRepository(prisma);
     sweepRepo = new PrismaApprovalRequestRepository(prisma);
   }, 180_000);
