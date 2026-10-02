@@ -5,7 +5,7 @@ import {
   type ApprovalRequestRepository,
   type ApprovalRequestSummary,
 } from '../../domain/approval-request-repository.js';
-import type { ApprovalCallbackPort } from '../../domain/approval-callback-port.js';
+import type { NewAuditEntry } from '../../domain/audit-entry.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
 import { sweepRevokedApprovals } from './sweep-revoked-approvals.js';
 
@@ -34,52 +34,55 @@ class FakeEpochRepo implements AutonomyEpochRepository {
 
 class FakeApprovalRepo implements ApprovalRequestRepository {
   revoked: string[] = [];
+  audits: TenantScoped<NewAuditEntry>[] = [];
   constructor(
     private readonly pending: readonly ApprovalRequestSummary[],
-    private readonly failOn: ReadonlySet<string> = new Set(),
+    private readonly failWith = new Map<string, Error>(),
   ) {}
   async findPendingWithStaleEpoch(): Promise<readonly ApprovalRequestSummary[]> {
     return this.pending;
   }
   async revoke(
-    where: TenantScoped<{ readonly id: string; readonly decisionId: string }>,
+    where: TenantScoped<{
+      readonly id: string;
+      readonly decisionId: string;
+      readonly now: Date;
+      readonly auditEntry: TenantScoped<NewAuditEntry>;
+    }>,
   ): Promise<ApprovalRequestSummary> {
-    if (this.failOn.has(where.id)) throw new ApprovalNotPendingError(where.id);
+    const failure = this.failWith.get(where.id);
+    if (failure !== undefined) throw failure;
     this.revoked.push(where.id);
+    this.audits.push(where.auditEntry);
     const found = this.pending.find((a) => a.id === where.id);
     if (found === undefined) throw new NotFoundError('approval_request');
     return { ...found, state: 'revoked' };
   }
 }
 
-class FakeCallback implements ApprovalCallbackPort {
-  delivered: string[] = [];
-  async deliver(input: { readonly approvalId: string }): Promise<void> {
-    this.delivered.push(input.approvalId);
-  }
-}
-
 describe('sweepRevokedApprovals (T045, R-07, quickstart 14)', () => {
-  it('revokes every pending request with a stale epoch and delivers the callback for each', async () => {
+  it('revokes every pending request with a stale epoch, auditing each (delivery is inside revoke)', async () => {
     const approvals = new FakeApprovalRepo([approval({ id: 'a1' }), approval({ id: 'a2' })]);
-    const callback = new FakeCallback();
     const result = await sweepRevokedApprovals(
       { approvals, autonomyEpochs: new FakeEpochRepo(1n) },
-      callback,
       CONTEXT,
     );
     expect(result.revoked).toHaveLength(2);
     expect(result.skipped).toBe(0);
     expect(approvals.revoked).toEqual(['a1', 'a2']);
-    expect(callback.delivered).toEqual(['a1', 'a2']);
+    expect(approvals.audits[0]).toMatchObject({
+      actorType: 'system',
+      action: 'policy.revoke_approval',
+      targetId: 'a1',
+      policyDecisionId: 'decision-1',
+    });
   });
 
   it('nothing to sweep when no request has a stale epoch', async () => {
-    const approvals = new FakeApprovalRepo([]);
     const result = await sweepRevokedApprovals(
-      { approvals, autonomyEpochs: new FakeEpochRepo(0n) },
-      new FakeCallback(),
+      { approvals: new FakeApprovalRepo([]), autonomyEpochs: new FakeEpochRepo(0n) },
       CONTEXT,
+      () => new Date('2026-10-01T00:00:00Z'),
     );
     expect(result.revoked).toEqual([]);
     expect(result.skipped).toBe(0);
@@ -88,32 +91,33 @@ describe('sweepRevokedApprovals (T045, R-07, quickstart 14)', () => {
   it('a request resolved or expired between read and write is skipped, not failed', async () => {
     const approvals = new FakeApprovalRepo(
       [approval({ id: 'a1' }), approval({ id: 'a2' })],
-      new Set(['a1']),
+      new Map([['a1', new ApprovalNotPendingError('a1')]]),
     );
-    const callback = new FakeCallback();
     const result = await sweepRevokedApprovals(
       { approvals, autonomyEpochs: new FakeEpochRepo(1n) },
-      callback,
       CONTEXT,
     );
     expect(result.skipped).toBe(1);
     expect(result.revoked.map((r) => r.id)).toEqual(['a2']);
-    expect(callback.delivered).toEqual(['a2']);
+  });
+
+  it('H2: a NotFoundError (missing run, callback or request) is a failure, never a skip', async () => {
+    const approvals = new FakeApprovalRepo(
+      [approval({ id: 'a1' })],
+      new Map([['a1', new NotFoundError('workflow_callback')]]),
+    );
+    await expect(
+      sweepRevokedApprovals({ approvals, autonomyEpochs: new FakeEpochRepo(1n) }, CONTEXT),
+    ).rejects.toThrow(AggregateError);
   });
 
   it('a genuine failure is collected and raised as AggregateError, not silently dropped', async () => {
-    class FailingApprovalRepo extends FakeApprovalRepo {
-      override async revoke(): Promise<ApprovalRequestSummary> {
-        throw new Error('boom');
-      }
-    }
-    const approvals = new FailingApprovalRepo([approval({ id: 'a1' })]);
+    const approvals = new FakeApprovalRepo(
+      [approval({ id: 'a1' })],
+      new Map([['a1', new Error('boom')]]),
+    );
     await expect(
-      sweepRevokedApprovals(
-        { approvals, autonomyEpochs: new FakeEpochRepo(1n) },
-        new FakeCallback(),
-        CONTEXT,
-      ),
+      sweepRevokedApprovals({ approvals, autonomyEpochs: new FakeEpochRepo(1n) }, CONTEXT),
     ).rejects.toThrow(AggregateError);
   });
 });

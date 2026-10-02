@@ -103,6 +103,9 @@ model WorkflowCallback {
   consumedAt    DateTime?    @map("consumed_at") @db.Timestamptz(6)
   /// A second delivery increments this and changes nothing else.
   receivedCount Int          @default(0) @map("received_count")
+  /// 002: an `approval` callback is bound to exactly one approval request; delivery is by this key,
+  /// never by run. Null for every other kind. No FK: 012 does not depend on 002 (data-model.md).
+  approvalId    String?      @unique @map("approval_id") @db.Uuid
 
   // Composite FK against WorkflowRun's (id, tenantId) — the same fix applied to
   // WorkflowTransition when this gap was first found (FR-048); this table had the identical gap

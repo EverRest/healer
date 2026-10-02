@@ -58,7 +58,10 @@ describe('buildApprovalSummary (T070, T071, FR-015)', () => {
 
   it('refuses a decision that did not resolve to require_approval', () => {
     expect(() => buildApprovalSummary(stored({ outcome: 'allow' }))).toThrow(
-      /did not resolve to require_approval/,
+      expect.objectContaining({
+        code: 'PRECONDITION_FAILED',
+        message: expect.stringContaining('did not resolve to require_approval'),
+      }),
     );
   });
 });

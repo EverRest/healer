@@ -169,4 +169,16 @@ describe('expireDueApprovals (the deadline tick)', () => {
       AggregateError,
     );
   });
+
+  it('H2: a NotFoundError mid-tick (missing decision, run or callback) is a failure, not a skip', async () => {
+    const approvals = new FakeApprovals([approval('a1')]);
+    const missing = Object.assign(approvals, {
+      async expire(): Promise<ApprovalRequest> {
+        throw new NotFoundError('workflow_callback');
+      },
+    });
+    await expect(expireDueApprovals(reposOf(missing), CONTEXT, () => AFTER)).rejects.toThrow(
+      AggregateError,
+    );
+  });
 });

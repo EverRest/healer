@@ -2693,7 +2693,7 @@ Decided, not asked. Branch `worktree-002-phase6-7-budgets-approvals` (implemente
   through the authenticated API) and the lapse (`state = needs_human`, `terminal_state`, a
   `workflow_transition` with cause `timeout`) are written in the same transaction by
   `approval-run-effects.ts`. Callback delivery for resolve/expire is in-transaction (consume the
-  row, repeats count). `PrismaApprovalCallbackPort` now exists for the T045 sweep.
+  row, repeats count). (A port for the T045 sweep was added here and later removed — see the review follow-up below.)
 - **A lapse is a recorded `DENY`, not an evaluation.** `deny` + `APPROVAL_EXPIRED`, no matched
   rules, the original decision's input/digest/ruleset version; the original is invalidated with
   `approval_expired`. It cannot replay (no input maps to a rule-less deny), so `check:decision-replay`
@@ -2738,3 +2738,69 @@ Decided, not asked. Branch `worktree-002-phase6-7-budgets-approvals` (implemente
   cross-tenant (mutation-checked: dropping `tenantId` from `findById` fails it; resolve is also
   protected independently by the tenant-scoped row lock). Endpoint behaviour is
   `apps/api/approvals.e2e.test.ts`.
+
+### 002 Phase 7 — review follow-up (two independent reviews of the branch)
+
+Fixed (item numbers are the coordinator's):
+
+1. **One approval per run, callback bound to its approval.** *Refuse*, not return-existing, when the
+   locked run already has a pending request or awaits something other than an approval
+   (`ApprovalAlreadyPendingError`); a repeat for the **same decision** still returns the existing
+   request (idempotency). A run whose marker belongs to a *resolved* approval may be re-parked
+   (resolve clears `awaiting`). Binding needed a **migration
+   `20261003100000_approval_callback_binding`** (with `down.sql`): nullable unique
+   `workflow.workflow_callback.approval_id`, no FK so 012 does not depend on 002. It adds a column to
+   012's table from 002's branch — flag for 012's owner. Delivery is by that key in resolve, expire
+   and revoke.
+2. `request()` idempotency read is `findFirst({decisionId, tenantId})`. Not separately
+   mutation-testable (the run lock already 404s a foreign run first); a one-line correctness fix.
+3. `RequestApproval` takes `evaluateAndBind`'s `autonomyEpoch`, records it, and refuses
+   `STALE_AUTONOMY_EPOCH` if no longer current; refuses a consumed/invalidated decision; refuses
+   `evidenceIds: []` (the approver "sees the evidence").
+4. `ResolveApproval` locks the run (after the approval, same order as expire) and refuses a terminal
+   run with `ApprovalRunTerminalError` (409). **`rejected` means:** the original decision is
+   invalidated with the new reason `approval_rejected` (data-model + openapi.yaml enum extended;
+   `invalidated_reason` is free text in the DB, so no migration for that), the callback is
+   delivered, and the run goes to terminal `needs_human` with a `human`-cause transition.
+   **Approve** delivers the callback and clears `awaiting`; the run's state is left for its stepper.
+5. `deliverApprovalCallback` throws `NotFoundError` when nothing matches; the surrounding
+   transaction rolls back.
+6. `expireDueApprovals` and `sweepRevokedApprovals` skip only `ApprovalNotPendingError`.
+7. Sweep `revoke()` now delivers the callback, moves the run to `needs_human` (cause `policy`) and
+   audits (`policy.revoke_approval`, registered in both seed lists) in the revoke's transaction. The
+   `ApprovalCallbackPort` and its Prisma implementation were **deleted** (nothing uses an
+   out-of-transaction port any more); `sweepRevokedApprovals` lost its `callback` parameter. **Not
+   done:** no outbox event on revoke — the contract's event table has no `ApprovalRevoked`, and
+   inventing one is a spec change.
+8. `check:stale-approvals` also reports: a run `awaiting` an approval with no pending request; a
+   pending request with no unconsumed `approval` callback; a request whose run does not exist
+   (explicit message). Seeded-violation tests for each.
+9. `check:decision-replay` exempts a lapse only if `deny` + exactly `['APPROVAL_EXPIRED']` + no
+   matched rules **and** an `expired` request on the same run **and** an original decision with
+   `approval_expired` and the same digest. A forged lapse-shaped row is flagged (tested).
+10. `findDue` returns `{id, expiresAt}` only. `list()` parses per row and omits a malformed row with
+    a structured error log (id + failing paths, never content); `findById` still raises for that
+    row. Judgment: an *omitted* row is invisible to the caller except in logs — the alternative (an
+    error entry in the list response) changes the contract shape. Revisit if the approver UI needs
+    it.
+11. Typed `PRECONDITION_FAILED` from `buildApprovalSummary`. **Clock:** resolve/expire still take
+    `now` from the caller rather than DB `now()` under the lock — deliberate: the injected instant
+    is what makes the lapse/race tests deterministic, and a DB clock would not remove skew between
+    the tick host and the human's request anyway.
+
+Recorded, not coded (coordinator's calls):
+
+- **C1: nothing schedules `expireDueApprovals`, `sweepRevokedApprovals` or
+  `check:stale-approvals`.** The mechanisms are built and tested; no production caller runs them, so
+  an approval that lapses today stays `pending` until something calls the tick. T072, T073 and T076
+  are ticked on the strength of the tested mechanism — **that tick should be reconsidered**;
+  tasks.md carries the note. No scheduler was invented.
+- **M4:** the decision-invalidating `updateMany` can match zero rows (already consumed or
+  invalidated); silent by design (same posture as `consume()`); no warning added.
+- **M5:** `Idempotency-Key` is validated for shape but not stored (the repo-wide known gap, 001
+  T057); retries are safe only because each mutation is itself idempotent or guarded.
+- **M6:** `check:policy-coverage` keys on `policy_action.mutating`
+  (`pa.mutating = true AND pd.id IS NULL`). The approval audit actions are `mutating:false`
+  deliberately: they are admin/control writes, not guarded actions; flipping them to `true` would
+  make the check flag every approval audit entry (each links a non-`allow`, non-consumed decision)
+  as a missing consumed ALLOW. Left as is.

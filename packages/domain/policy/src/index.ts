@@ -1,10 +1,11 @@
 // @healer/domain-policy — entry surface. Nothing is exported until it exists (012 FR-001).
 
 export { ACTION_CLASSES, type ActionClass } from './domain/action-class.js';
-export type { ApprovalCallbackPort } from './domain/approval-callback-port.js';
 export {
+  ApprovalAlreadyPendingError,
   ApprovalNotPendingError,
   type ApprovalLifecycleRepository,
+  type DueApproval,
   type ApprovalListFilter,
   type ApprovalRequest,
   type ApprovalRequestRepository,
@@ -15,6 +16,7 @@ export {
   ApprovalWithoutDeadlineError,
   assertDue,
   assertRedeemable,
+  assertRequestable,
   buildLapseDecision,
   projectExpiry,
 } from './domain/approval-lifecycle.js';
@@ -109,6 +111,7 @@ export {
 } from './application/commands/revoke-autonomy.js';
 export {
   sweepRevokedApprovals,
+  REVOKE_APPROVAL_AUDIT_ACTION,
   type SweepRevokedApprovalsResult,
 } from './application/commands/sweep-revoked-approvals.js';
 export {
@@ -148,6 +151,5 @@ export { PrismaAutonomyEpochRepository } from './infrastructure/prisma-autonomy-
 export { PrismaAutonomyGrantRepository } from './infrastructure/prisma-autonomy-grant-repository.js';
 export { PrismaApprovalRequestRepository } from './infrastructure/prisma-approval-request-repository.js';
 export { PrismaApprovalLifecycleRepository } from './infrastructure/prisma-approval-lifecycle-repository.js';
-export { PrismaApprovalCallbackPort } from './infrastructure/prisma-approval-callback-port.js';
 export { ApprovalRunTerminalError } from './infrastructure/approval-run-effects.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';

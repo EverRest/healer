@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { PrismaIssueRepository } from '@healer/domain-issues';
 import {
   PrismaApprovalLifecycleRepository,
   PrismaAutonomyEpochRepository,
@@ -13,7 +14,7 @@ import {
   type ApprovalRequest,
   type RuleBody,
 } from '@healer/domain-policy';
-import { TenantContext, newCorrelationId, withCorrelation } from '@healer/shared';
+import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer/shared';
 import { buildDecisionInput } from '../packages/domain/policy/src/domain/test-support/fixtures.js';
 
 /**
@@ -69,13 +70,46 @@ export async function seedPendingApproval(
       grantedBy: 'pavlo',
     }),
   );
+  // An approval must point at evidence (`RequestApproval` refuses none), and evidence needs an issue.
+  await prisma.$executeRaw`insert into "issue"."normalisation_ruleset" (version, rules) values (1, '{}') on conflict do nothing`;
+  const issueId = randomUUID();
+  await inCorrelation(() =>
+    new PrismaIssueRepository(prisma).create(
+      scope(context, {
+        id: issueId,
+        kind: 'production_incident',
+        environment: 'prod',
+        severity: 'high',
+        fingerprint: `fp-${randomUUID()}`,
+        rulesetVersion: 1,
+        firstSeenAt: new Date('2026-01-01T00:00:00Z'),
+        lastSeenAt: new Date('2026-01-01T00:00:00Z'),
+      }),
+    ),
+  );
+  const evidenceId = randomUUID();
+  await prisma.evidence.create({
+    data: {
+      id: evidenceId,
+      tenantId,
+      issueId,
+      type: 'error_signature',
+      sourceSystem: 'loki',
+      sourceRef: 'q1',
+      sourceLabel: 'from logs',
+      payload: {},
+      producedByStep: 'investigate',
+      observedAt: new Date('2026-01-01T00:00:00Z'),
+      expiresAt: new Date('2027-01-01T00:00:00Z'),
+    },
+  });
   const runId = randomUUID();
   const expiresAt = options.expiresAt ?? new Date(Date.now() + 24 * 3_600_000);
   await prisma.workflowRun.create({
     data: {
       id: runId,
       tenantId,
-      issueId: randomUUID(),
+      issueId,
       definitionKey: 'remediation',
       definitionVersion: 1,
       state: 'awaiting_approval',
@@ -83,16 +117,17 @@ export async function seedPendingApproval(
       deadlineAt: new Date(expiresAt.getTime() + 3_600_000),
     },
   });
-  const { decision } = await inCorrelation(() =>
+  const { decision, autonomyEpoch } = await inCorrelation(() =>
     evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
       decisionInput: buildDecisionInput(),
-      binding: { workflowRunId: runId, workflowState: 'awaiting_approval' },
+      binding: { issueId, workflowRunId: runId, workflowState: 'awaiting_approval' },
     }),
   );
   const approval = await inCorrelation(() =>
     requestApproval({ approvals, decisions }, context, {
       decisionId: decision.id,
-      evidenceIds: [],
+      evidenceIds: [evidenceId],
+      autonomyEpoch,
       expiresAt,
     }),
   );

@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import {
   ApprovalNotPendingError,
+  ApprovalRunTerminalError,
   resolveApproval,
   StaleAutonomyEpochError,
   type ApprovalLifecycleRepository,
@@ -130,7 +131,11 @@ export class ApprovalsController {
       if (error instanceof NotFoundError) {
         throw new NotFoundException(`approval ${approvalId} not found`);
       }
-      if (error instanceof ApprovalNotPendingError || error instanceof StaleAutonomyEpochError) {
+      if (
+        error instanceof ApprovalNotPendingError ||
+        error instanceof ApprovalRunTerminalError ||
+        error instanceof StaleAutonomyEpochError
+      ) {
         throw new ConflictException(error.message);
       }
       throw error;

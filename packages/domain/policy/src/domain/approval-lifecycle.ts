@@ -1,5 +1,9 @@
 import { HealerError } from '@healer/shared';
 import {
+  DecisionAlreadyConsumedError,
+  DecisionNotAllowedError,
+} from './policy-decision-repository.js';
+import {
   ApprovalNotPendingError,
   type LockedApproval,
   type RedemptionGuard,
@@ -11,6 +15,20 @@ import type { ReasonCode } from './reason-code.js';
 /** `APPROVAL_EXPIRED` is declared once, in `REASON_CODES`; this is a typed reference to it, not a
  *  second declaration of the member. */
 const APPROVAL_EXPIRED: ReasonCode = 'APPROVAL_EXPIRED';
+
+/** A request is only issued for a decision that is still live: not consumed, not invalidated
+ *  (an epoch bump, an earlier lapse). Checked by the command and again, on the fresh row, inside
+ *  the repository's transaction. */
+export function assertRequestable(decision: {
+  readonly id: string;
+  readonly consumedAt?: Date | null;
+  readonly invalidatedReason?: string | null;
+}): void {
+  if (decision.consumedAt != null) throw new DecisionAlreadyConsumedError(decision.id);
+  if (decision.invalidatedReason != null) {
+    throw new DecisionNotAllowedError(decision.id, 'invalidated');
+  }
+}
 
 /** A tick fired before `expires_at`. Nothing expires; the next tick will. */
 export class ApprovalNotDueError extends HealerError {

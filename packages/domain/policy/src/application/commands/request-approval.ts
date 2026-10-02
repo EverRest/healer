@@ -4,6 +4,7 @@ import type {
   ApprovalLifecycleRepository,
   ApprovalRequest,
 } from '../../domain/approval-request-repository.js';
+import { assertRequestable } from '../../domain/approval-lifecycle.js';
 import { buildApprovalSummary } from '../../domain/approval-summary.js';
 import type { PolicyDecisionRepository } from '../../domain/policy-decision-repository.js';
 
@@ -14,6 +15,9 @@ export interface RequestApprovalInput {
   readonly decisionId: string;
   /** 001 evidence the approver is pointed at — identifiers only, never excerpts (T071). */
   readonly evidenceIds: readonly string[];
+  /** The tenant's epoch when the decision was made — `evaluateAndBind`'s `autonomyEpoch`. Recorded
+   *  on the request; refused if it is no longer current (a revocation happened in between). */
+  readonly autonomyEpoch: bigint;
   /** The expiry asked for; projected onto the run's deadline, never later than it (T073). */
   readonly expiresAt?: Date;
 }
@@ -35,8 +39,14 @@ export async function requestApproval(
   input: RequestApprovalInput,
   now: () => Date = () => new Date(),
 ): Promise<ApprovalRequest> {
+  // The approver "sees the evidence, not a narrative" (data-model.md): a request with none is
+  // refused rather than shown as an assertion with nothing behind it.
+  if (input.evidenceIds.length === 0) {
+    throw new HealerError('VALIDATION', 'approval refused: no evidence identifiers to show');
+  }
   const decision = await repos.decisions.findById(scope(context, { id: input.decisionId }));
   if (decision === null) throw new NotFoundError('PolicyDecision');
+  assertRequestable(decision);
   if (decision.workflowRunId === undefined) {
     throw new HealerError(
       'PRECONDITION_FAILED',
@@ -53,6 +63,7 @@ export async function requestApproval(
       workflowRunId: decision.workflowRunId,
       summary,
       evidenceIds: input.evidenceIds,
+      autonomyEpoch: input.autonomyEpoch,
       ...(input.expiresAt !== undefined ? { requestedExpiresAt: input.expiresAt } : {}),
       now: now(),
       auditEntry: scope(context, {

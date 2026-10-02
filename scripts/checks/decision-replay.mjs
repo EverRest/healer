@@ -83,17 +83,31 @@ export async function replayOne(rulesets, row) {
  */
 export async function findReplayMismatches(prisma, sampleSize = DEFAULT_SAMPLE_SIZE) {
   const rulesets = new PrismaPolicyRulesetRepository(prisma);
+  const lapseIds = (
+    await prisma.$queryRaw`
+      SELECT l.id
+      FROM "policy"."policy_decision" l
+      WHERE l.outcome = 'deny'
+        AND l.reason_codes = ARRAY['APPROVAL_EXPIRED']
+        AND cardinality(l.matched_rule_keys) = 0
+        AND EXISTS (
+          SELECT 1
+          FROM "policy"."approval_request" ar
+          JOIN "policy"."policy_decision" o ON o.id = ar.decision_id AND o.tenant_id = ar.tenant_id
+          WHERE ar.state = 'expired'
+            AND ar.tenant_id = l.tenant_id
+            AND ar.workflow_run_id = l.workflow_run_id
+            AND o.invalidated_reason = 'approval_expired'
+            AND o.proposal_digest = l.proposal_digest)`
+  ).map((row) => row.id);
   const rows = await prisma.policyDecision.findMany({
-    // A lapse (`ExpireApproval`, 002 T072) is *recorded*, not evaluated: it carries no matched
-    // rule and the one reason `APPROVAL_EXPIRED`, and no ruleset could reproduce it from its
-    // input (which is the require-approval decision's own). Excluded by that shape, not by reason
-    // code alone — a rule whose `reasonCode` is `APPROVAL_EXPIRED` matches a rule key and still
-    // replays.
-    where: {
-      NOT: {
-        AND: [{ reasonCodes: { has: 'APPROVAL_EXPIRED' } }, { matchedRuleKeys: { isEmpty: true } }],
-      },
-    },
+    // A real lapse (`ExpireApproval`, 002 T072) is *recorded*, not evaluated, and no ruleset can
+    // reproduce it from its input (the require-approval decision's own). It is exempt only if
+    // everything `ExpireApproval` writes is there: a `deny` with the one reason `APPROVAL_EXPIRED`
+    // and no matched rule, an `expired` approval request on the same run, and the original decision
+    // (same digest) invalidated as `approval_expired`. A row that merely *looks* like a lapse —
+    // forged, or left by a half-failed write — fails the join and is replayed (and flagged).
+    where: { id: { notIn: lapseIds } },
     take: sampleSize,
     orderBy: { evaluatedAt: 'desc' },
     select: {

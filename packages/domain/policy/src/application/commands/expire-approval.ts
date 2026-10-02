@@ -83,7 +83,9 @@ export async function expireDueApprovals(
     try {
       expired.push(await expireApproval(repos, context, { approvalId: approval.id }, () => at));
     } catch (error) {
-      if (error instanceof ApprovalNotPendingError || error instanceof NotFoundError) skipped += 1;
+      // Only "no longer pending" is the lock working; a missing decision, run or callback is a
+      // failure the tick must surface.
+      if (error instanceof ApprovalNotPendingError) skipped += 1;
       else failures.push(error);
     }
   }

@@ -107,7 +107,7 @@ describe('/approvals (002 T075)', () => {
     expect(response.body).toMatchObject({
       id: approval.id,
       state: 'pending',
-      evidenceIds: [],
+      evidenceIds: [expect.any(String)],
       summary: {
         proposedAction: 'change.open_pull_request',
         reasonCodes: ['APPROVAL_REQUIRED'],

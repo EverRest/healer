@@ -67,6 +67,12 @@ export const SEED_POLICY_ACTIONS = [
     mutating: false,
     owningSpec: '002',
   },
+  {
+    actionKey: 'policy.revoke_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
 ];
 
 // Fixed, not `new Date()`: `update: {}` below never changes `introducedAt` on an existing row

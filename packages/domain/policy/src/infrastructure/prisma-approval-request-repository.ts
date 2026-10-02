@@ -5,7 +5,10 @@ import {
   type ApprovalRequestRepository,
   type ApprovalRequestSummary,
 } from '../domain/approval-request-repository.js';
+import type { NewAuditEntry } from '../domain/audit-entry.js';
+import { deliverApprovalCallback, moveRunToNeedsHuman } from './approval-run-effects.js';
 import { lockApproval } from './prisma-approval-lifecycle-repository.js';
+import { recordAuditEntry } from './record-audit-entry.js';
 
 interface ApprovalRow {
   readonly id: string;
@@ -48,15 +51,20 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
   }
 
   async revoke(
-    where: TenantScoped<{ readonly id: string; readonly decisionId: string }>,
+    where: TenantScoped<{
+      readonly id: string;
+      readonly decisionId: string;
+      readonly now: Date;
+      readonly auditEntry: TenantScoped<NewAuditEntry>;
+    }>,
   ): Promise<ApprovalRequestSummary> {
     return this.prisma.$transaction(async (tx) => {
       // Under the row lock `ResolveApproval` and `ExpireApproval` also take: without it this
       // read-then-write could overwrite an approval a human committed an instant earlier.
-      const { locked } = await lockApproval(tx, where.tenantId, where.id);
+      const { locked, runId } = await lockApproval(tx, where.tenantId, where.id);
       if (locked.state !== 'pending') throw new ApprovalNotPendingError(where.id);
 
-      const resolvedAt = new Date();
+      const resolvedAt = where.now;
       const updated = await tx.approvalRequest.update({
         where: { id: where.id },
         data: { state: 'revoked', resolvedAt },
@@ -73,6 +81,22 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
         },
         data: { invalidatedReason: 'epoch_bump' },
       });
+
+      // Everything the revocation means lands in this one transaction: a delivery that cannot
+      // land (no callback row, no run) rolls the revoke back and the next sweep retries it.
+      await deliverApprovalCallback(tx, {
+        tenantId: where.tenantId,
+        approvalId: where.id,
+        now: where.now,
+      });
+      await moveRunToNeedsHuman(tx, {
+        tenantId: where.tenantId,
+        runId,
+        now: where.now,
+        cause: 'policy',
+        actorRef: 'policy.revoke_approval',
+      });
+      await recordAuditEntry(tx, where.auditEntry);
 
       return toDomain(updated);
     });

@@ -4,9 +4,14 @@ import {
   ApprovalWithoutDeadlineError,
   assertDue,
   assertRedeemable,
+  assertRequestable,
   projectExpiry,
 } from './approval-lifecycle.js';
 import { ApprovalNotPendingError, type LockedApproval } from './approval-request-repository.js';
+import {
+  DecisionAlreadyConsumedError,
+  DecisionNotAllowedError,
+} from './policy-decision-repository.js';
 import { StaleAutonomyEpochError } from './check-autonomy-epoch.js';
 
 const T0 = new Date('2026-10-01T12:00:00Z');
@@ -62,6 +67,25 @@ describe('assertDue (T073)', () => {
   it('refuses a request that is no longer pending', () => {
     expect(() => assertDue(locked({ state: 'approved' }), plus(90_000))).toThrow(
       ApprovalNotPendingError,
+    );
+  });
+});
+
+describe('assertRequestable', () => {
+  it('passes a live decision', () => {
+    expect(() => assertRequestable({ id: 'd' })).not.toThrow();
+    expect(() =>
+      assertRequestable({ id: 'd', consumedAt: null, invalidatedReason: null }),
+    ).not.toThrow();
+  });
+  it('refuses a consumed decision', () => {
+    expect(() => assertRequestable({ id: 'd', consumedAt: T0 })).toThrow(
+      DecisionAlreadyConsumedError,
+    );
+  });
+  it('refuses an invalidated decision', () => {
+    expect(() => assertRequestable({ id: 'd', invalidatedReason: 'epoch_bump' })).toThrow(
+      DecisionNotAllowedError,
     );
   });
 });

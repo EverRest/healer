@@ -1,11 +1,20 @@
-import { currentCorrelationId, NotFoundError, type TenantScoped } from '@healer/shared';
+import {
+  createLogger,
+  currentCorrelationId,
+  NotFoundError,
+  type TenantScoped,
+} from '@healer/shared';
 import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
-import { projectExpiry } from '../domain/approval-lifecycle.js';
+import { ZodError } from 'zod';
+import { assertRequestable, projectExpiry } from '../domain/approval-lifecycle.js';
+import { checkAutonomyEpoch } from '../domain/check-autonomy-epoch.js';
 import {
+  ApprovalAlreadyPendingError,
   type ApprovalLifecycleRepository,
   type ApprovalListFilter,
   type ApprovalRequest,
+  type DueApproval,
   type ExpireApprovalRecord,
   type LockedApproval,
   type NewApprovalRequest,
@@ -20,6 +29,7 @@ import {
 } from '../domain/events.js';
 import {
   ApprovalRunTerminalError,
+  clearAwaiting,
   deliverApprovalCallback,
   lockRun,
   moveRunToNeedsHuman,
@@ -34,6 +44,8 @@ function assertCorrelated(): void {
     );
   }
 }
+
+const LOG = createLogger({ serviceName: 'policy' });
 
 const WITH_DECISION = { decision: { select: { rulesetVersion: true } } } as const;
 
@@ -122,17 +134,28 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
       // The run lock comes first and serialises concurrent requests for the same run, so the
       // idempotency read below cannot miss a request committed an instant earlier.
       const run = await lockRun(tx, tenantId, where.workflowRunId);
-      const existing = await tx.approvalRequest.findUnique({
-        where: { decisionId: where.decisionId },
+      const existing = await tx.approvalRequest.findFirst({
+        where: { decisionId: where.decisionId, tenantId },
         include: WITH_DECISION,
       });
-      if (existing !== null && existing.tenantId === tenantId) return toDomain(existing);
+      if (existing !== null) return toDomain(existing);
       if (run.terminalState !== null) throw new ApprovalRunTerminalError(where.workflowRunId);
+
+      // One outstanding approval per run: a second would share (and could consume or orphan) the
+      // run's single deadline and awaiting marker. A run waiting on something else is not ours to
+      // overwrite either; one whose marker is a *resolved* approval's may be re-parked.
+      const pendingOnRun = await tx.approvalRequest.count({
+        where: { tenantId, workflowRunId: where.workflowRunId, state: 'pending' },
+      });
+      if (pendingOnRun > 0 || (run.awaiting !== null && run.awaiting.kind !== 'approval')) {
+        throw new ApprovalAlreadyPendingError(where.workflowRunId);
+      }
 
       const decision = await tx.policyDecision.findFirst({
         where: { id: where.decisionId, tenantId },
       });
       if (decision === null) throw new NotFoundError('PolicyDecision');
+      assertRequestable(decision);
 
       const evidenceIds = [...new Set(where.evidenceIds)];
       const found = await tx.evidence.count({
@@ -145,7 +168,12 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
       if (found !== evidenceIds.length) throw new NotFoundError('evidence');
 
       const expiresAt = projectExpiry(where.requestedExpiresAt, run.deadlineAt ?? undefined);
-      const epoch = await currentEpochShared(tx, tenantId);
+      // The epoch the decision was made under must still be the current one, or a revocation has
+      // happened since and this request would carry a post-revocation epoch it never held.
+      checkAutonomyEpoch(
+        { id: where.id, autonomyEpoch: where.autonomyEpoch },
+        await currentEpochShared(tx, tenantId),
+      );
       const created = await tx.approvalRequest.create({
         data: {
           id: where.id,
@@ -154,7 +182,7 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
           workflowRunId: where.workflowRunId,
           summary: where.summary as unknown as Prisma.InputJsonValue,
           evidenceIds,
-          autonomyEpoch: epoch,
+          autonomyEpoch: where.autonomyEpoch,
           expiresAt,
           state: 'pending',
         },
@@ -178,9 +206,12 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
     assertCorrelated();
     const { tenantId } = where;
     return this.prisma.$transaction(async (tx) => {
-      const { locked, runId } = await lockApproval(tx, tenantId, where.id);
+      const { locked, runId, decisionId } = await lockApproval(tx, tenantId, where.id);
       const epoch = await currentEpochShared(tx, tenantId);
       where.assertRedeemable(locked, epoch, where.resolvedAt);
+      // Same lock order as `expire` (approval, then run). A terminal run has nothing left to resume.
+      const run = await lockRun(tx, tenantId, runId);
+      if (run.terminalState !== null) throw new ApprovalRunTerminalError(runId);
 
       const updated = await tx.approvalRequest.update({
         where: { id: where.id },
@@ -191,7 +222,23 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
         },
         include: WITH_DECISION,
       });
-      await deliverApprovalCallback(tx, { tenantId, runId, now: where.resolvedAt });
+      await deliverApprovalCallback(tx, { tenantId, approvalId: where.id, now: where.resolvedAt });
+      await clearAwaiting(tx, { runId });
+      if (where.resolution === 'rejected') {
+        // A rejection is final for this proposal: its decision never becomes consumable, and the
+        // run stops for a human (nothing proceeds by default, and there is no second approver).
+        await tx.policyDecision.updateMany({
+          where: { id: decisionId, tenantId, consumedAt: null, invalidatedReason: null },
+          data: { invalidatedReason: 'approval_rejected' },
+        });
+        await moveRunToNeedsHuman(tx, {
+          tenantId,
+          runId,
+          now: where.resolvedAt,
+          cause: 'human',
+          actorRef: where.resolvedBy,
+        });
+      }
       await recordAuditEntry(tx, where.auditEntry);
       await enqueue(
         new PrismaOutboxTransaction(tx),
@@ -244,8 +291,14 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
           evaluatedAt: lapse.decision.evaluatedAt,
         },
       });
-      await moveRunToNeedsHuman(tx, { tenantId, runId, now: where.now });
-      await deliverApprovalCallback(tx, { tenantId, runId, now: where.now });
+      await moveRunToNeedsHuman(tx, {
+        tenantId,
+        runId,
+        now: where.now,
+        cause: 'timeout',
+        actorRef: 'policy.expire_approval',
+      });
+      await deliverApprovalCallback(tx, { tenantId, approvalId: where.id, now: where.now });
       await recordAuditEntry(tx, where.auditEntry);
       const outbox = new PrismaOutboxTransaction(tx);
       await enqueue(
@@ -293,15 +346,33 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
       include: WITH_DECISION,
       orderBy: { expiresAt: 'desc' },
     });
-    return rows.map(toDomain);
+    // Per row, not all-or-nothing: one stored summary that no longer fits the closed shape must
+    // not 500 the tenant's whole list. The row is skipped *loudly* (structured error log with its
+    // id and the failing paths, never the content), and `findById` still raises for that row.
+    const parsed: ApprovalRequest[] = [];
+    for (const row of rows) {
+      try {
+        parsed.push(toDomain(row));
+      } catch (error) {
+        LOG.error(
+          {
+            tenantId: where.tenantId,
+            approvalId: row.id,
+            paths: error instanceof ZodError ? error.issues.map((i) => i.path.join('.')) : [],
+          },
+          'approval_request.summary failed validation; row omitted from list',
+        );
+      }
+    }
+    return parsed;
   }
 
-  async findDue(where: TenantScoped<{ readonly now: Date }>): Promise<readonly ApprovalRequest[]> {
-    const rows = await this.prisma.approvalRequest.findMany({
+  async findDue(where: TenantScoped<{ readonly now: Date }>): Promise<readonly DueApproval[]> {
+    // Ids and expiry only: the tick must not parse (and so cannot fail on) a stored summary.
+    return this.prisma.approvalRequest.findMany({
       where: { tenantId: where.tenantId, state: 'pending', expiresAt: { lte: where.now } },
-      include: WITH_DECISION,
+      select: { id: true, expiresAt: true },
       orderBy: { expiresAt: 'asc' },
     });
-    return rows.map(toDomain);
   }
 }

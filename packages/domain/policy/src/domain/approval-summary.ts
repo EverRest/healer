@@ -70,7 +70,10 @@ export class ApprovalSummaryNotStructuralError extends HealerError {
 
 export function buildApprovalSummary(decision: StoredDecision): ApprovalSummary {
   if (decision.outcome !== 'require_approval') {
-    throw new Error(`policy decision ${decision.id} did not resolve to require_approval`);
+    throw new HealerError(
+      'PRECONDITION_FAILED',
+      `policy decision ${decision.id} did not resolve to require_approval`,
+    );
   }
   const { action, target, impact, reversibility } = decision.decisionInput;
   const parsed = approvalSummarySchema.safeParse({

@@ -120,7 +120,7 @@ write that makes revocation immediate.
 | budget_state | jsonb | consumed, limit, declared max of the next step, degradation step |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
-| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `digest_mismatch` |
+| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `digest_mismatch` |
 
 `UPDATE` is rejected except for `consumed_at` and `invalidated_reason` transitioning from null.
 
@@ -173,7 +173,30 @@ whose click authorises a mutation.
 >   `invalidated_reason = 'approval_expired'`. `check:decision-replay` skips exactly that shape
 >   (no input replays to a rule-less deny).
 > - *`check:stale-approvals`* reports a `pending` request past `expires_at` (plus a grace window), one
->   whose run has no deadline at or after `expires_at`, and one whose run is already terminal.
+>   whose run has no deadline at or after `expires_at`, one whose run is terminal or does not exist,
+>   one whose own `approval` callback is absent or already consumed, and — the other direction — a
+>   live run `awaiting` an approval that no pending request backs.
+>
+> Review follow-up (one migration, `20261003100000_approval_callback_binding`):
+>
+> - *`workflow_callback.approval_id`* (012's table, nullable, unique, no FK so 012 does not depend on
+>   002). An `approval` callback is bound to exactly one request and every delivery — resolve, expire,
+>   revoke — finds it by that key, never by run. A delivery that matches no row is an error and rolls
+>   the surrounding transaction back.
+> - *One outstanding approval per run.* `RequestApproval` refuses (`ApprovalAlreadyPendingError`,
+>   409/CONFLICT) when the locked run already has a `pending` request or is `awaiting` something other
+>   than an approval; a run whose marker is a *resolved* approval's may be re-parked. Resolving
+>   clears `awaiting`.
+> - *Decision-time epoch.* `RequestApproval` takes the epoch `evaluateAndBind` returned, records it,
+>   and refuses (`STALE_AUTONOMY_EPOCH`) if it is no longer current; it also refuses a consumed or
+>   invalidated decision, and an empty `evidence_ids`.
+> - *`rejected`* invalidates the original decision (`invalidated_reason = 'approval_rejected'`),
+>   delivers the callback and moves the run to `needs_human` (cause `human`). `ResolveApproval` locks
+>   the run and refuses (`ApprovalRunTerminalError`) when it is already terminal.
+> - *The revocation sweep* revokes, invalidates the decision, delivers the callback, moves the run to
+>   `needs_human` (cause `policy`) and writes a `policy.revoke_approval` audit entry in one transaction.
+> - *`check:decision-replay`* exempts a lapse only when an `expired` request on the same run, an
+>   original decision with `invalidated_reason = 'approval_expired'` and the same digest all exist.
 
 ## policy.budget_limit
 

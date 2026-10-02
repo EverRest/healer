@@ -10,13 +10,16 @@
 // "Invariant checks"; scheduling it belongs to whatever runs the other four (no scheduler exists
 // in this repository yet — QUESTIONS.md, "002 Phase 7").
 //
-// Three violation shapes, each a way "expiry always has a tick that will fire it" (data-model.md
-// invariant) can be false:
+// Violation shapes, each a way "expiry always has a tick that will fire it" (data-model.md
+// invariant) — or the run it parks — can be false:
 //   1. overdue — pending, `expires_at` passed more than `graceMs` ago: the tick did not fire it.
 //   2. unfireable — the run has no `deadline_at`, or one earlier than `expires_at`'s projection
 //      allows (`expires_at` later than `deadline_at`): the projection (T073) was bypassed.
 //   3. orphaned — the run is already terminal while the request is still pending: nothing will
 //      ever resume it, and nothing expires it.
+//   4. missing run — the request names a run that does not exist under its tenant.
+//   5. no callback — the pending request's own `approval` callback is absent or already consumed.
+//   6. parked without a request — a live run is `awaiting` an approval no pending request backs.
 import { PrismaClient } from '../../prisma/generated/client/index.js';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
@@ -37,7 +40,13 @@ export async function findStaleApprovals(prisma, options = {}) {
     SELECT ar.id, ar.tenant_id, ar.expires_at, wr.deadline_at, wr.terminal_state,
            (ar.expires_at <= ${cutoff}) AS overdue,
            (wr.terminal_state IS NULL AND (wr.deadline_at IS NULL OR wr.deadline_at < ar.expires_at)) AS unfireable,
-           (wr.terminal_state IS NOT NULL) AS orphaned
+           (wr.terminal_state IS NOT NULL) AS orphaned,
+           (wr.id IS NULL) AS missing_run,
+           NOT EXISTS (
+             SELECT 1 FROM "workflow"."workflow_callback" c
+             WHERE c.approval_id = ar.id AND c.tenant_id = ar.tenant_id
+               AND c.kind = 'approval' AND c.consumed_at IS NULL
+           ) AS no_callback
     FROM "policy"."approval_request" ar
     LEFT JOIN "workflow"."workflow_run" wr
       ON wr.id = ar.workflow_run_id AND wr.tenant_id = ar.tenant_id
@@ -46,10 +55,26 @@ export async function findStaleApprovals(prisma, options = {}) {
            OR wr.id IS NULL
            OR wr.terminal_state IS NOT NULL
            OR wr.deadline_at IS NULL
-           OR wr.deadline_at < ar.expires_at)
+           OR wr.deadline_at < ar.expires_at
+           OR NOT EXISTS (
+             SELECT 1 FROM "workflow"."workflow_callback" c
+             WHERE c.approval_id = ar.id AND c.tenant_id = ar.tenant_id
+               AND c.kind = 'approval' AND c.consumed_at IS NULL))
     ORDER BY ar.expires_at
   `;
-  return rows.map((row) => {
+  // The other direction: a run parked on an approval that no pending request backs. Nothing will
+  // ever resolve or expire it, so it waits forever.
+  const parkedWithoutRequest = await prisma.$queryRaw`
+    SELECT wr.id, wr.tenant_id
+    FROM "workflow"."workflow_run" wr
+    WHERE wr.terminal_state IS NULL
+      AND wr.awaiting ->> 'kind' = 'approval'
+      AND NOT EXISTS (
+        SELECT 1 FROM "policy"."approval_request" ar
+        WHERE ar.workflow_run_id = wr.id AND ar.tenant_id = wr.tenant_id AND ar.state = 'pending')
+    ORDER BY wr.id
+  `;
+  const messages = rows.map((row) => {
     const base = `approval_request ${row.id} (tenant ${row.tenant_id}, expires ${row.expires_at.toISOString()})`;
     const reasons = [];
     if (row.overdue) reasons.push('pending past expires_at: its deadline tick did not fire');
@@ -57,9 +82,18 @@ export async function findStaleApprovals(prisma, options = {}) {
     if (row.unfireable) {
       reasons.push('its run has no deadline at or after expires_at: no tick will ever fire it');
     }
-    if (reasons.length === 0) reasons.push('its workflow run does not resolve under this tenant');
+    if (row.missing_run) reasons.push('its workflow run does not exist under this tenant');
+    if (row.no_callback && !row.missing_run) {
+      reasons.push('its run has no unconsumed approval callback: nothing will wake it');
+    }
     return `${base}: ${reasons.join('; ')}`;
   });
+  for (const run of parkedWithoutRequest) {
+    messages.push(
+      `workflow_run ${run.id} (tenant ${run.tenant_id}): awaiting an approval that no pending approval_request backs`,
+    );
+  }
+  return messages;
 }
 
 /* v8 ignore start -- CLI wiring; the query it drives is proven by approval-lifecycle.e2e.test.ts */

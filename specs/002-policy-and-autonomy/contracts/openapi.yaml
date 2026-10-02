@@ -294,7 +294,7 @@ components:
             invalidatedReason:
               type: string
               nullable: true
-              enum: [epoch_bump, approval_expired, digest_mismatch, null]
+              enum: [epoch_bump, approval_expired, approval_rejected, digest_mismatch, null]
     AutonomyGrant:
       type: object
       required: [id, actionKey, level, grantedBy, grantedAt]

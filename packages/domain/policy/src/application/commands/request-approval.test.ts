@@ -73,13 +73,19 @@ describe('requestApproval (T070)', () => {
     await requestApproval(
       repos(approvals, decision()),
       CONTEXT,
-      { decisionId: 'd1', evidenceIds: ['e1'], expiresAt: new Date(NOW.getTime() + 1000) },
+      {
+        decisionId: 'd1',
+        evidenceIds: ['e1'],
+        autonomyEpoch: 4n,
+        expiresAt: new Date(NOW.getTime() + 1000),
+      },
       () => NOW,
     );
     const call = approvals.requested[0]!;
     expect(call.workflowRunId).toBe('run-1');
     expect(call.summary.proposedAction).toBe('change.open_pull_request');
     expect(call.evidenceIds).toEqual(['e1']);
+    expect(call.autonomyEpoch).toBe(4n);
     expect(call.auditEntry).toMatchObject({
       actorType: 'system',
       action: 'policy.request_approval',
@@ -91,7 +97,8 @@ describe('requestApproval (T070)', () => {
     const approvals = new FakeApprovals();
     await requestApproval(repos(approvals, decision()), CONTEXT, {
       decisionId: 'd1',
-      evidenceIds: [],
+      evidenceIds: ['e1'],
+      autonomyEpoch: 0n,
     });
     expect(approvals.requested[0]!.now.getTime()).toBeGreaterThan(NOW.getTime());
   });
@@ -103,7 +110,7 @@ describe('requestApproval (T070)', () => {
       requestApproval(
         repos(approvals, unbound as StoredDecision),
         CONTEXT,
-        { decisionId: 'd1', evidenceIds: [] },
+        { decisionId: 'd1', evidenceIds: ['e1'], autonomyEpoch: 0n },
         () => NOW,
       ),
     ).rejects.toThrow(/not bound to a workflow run/);
@@ -116,7 +123,7 @@ describe('requestApproval (T070)', () => {
       requestApproval(
         repos(approvals, decision({ outcome: 'allow' })),
         CONTEXT,
-        { decisionId: 'd1', evidenceIds: [] },
+        { decisionId: 'd1', evidenceIds: ['e1'], autonomyEpoch: 0n },
         () => NOW,
       ),
     ).rejects.toThrow(/require_approval/);
@@ -124,10 +131,40 @@ describe('requestApproval (T070)', () => {
       requestApproval(
         repos(approvals, null),
         CONTEXT,
-        { decisionId: 'd1', evidenceIds: [] },
+        { decisionId: 'd1', evidenceIds: ['e1'], autonomyEpoch: 0n },
         () => NOW,
       ),
     ).rejects.toThrow(/PolicyDecision/);
+    expect(approvals.requested).toHaveLength(0);
+  });
+
+  it('refuses a request with no evidence to show', async () => {
+    const approvals = new FakeApprovals();
+    await expect(
+      requestApproval(
+        repos(approvals, decision()),
+        CONTEXT,
+        { decisionId: 'd1', evidenceIds: [], autonomyEpoch: 0n },
+        () => NOW,
+      ),
+    ).rejects.toThrow(/no evidence/);
+    expect(approvals.requested).toHaveLength(0);
+  });
+
+  it('refuses a decision that was consumed or invalidated', async () => {
+    const approvals = new FakeApprovals();
+    const input = { decisionId: 'd1', evidenceIds: ['e1'], autonomyEpoch: 0n };
+    await expect(
+      requestApproval(
+        repos(approvals, decision({ invalidatedReason: 'epoch_bump' })),
+        CONTEXT,
+        input,
+        () => NOW,
+      ),
+    ).rejects.toThrow(/invalidated/);
+    await expect(
+      requestApproval(repos(approvals, decision({ consumedAt: NOW })), CONTEXT, input, () => NOW),
+    ).rejects.toThrow(/already been consumed/);
     expect(approvals.requested).toHaveLength(0);
   });
 });

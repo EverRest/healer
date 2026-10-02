@@ -48,6 +48,10 @@ export interface NewApprovalRequest {
   readonly evidenceIds: readonly string[];
   /** The expiry asked for; the effective one is projected onto the run's deadline. */
   readonly requestedExpiresAt?: Date;
+  /** The tenant's epoch **at decision time** (`evaluateAndBind`'s result) — recorded as the
+   *  request's epoch, and refused if it is no longer the current one: a request must not launder
+   *  a post-revocation epoch onto a decision made before it. */
+  readonly autonomyEpoch: bigint;
   readonly now: Date;
   readonly auditEntry: TenantScoped<NewAuditEntry>;
 }
@@ -73,6 +77,25 @@ export interface ExpireApprovalRecord {
 export interface ApprovalListFilter {
   readonly state?: ApprovalRequestSummary['state'];
   readonly issueId?: string;
+}
+
+/** A second approval for a run that is already parked on one (or awaiting something else): a run
+ *  has exactly one outstanding approval, so a callback and a deadline each mean one thing. */
+export class ApprovalAlreadyPendingError extends HealerError {
+  constructor(readonly workflowRunId: string) {
+    super(
+      'CONFLICT',
+      `workflow run ${workflowRunId} is already awaiting an approval or another callback`,
+    );
+    this.name = 'ApprovalAlreadyPendingError';
+  }
+}
+
+/** What the deadline tick needs: which requests are due. No summary, so one malformed stored
+ *  summary can never stop the tick expiring the rest. */
+export interface DueApproval {
+  readonly id: string;
+  readonly expiresAt: Date;
 }
 
 /** `revoke()` on a request that is no longer `pending` (resolved or expired concurrently between
@@ -101,14 +124,21 @@ export interface ApprovalRequestRepository {
   ): Promise<readonly ApprovalRequestSummary[]>;
 
   /** Moves the request to `revoked` and, in the same transaction, invalidates the
-   *  `policy_decision` it was issued for (`invalidated_reason = 'epoch_bump'`) — mirrors the
+   *  `policy_decision` it was issued for (`invalidated_reason = 'epoch_bump'`), delivers the
+   *  approval's callback, moves a live run to `needs_human` and audits — so a failed delivery
+   *  rolls the revocation back and the sweep retries it. Mirrors the
    *  state diagram's `pending --grant revoked--> revoked --> run to needs_human, DENY recorded`
    *  (data-model.md). Throws `ApprovalNotPendingError` if the request already resolved or
    *  expired since it was read; `NotFoundError` for an id that does not resolve under this
    *  tenant. Never touches a decision whose `invalidated_reason`/`consumed_at` is already set —
    *  the same idempotent-on-already-terminal posture `consume()` takes. */
   revoke(
-    where: TenantScoped<{ readonly id: string; readonly decisionId: string }>,
+    where: TenantScoped<{
+      readonly id: string;
+      readonly decisionId: string;
+      readonly now: Date;
+      readonly auditEntry: TenantScoped<NewAuditEntry>;
+    }>,
   ): Promise<ApprovalRequestSummary>;
 }
 
@@ -136,6 +166,6 @@ export interface ApprovalLifecycleRepository {
 
   findById(where: TenantScoped<{ readonly id: string }>): Promise<ApprovalRequest | null>;
   list(where: TenantScoped<ApprovalListFilter>): Promise<readonly ApprovalRequest[]>;
-  /** `pending` requests whose `expires_at` has passed — what the deadline tick expires. */
-  findDue(where: TenantScoped<{ readonly now: Date }>): Promise<readonly ApprovalRequest[]>;
+  /** `pending` requests whose `expires_at` has passed — what the deadline tick expires. Ids only. */
+  findDue(where: TenantScoped<{ readonly now: Date }>): Promise<readonly DueApproval[]>;
 }

@@ -5,11 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import { PrismaIssueRepository } from '@healer/domain-issues';
 import {
+  ApprovalAlreadyPendingError,
   ApprovalNotPendingError,
+  ApprovalRunTerminalError,
   ApprovalSummaryNotStructuralError,
   ApprovalWithoutDeadlineError,
+  DecisionAlreadyConsumedError,
   DecisionNotAllowedError,
-  PrismaApprovalCallbackPort,
   PrismaApprovalLifecycleRepository,
   PrismaApprovalRequestRepository,
   PrismaAutonomyEpochRepository,
@@ -127,6 +129,7 @@ describe('approval lifecycle (T070-T074)', () => {
     readonly grantId: string;
     readonly decisionId: string;
     readonly evidenceId: string;
+    readonly epoch: bigint;
   }
 
   /** A tenant with a published ruleset, a level-1 grant, an issue carrying injection-shaped
@@ -217,6 +220,7 @@ describe('approval lifecycle (T070-T074)', () => {
       grantId: grant.id,
       decisionId: bound.decision.id,
       evidenceId,
+      epoch: bound.autonomyEpoch,
     };
   }
 
@@ -225,6 +229,7 @@ describe('approval lifecycle (T070-T074)', () => {
       requestApproval(repos(), f.context, {
         decisionId: f.decisionId,
         evidenceIds: extra.evidenceIds ?? [f.evidenceId],
+        autonomyEpoch: f.epoch,
         ...(extra.expiresAt !== undefined ? { expiresAt: extra.expiresAt } : {}),
       }),
     );
@@ -601,11 +606,7 @@ describe('approval lifecycle (T070-T074)', () => {
           revokedBy: 'pavlo',
         }),
       );
-      await sweepRevokedApprovals(
-        { approvals: sweepRepo, autonomyEpochs },
-        new PrismaApprovalCallbackPort(prisma),
-        f.context,
-      );
+      await sweepRevokedApprovals({ approvals: sweepRepo, autonomyEpochs }, f.context);
       expect(
         (await prisma.workflowCallback.findFirstOrThrow({ where: { runId: f.runId } })).consumedAt,
       ).not.toBeNull();
@@ -772,6 +773,484 @@ describe('approval lifecycle (T070-T074)', () => {
       });
       const violations = await findStaleApprovals(prisma, { now: minus(RUN_DEADLINE, 7_200_000) });
       expect(mentioning(violations, approval.id)[0]).toContain('already terminal (failed)');
+    });
+  });
+
+  describe('review fixes: one approval per run, callback bound to its approval', () => {
+    /** Another persisted `require_approval` decision bound to the same run. */
+    async function anotherDecisionOnRun(f: Fixture): Promise<string> {
+      const bound = await inCorrelation(() =>
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          f.context,
+          {
+            decisionInput: buildDecisionInput(),
+            binding: {
+              issueId: f.issueId,
+              workflowRunId: f.runId,
+              workflowState: 'awaiting_approval',
+            },
+          },
+        ),
+      );
+      return bound.decision.id;
+    }
+    const requestFor = (f: Fixture, decisionId: string, expiresAt?: Date) =>
+      inCorrelation(() =>
+        requestApproval(repos(), f.context, {
+          decisionId,
+          evidenceIds: [f.evidenceId],
+          autonomyEpoch: f.epoch,
+          ...(expiresAt !== undefined ? { expiresAt } : {}),
+        }),
+      );
+
+    it('a second approval for a run already parked on one is refused, and nothing changes', async () => {
+      const f = await fixture();
+      const first = await request(f);
+      const other = await anotherDecisionOnRun(f);
+      await expect(requestFor(f, other)).rejects.toBeInstanceOf(ApprovalAlreadyPendingError);
+      expect(await prisma.approvalRequest.count({ where: { workflowRunId: f.runId } })).toBe(1);
+      expect(await prisma.workflowCallback.count({ where: { runId: f.runId } })).toBe(1);
+      const run = await prisma.workflowRun.findUniqueOrThrow({ where: { id: f.runId } });
+      expect(run.awaiting).toMatchObject({ approvalId: first.id });
+    });
+
+    it('a run awaiting something other than an approval is not overwritten', async () => {
+      const f = await fixture();
+      await prisma.workflowRun.update({
+        where: { id: f.runId },
+        data: { awaiting: { kind: 'ci_result' } },
+      });
+      await expect(request(f)).rejects.toBeInstanceOf(ApprovalAlreadyPendingError);
+    });
+
+    it('the callback is bound to its approval: resolving A never touches B, expiring B never orphans A', async () => {
+      const f = await fixture();
+      const a = await request(f, { expiresAt: minus(RUN_DEADLINE, 7_200_000) });
+      const callbackA = await prisma.workflowCallback.findUniqueOrThrow({
+        where: { approvalId: a.id },
+      });
+      expect(callbackA.consumedAt).toBeNull();
+
+      await inCorrelation(() =>
+        resolveApproval(
+          repos(),
+          f.context,
+          { approvalId: a.id, resolution: 'approved', resolvedBy: 'alice' },
+          () => minus(RUN_DEADLINE, 7_300_000),
+        ),
+      );
+      // A resolved: its run is free of it, so B may park.
+      const b = await requestFor(f, await anotherDecisionOnRun(f), minus(RUN_DEADLINE, 3_600_000));
+      const consumedA = (
+        await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: a.id } })
+      ).consumedAt;
+      expect(consumedA).not.toBeNull();
+      expect(
+        (await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: b.id } }))
+          .consumedAt,
+      ).toBeNull();
+
+      // Expiring B delivers B's callback only; A's stays exactly as it was.
+      await inCorrelation(() =>
+        expireApproval(repos(), f.context, { approvalId: b.id }, () => plus(b.expiresAt, 1)),
+      );
+      expect(
+        (await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: b.id } }))
+          .consumedAt,
+      ).not.toBeNull();
+      expect(
+        (await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: a.id } }))
+          .consumedAt,
+      ).toEqual(consumedA);
+      expect(
+        (await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: a.id } }))
+          .receivedCount,
+      ).toBe(1);
+    });
+
+    it("delivery is by approval, not by tenant or run: resolving A leaves another run's B callback untouched", async () => {
+      const f = await fixture();
+      const a = await request(f);
+      // A second run and approval in the SAME tenant.
+      const run2 = randomUUID();
+      await prisma.workflowRun.create({
+        data: {
+          id: run2,
+          tenantId: f.context.tenantId,
+          issueId: f.issueId,
+          definitionKey: 'remediation',
+          definitionVersion: 1,
+          state: 'awaiting_approval',
+          correlationId: randomUUID(),
+          deadlineAt: RUN_DEADLINE,
+        },
+      });
+      const bound = await inCorrelation(() =>
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          f.context,
+          {
+            decisionInput: buildDecisionInput(),
+            binding: {
+              issueId: f.issueId,
+              workflowRunId: run2,
+              workflowState: 'awaiting_approval',
+            },
+          },
+        ),
+      );
+      const b = await inCorrelation(() =>
+        requestApproval(repos(), f.context, {
+          decisionId: bound.decision.id,
+          evidenceIds: [f.evidenceId],
+          autonomyEpoch: bound.autonomyEpoch,
+        }),
+      );
+      await inCorrelation(() =>
+        resolveApproval(
+          repos(),
+          f.context,
+          { approvalId: a.id, resolution: 'approved', resolvedBy: 'alice' },
+          () => minus(RUN_DEADLINE, 1000),
+        ),
+      );
+      const cbA = await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: a.id } });
+      const cbB = await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: b.id } });
+      expect(cbA.consumedAt).not.toBeNull();
+      expect(cbB).toMatchObject({ consumedAt: null, receivedCount: 0 });
+    });
+
+    it('a delivery that matches no callback row is a failure that rolls the resolution back (H1)', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await prisma.workflowCallback.delete({ where: { approvalId: approval.id } });
+      await expect(
+        inCorrelation(() =>
+          resolveApproval(
+            repos(),
+            f.context,
+            { approvalId: approval.id, resolution: 'approved', resolvedBy: 'alice' },
+            () => minus(RUN_DEADLINE, 1000),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(
+        await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } }),
+      ).toMatchObject({ state: 'pending', resolvedBy: null });
+    });
+  });
+
+  describe('review fixes: the epoch and the decision are bound at request time (H4)', () => {
+    it('evaluate, revoke, then RequestApproval -> STALE_AUTONOMY_EPOCH and no request exists', async () => {
+      const f = await fixture();
+      await inCorrelation(() =>
+        revokeAutonomy({ grants: autonomyGrants }, f.context, {
+          grantId: f.grantId,
+          revokedBy: 'pavlo',
+        }),
+      );
+      await expect(request(f)).rejects.toBeInstanceOf(StaleAutonomyEpochError);
+      expect(await prisma.approvalRequest.count({ where: { decisionId: f.decisionId } })).toBe(0);
+      expect(await prisma.workflowCallback.count({ where: { runId: f.runId } })).toBe(0);
+    });
+
+    it('records the decision-time epoch it was given', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      expect(approval.autonomyEpoch).toBe(f.epoch);
+    });
+
+    it('an invalidated decision is refused; so is a consumed one', async () => {
+      const f = await fixture();
+      await prisma.policyDecision.update({
+        where: { id: f.decisionId },
+        data: { invalidatedReason: 'epoch_bump' },
+      });
+      await expect(request(f)).rejects.toBeInstanceOf(DecisionNotAllowedError);
+
+      const g = await fixture();
+      await prisma.policyDecision.update({
+        where: { id: g.decisionId },
+        data: { consumedAt: new Date() },
+      });
+      await expect(request(g)).rejects.toBeInstanceOf(DecisionAlreadyConsumedError);
+    });
+  });
+
+  describe('review fixes: resolve checks the run, and rejected means something (H5)', () => {
+    it('refuses to resolve when the run is already terminal, and changes nothing', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await prisma.workflowRun.update({
+        where: { id: f.runId },
+        data: { state: 'failed', terminalState: 'failed' },
+      });
+      await expect(
+        inCorrelation(() =>
+          resolveApproval(
+            repos(),
+            f.context,
+            { approvalId: approval.id, resolution: 'approved', resolvedBy: 'alice' },
+            () => minus(RUN_DEADLINE, 1000),
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ApprovalRunTerminalError);
+      expect(
+        (await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } })).state,
+      ).toBe('pending');
+    });
+
+    it('approve clears the awaiting marker (the run is no longer waiting) and leaves the decision alone', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await inCorrelation(() =>
+        resolveApproval(
+          repos(),
+          f.context,
+          { approvalId: approval.id, resolution: 'approved', resolvedBy: 'alice' },
+          () => minus(RUN_DEADLINE, 1000),
+        ),
+      );
+      const run = await prisma.workflowRun.findUniqueOrThrow({ where: { id: f.runId } });
+      expect(run.awaiting).toBeNull();
+      expect(run.terminalState).toBeNull();
+      expect(
+        (await prisma.policyDecision.findUniqueOrThrow({ where: { id: f.decisionId } }))
+          .invalidatedReason,
+      ).toBeNull();
+    });
+
+    it('reject invalidates the decision, stops the run at needs_human and delivers the callback', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await inCorrelation(() =>
+        resolveApproval(
+          repos(),
+          f.context,
+          { approvalId: approval.id, resolution: 'rejected', resolvedBy: 'bob' },
+          () => minus(RUN_DEADLINE, 1000),
+        ),
+      );
+      expect(
+        (await prisma.policyDecision.findUniqueOrThrow({ where: { id: f.decisionId } }))
+          .invalidatedReason,
+      ).toBe('approval_rejected');
+      const run = await prisma.workflowRun.findUniqueOrThrow({ where: { id: f.runId } });
+      expect(run).toMatchObject({
+        state: 'needs_human',
+        terminalState: 'needs_human',
+        awaiting: null,
+        deadlineAt: null,
+      });
+      expect(
+        await prisma.workflowTransition.findFirstOrThrow({ where: { runId: f.runId } }),
+      ).toMatchObject({ toState: 'needs_human', cause: 'human', actorRef: 'bob' });
+      expect(
+        (await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: approval.id } }))
+          .consumedAt,
+      ).not.toBeNull();
+    });
+  });
+
+  describe('review fixes: the revocation sweep is atomic with its delivery (H2, H3)', () => {
+    it('revoke + callback + needs_human + audit land together', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await inCorrelation(() =>
+        revokeAutonomy({ grants: autonomyGrants }, f.context, {
+          grantId: f.grantId,
+          revokedBy: 'pavlo',
+        }),
+      );
+      await sweepRevokedApprovals({ approvals: sweepRepo, autonomyEpochs }, f.context);
+      expect(
+        (await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } })).state,
+      ).toBe('revoked');
+      const run = await prisma.workflowRun.findUniqueOrThrow({ where: { id: f.runId } });
+      expect(run).toMatchObject({
+        state: 'needs_human',
+        terminalState: 'needs_human',
+        awaiting: null,
+      });
+      expect(
+        (await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId: approval.id } }))
+          .consumedAt,
+      ).not.toBeNull();
+      expect(
+        await prisma.auditEntry.count({
+          where: { tenantId: f.context.tenantId, action: 'policy.revoke_approval' },
+        }),
+      ).toBe(1);
+    });
+
+    it('a delivery that cannot land rolls the revocation back, and the next sweep retries it', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await inCorrelation(() =>
+        revokeAutonomy({ grants: autonomyGrants }, f.context, {
+          grantId: f.grantId,
+          revokedBy: 'pavlo',
+        }),
+      );
+      const callback = await prisma.workflowCallback.findUniqueOrThrow({
+        where: { approvalId: approval.id },
+      });
+      await prisma.workflowCallback.update({
+        where: { id: callback.id },
+        data: { approvalId: null },
+      });
+      await expect(
+        sweepRevokedApprovals({ approvals: sweepRepo, autonomyEpochs }, f.context),
+      ).rejects.toThrow(AggregateError);
+      expect(
+        (await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approval.id } })).state,
+      ).toBe('pending');
+      expect(
+        (await prisma.policyDecision.findUniqueOrThrow({ where: { id: f.decisionId } }))
+          .invalidatedReason,
+      ).toBeNull();
+
+      await prisma.workflowCallback.update({
+        where: { id: callback.id },
+        data: { approvalId: approval.id },
+      });
+      const retry = await sweepRevokedApprovals(
+        { approvals: sweepRepo, autonomyEpochs },
+        f.context,
+      );
+      expect(retry.revoked.map((r) => r.id)).toEqual([approval.id]);
+    });
+
+    it('H2: the expiry tick reports a missing callback as a failure, and still expires the others', async () => {
+      const f = await fixture();
+      const g = await fixture();
+      const expiresAt = minus(RUN_DEADLINE, 3_600_000);
+      const broken = await request(f, { expiresAt });
+      const healthy = await request(g, { expiresAt });
+      await prisma.workflowCallback.delete({ where: { approvalId: broken.id } });
+      const tick = plus(expiresAt, 1);
+      await expect(
+        inCorrelation(() => expireDueApprovals(repos(), f.context, () => tick)),
+      ).rejects.toThrow(AggregateError);
+      expect(
+        (await prisma.approvalRequest.findUniqueOrThrow({ where: { id: broken.id } })).state,
+      ).toBe('pending');
+      const ok = await inCorrelation(() => expireDueApprovals(repos(), g.context, () => tick));
+      expect(ok.expired.map((a) => a.id)).toEqual([healthy.id]);
+    });
+  });
+
+  describe('review fixes: one malformed summary never takes the tenant down (M3)', () => {
+    it('list skips (and logs) the bad row; findDue still returns it without parsing', async () => {
+      const f = await fixture();
+      const expiresAt = minus(RUN_DEADLINE, 3_600_000);
+      const bad = await request(f, { expiresAt });
+      await prisma.approvalRequest.update({
+        where: { id: bad.id },
+        data: { summary: { nope: 1 } },
+      });
+
+      const listed = await lifecycle.list(scope(f.context, {}));
+      expect(listed.map((a) => a.id)).not.toContain(bad.id);
+      const due = await lifecycle.findDue(scope(f.context, { now: plus(expiresAt, 1) }));
+      expect(due.map((d) => d.id)).toEqual([bad.id]);
+      expect(Object.keys(due[0]!).sort()).toEqual(['expiresAt', 'id']);
+      // Reading the one bad row directly is an error for that row alone.
+      await expect(lifecycle.findById(scope(f.context, { id: bad.id }))).rejects.toThrow();
+    });
+  });
+
+  describe('review fixes: check:stale-approvals, the other direction (M1)', () => {
+    const mentioning = (violations: string[], id: string) =>
+      violations.filter((v) => v.includes(id));
+
+    it('reports a run awaiting an approval that has no pending request', async () => {
+      const f = await fixture();
+      await prisma.workflowRun.update({
+        where: { id: f.runId },
+        data: { awaiting: { kind: 'approval', approvalId: randomUUID() } },
+      });
+      const violations = await findStaleApprovals(prisma, { now: minus(RUN_DEADLINE, 7_200_000) });
+      expect(mentioning(violations, f.runId)[0]).toContain('awaiting an approval');
+    });
+
+    it('does not report a run awaiting a pending approval, or one awaiting something else', async () => {
+      const f = await fixture();
+      await request(f);
+      const g = await fixture();
+      await prisma.workflowRun.update({
+        where: { id: g.runId },
+        data: { awaiting: { kind: 'ci_result' } },
+      });
+      const violations = await findStaleApprovals(prisma, { now: minus(RUN_DEADLINE, 7_200_000) });
+      expect(mentioning(violations, f.runId)).toEqual([]);
+      expect(mentioning(violations, g.runId)).toEqual([]);
+    });
+
+    it('reports a pending approval whose run has no unconsumed approval callback', async () => {
+      const f = await fixture();
+      const approval = await request(f);
+      await prisma.workflowCallback.update({
+        where: { approvalId: approval.id },
+        data: { consumedAt: new Date() },
+      });
+      const violations = await findStaleApprovals(prisma, { now: minus(RUN_DEADLINE, 7_200_000) });
+      expect(mentioning(violations, approval.id)[0]).toContain('no unconsumed approval callback');
+    });
+
+    it('names a missing run as a missing run', async () => {
+      const f = await fixture();
+      const orphan = randomUUID();
+      await prisma.approvalRequest.create({
+        data: {
+          id: orphan,
+          tenantId: f.context.tenantId,
+          decisionId: f.decisionId,
+          workflowRunId: randomUUID(),
+          summary: {},
+          evidenceIds: [],
+          autonomyEpoch: 0n,
+          expiresAt: RUN_DEADLINE,
+          state: 'pending',
+        },
+      });
+      const violations = await findStaleApprovals(prisma, { now: minus(RUN_DEADLINE, 7_200_000) });
+      expect(mentioning(violations, orphan)[0]).toContain('workflow run does not exist');
+    });
+  });
+
+  describe('review fixes: the replay exemption is tied to a real lapse (M2)', () => {
+    it('a lapse-shaped decision with no expired approval behind it IS flagged by check:decision-replay', async () => {
+      const f = await fixture();
+      const original = await prisma.policyDecision.findUniqueOrThrow({
+        where: { id: f.decisionId },
+      });
+      const forged = randomUUID();
+      await prisma.policyDecision.create({
+        data: {
+          id: forged,
+          tenantId: original.tenantId,
+          issueId: original.issueId,
+          workflowRunId: original.workflowRunId,
+          workflowState: original.workflowState,
+          actionKey: original.actionKey,
+          targetRef: original.targetRef,
+          fingerprint: original.fingerprint,
+          proposalDigest: original.proposalDigest,
+          decisionInput: original.decisionInput as object,
+          rulesetVersion: original.rulesetVersion,
+          matchedRuleKeys: [],
+          outcome: 'deny',
+          reasonCodes: ['APPROVAL_EXPIRED'],
+          ceilingApplied: false,
+          budgetState: original.budgetState as object,
+          evaluatedAt: original.evaluatedAt,
+        },
+      });
+      const violations = await findReplayMismatches(prisma);
+      expect(violations.filter((v: string) => v.includes(forged))).not.toEqual([]);
     });
   });
 
