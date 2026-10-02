@@ -154,18 +154,26 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       );
 
       const forA = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
-          decisionInput: decisionInputFor(componentA),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor(componentA),
+          },
+        ),
       );
       expect(forA.decision.outcome).toBe('allow');
 
       // Quickstart 11: grant for component A, propose for component B → refused, reason naming
       // the missing grant.
       const forB = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
-          decisionInput: decisionInputFor(componentB),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor(componentB),
+          },
+        ),
       );
       expect(forB.decision.outcome).toBe('deny');
       expect(forB.decision.reasonCodes).toContain('NO_AUTONOMY_GRANT');
@@ -185,9 +193,13 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       );
 
       const before = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
-          decisionInput: decisionInputFor('component-a'),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor('component-a'),
+          },
+        ),
       );
       expect(before.decision.outcome).toBe('allow');
 
@@ -201,9 +213,13 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // Nothing "pushed" this evaluation anything — it is simply a fresh call, re-reading the
       // (now empty) grant table, exactly as T041/T042 require.
       const after = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
-          decisionInput: decisionInputFor('component-a'),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor('component-a'),
+          },
+        ),
       );
       expect(after.decision.outcome).toBe('deny');
       expect(after.decision.reasonCodes).toContain('NO_AUTONOMY_GRANT');
@@ -253,10 +269,14 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // today's epoch — RequestApproval itself is Phase 7 (out of scope); this is the row shape
       // it will write, built directly since there is no command yet to call.
       const bound = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets }, context, {
-          decisionInput: decisionInputFor('component-a'),
-          binding: { workflowRunId: randomUUID() },
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor('component-a'),
+            binding: { workflowRunId: randomUUID() },
+          },
+        ),
       );
       expect(bound.decision.outcome).toBe('require_approval');
       decisionId = bound.decision.id;
