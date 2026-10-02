@@ -95,6 +95,41 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.49.0 — 2026-10-02
+
+**QUESTIONS.md walkthrough with Pavlo**: every genuinely open item across 001, 002 and 004, one by
+one, explained and resolved or confirmed still blocked — `docs/decisions.md` C-72..C-90, with
+`QUESTIONS.md` itself tagged at each resolved item rather than rewritten. Two real fixes landed
+alongside the decisions:
+
+- `parseInstantLiteral` (`packages/domain/policy/src/domain/predicates/instant-literal.ts`): an
+  instant predicate literal (`evaluatedAt before '...'`) now requires an explicit UTC/offset
+  suffix at both publish-time validation and evaluation time, closing a timezone-dependent parsing
+  bug that could make the same rule evaluate differently depending on the server's timezone — a
+  literal FR-002 determinism violation, the same bug class already fixed once for `evaluatedAt`
+  itself.
+- `apps/api` now declares `@healer/domain-policy` as a real dependency (`package.json`) and
+  project reference (`tsconfig.json`) — it previously resolved only through pnpm's workspace
+  hoisting, a phantom dependency flagged during 012 phase 6's own rebase.
+- Two spec documents corrected to match already-shipped, tested code rather than the reverse:
+  `contracts/evaluation.md`/`openapi.yaml` now name `VALIDATION`, not the never-built
+  `RULESET_INVALID`; `data-model.md`'s `policy_decision` state diagram now shows a digest mismatch
+  staying `issued` and retriable, not transitioning to `invalidated`.
+- One prior prediction corrected on inspection, not assumed: Phase 4 (0.48.0) does **not** need an
+  `autonomy_epoch` column on `policy_decision` — revocation works by re-reading the live grant
+  table on every evaluation, never by comparing a stored epoch on the decision itself.
+
+Everything else resolved in this pass is a judgment call recorded in `decisions.md` with no code
+change required this round (a merge's fingerprint staying aliased to its survivor, a merge
+survivor recording what was merged into it, dropping the dead `removed` issue state, refusing to
+delete a merge survivor, widening the staleness sweep's definition of "progress", cited evidence
+staying detach-only, `cooldownBounds` to be baked into `decision_input` at evaluation time once
+Phase 5 builds it, `graph_edge` provenance gaining the same actor/observation columns
+`graph_node` already has) — tracked for whoever implements the feature it belongs to, not built
+speculatively now. A cross-cutting scheduler gap (nothing runs 001's staleness/retention sweeps,
+012's stale-runner sweep, or 002 Phase 4's revocation sweep) is elevated to its own tracked,
+prioritized item (C-90) instead of being deferred separately by each feature again.
+
 ## 0.48.0 — 2026-10-01
 
 **002 policy-and-autonomy phase 4 (T034–T047)**: US2 — autonomy is granted in increments the

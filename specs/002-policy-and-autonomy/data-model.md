@@ -121,7 +121,7 @@ write that makes revocation immediate.
 | request_key | text? | a *charged* step's idempotency key: the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step returns the decision it already minted instead of charging twice (T060) |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
-| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `digest_mismatch` · `charge_abandoned` |
+| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `charge_abandoned` — **not** `digest_mismatch` (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays `issued` and retriable with the correct digest, never invalidated |
 
 `UPDATE` is rejected except for `consumed_at` and `invalidated_reason` transitioning from null.
 
@@ -299,7 +299,9 @@ policy_ruleset:   published ──publish new content──▶ superseded (both 
 autonomy_grant:   active ──revoke──▶ revoked (terminal; epoch bumped in the same transaction)
 
 policy_decision:  issued ──guarded step executes──▶ consumed
-                  issued ──epoch bump | approval expiry | digest mismatch──▶ invalidated
+                  issued ──epoch bump | approval expiry──▶ invalidated
+                  issued ──digest mismatch──▶ issued (refused, stays retriable — C-84: a stale
+                                               executor proposal, not a defect in the decision itself)
                   (a decision is never re-used for a second execution)
 
 approval_request: pending ──human──▶ approved | rejected

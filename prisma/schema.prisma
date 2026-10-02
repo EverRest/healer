@@ -985,7 +985,7 @@ model PolicyDecision {
   evaluatedAt       DateTime      @map("evaluated_at") @db.Timestamptz(6)
   /// Set when the guarded step executes against it.
   consumedAt        DateTime?     @map("consumed_at") @db.Timestamptz(6)
-  /// epoch_bump · approval_expired · approval_rejected · digest_mismatch · charge_abandoned (the closed list is
+  /// epoch_bump · approval_expired · approval_rejected · charge_abandoned (the closed list is
   /// `INVALIDATED_REASONS` in packages/domain/policy; data-model.md and openapi.yaml agree).
   invalidatedReason String?       @map("invalidated_reason")
   /// 002 T060: identifies a *charged* step's request (the caller's proposal with the resolved

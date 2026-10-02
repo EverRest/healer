@@ -8,6 +8,12 @@ spec docs).
 [decisions.md](docs/decisions.md) (C-43..C-47); this file keeps only the pointer plus what's still
 genuinely undecided, since several other docs point back at this file by name for the reasoning.
 
+**Decision session 2026-10-02** — a full walkthrough of every open item in this file with Pavlo,
+one by one. Resolved items are individually tagged below with their decisions.md pointer
+(C-72..C-90); everything left untagged is still genuinely open or still genuinely blocked (waiting
+on 010's catalogue, a hosting target, real auth, S0-1's incident data, Phase 13's diff
+infrastructure, or similar) — not re-litigated, just confirmed still accurate.
+
 ## 012 T032, T029, T035, T031, phase 13 — resolved
 
 See [decisions.md](docs/decisions.md) C-43 (`gate-architecture-agnostic` own-stack check), C-44
@@ -474,7 +480,7 @@ introduced, distinct from the already-documented flaky Docker test above:
   `PrismaPolicyActionRepository` imports and instances in the correct position, matching the pattern
   every other real-Postgres e2e file in this app already uses. Verified: 11/11 tests pass afterward,
   and a full `e2e` project run found no other file with the same gap.
-- **Separately discovered, not fixed**: `@healer/domain-policy` is imported by `apps/api/src/main.ts`
+- **Fixed 2026-10-02, see [decisions.md](docs/decisions.md) C-89**: `@healer/domain-policy` is imported by `apps/api/src/main.ts`
   (and by several e2e test files) but is not declared in `apps/api/package.json`'s `dependencies` or
   `apps/api/tsconfig.json`'s project `references` — it resolves today only via pnpm's workspace
   hoisting, not an explicit dependency edge. Works, but is exactly the "phantom dependency" pnpm's
@@ -740,7 +746,7 @@ shared database — a schema change past that point is always a new migration fi
 **Resolved and confirmed 2026-09-27**: see [decisions.md](docs/decisions.md) C-49. Kept as-is,
 over merging unit+e2e coverage and over a lower (arbitrary) floor.
 
-## 001 T012 — the issue state graph has no `stale -> investigating` edge yet
+## 001 T012 — the issue state graph has no `stale -> investigating` edge yet — resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-72
 
 Not decided, and deliberately not invented ahead of the task that should decide it.
 `state-machine.ts`'s graph is exactly what data-model.md's diagram draws: the only reopen edge is
@@ -1115,7 +1121,7 @@ of this (re-confirmed via `git stash`: fails identically on the pre-T019 tree).
   `issue-repository.e2e.test.ts` concurrency flake — unrelated (it now also passed cleanly in one
   of the runs during this task, consistent with its documented intermittency).
 
-## 001 T024 — where does a totally-unidentifiable parse failure's "evidence" attach?
+## 001 T024 — where does a totally-unidentifiable parse failure's "evidence" attach? — resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-73
 
 Not decided, genuinely open, flagged rather than guessed at.
 
@@ -1302,7 +1308,7 @@ test that proves it holds a transaction open exactly as `recordOccurrence` does.
 that lock order:** a future writer of `issue_event` that inserts the event without touching the
 `issue` row first would not be waited on.
 
-**Progress is `issue_event.received_at` only.** Evidence recorded and audit entries written do not
+**Progress is `issue_event.received_at` only. Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-77.** Evidence recorded and audit entries written do not
 count, so a long investigation that changes no state and receives no signals can be swept. That
 follows the spec's wording ("no signals and no progress") read as issue-level facts; if an
 investigation that is still collecting evidence should keep an issue alive, that needs its own
@@ -1345,7 +1351,7 @@ append-only table while it is on. Keep the callback to the destructive statement
 `maintenance` queue runs two at a time, with retries — each listed the same cited record and each
 published `EvidenceDetached`. A second call is a no-op that returns the row.
 
-**Open — cited evidence keeps its excerpt forever.** Detached is not purged. `data-model.md`'s
+**Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-78 — cited evidence keeps its excerpt forever.** Detached is not purged. `data-model.md`'s
 diagram ends `detached --expires_at--> purged`, which cannot happen for a record a link still
 names, and `evidence` rows cannot be updated to blank the excerpt. If "retention" is meant to bound
 how long customer text is held even when a conclusion cites it, that needs a privileged excerpt scrub
@@ -1599,7 +1605,7 @@ before the first write. This relies, like T051, on every writer of the `issue` r
 before writing. Ids are lower-cased in `merge` (an upper-case spelling of the same id used to give
 `NotFoundError` because one id counted as two); `unmerge` takes a single id and needs no folding.
 
-**OPEN — a signal whose fingerprint belongs to a merged issue.** Merging X frees X's slot in the
+**Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-74** — a signal whose fingerprint belongs to a merged issue. Merging X frees X's slot in the
 unique open-fingerprint index (`merged` is excluded), and `findOpenByFingerprint` no longer finds X.
 So the next signal with X's fingerprint **opens a fresh issue X′ instead of attaching to the survivor
 Y** — which is exactly the duplication a merge is meant to end. Worse, unmerging X back into an _open_
@@ -1609,14 +1615,14 @@ real fix is a product call I did not make: route signals of a merged fingerprint
 (which changes `ingestSignal`, the counts on Y, and what an unmerge would owe X) or leave it and
 accept X′. Until then a merge only hides X; it does not absorb X's future.
 
-**Audit trail — no `audit_entry` written.** Same reasoning as T042: `action` must be a registered
+**Audit trail — no `audit_entry` written. Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-76.** Same reasoning as T042: `action` must be a registered
 `policy_action.action_key` and 002 does not exist. The `issue_event` (`cause = human`, `actor_ref`,
 `reason`, append-only) already answers who, when and why. **Inconsistent with the T052 branch**, which
 writes an audit entry with the placeholder `evidence.retention_purge`; if that stands, adding
 `issue.merge` / `issue.unmerge` is one `tx.auditEntry.create` in each function in
 `prisma-issue-merge.ts`. I did not want a second unregistered key in an append-only table.
 
-**OPEN — the survivor's own record of the merge.** The `merged` event is written on X only (the
+**Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-75** — the survivor's own record of the merge. The `merged` event is written on X only (the
 `correlate` precedent). Y's timeline, evidence graph and audit show nothing, and
 `projectIssueRelationships(Y, …)` reads `merged_into` only as a subject, so `GET /issues/{Y}` cannot
 list what was merged into it. Timeline left unchanged as instructed; whether Y should show "X was
@@ -1863,12 +1869,9 @@ mapping — passed and are regression cover, not red).
 - (b) Retention-purge `audit_entry` rows for evidence purged before the deletion survive (target =
   evidence id, constant reason); `audit_entry.reason` is free text in general; `agent_run.correlation_id`
   is kept and links surviving rows and already-delivered events to the deleted issue's work.
-- (c) The `removed` state is now effectively dead: still a legal `transition()` target, but no caller
-  enters it (deletion deletes the row), so the `removed` checks in `merge.ts` / `prisma-issue-merge.ts`
-  and invariant (B) of the merged-state migration never fire in practice. Whether to drop the state from
-  the graph is a spec decision.
-- (d) Refusing to delete a survivor with merged children, and (new) an issue that is itself merged, are
-  product calls; the alternative is to unmerge inside the deletion.
+- (c) The `removed` state is now effectively dead — **resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-79: drop it from the graph.**
+- (d) Refusing to delete a survivor with merged children, and (new) an issue that is itself merged —
+  **resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-80: refuse, require explicit unmerge first.**
 - (e) Delivered outbox events, BullMQ jobs still holding a signal, and backups cannot be recalled.
 
 ## Decisions waiting on Pavlo — phase 8 integration (index; the detail is in the named sections)
@@ -1876,26 +1879,12 @@ mapping — passed and are regression cover, not red).
 Nothing below blocks the work already done; each has a default in place and a cost if the default is
 wrong. Ordered by how much a wrong default costs.
 
-1. **A merge hides an issue but does not absorb its future signals.** A signal whose fingerprint
-   belongs to a merged issue opens a *new* issue instead of attaching to the survivor, and the
-   survivor's timeline / graph / `GET /issues/{id}` show nothing about what was merged into it.
-   Fixing it changes ingestion's fingerprint lookup — a batch of its own. (`001 T049/T050`.)
-2. **Cited evidence keeps its excerpt forever.** Retention detaches it but cannot purge it; whether
-   a cited record should lose its text at expiry (a privileged scrub) is a decision about what
-   FR-009's "support" requires. (`001 T052`.)
-3. **A signal on a `stale` issue does not un-stale it.** The state graph has no edge out of `stale`,
-   and `findOpenByFingerprint` counts it as open. (`001 T051`.)
-4. **Nothing schedules the staleness sweep or evidence retention.** Both are routed in `apps/worker`
-   and tested, but no code enqueues them: they need a tenant enumerator and a repeatable schedule
-   (012's territory; a new pattern, so an ADR first). Until then both are correct and read by
-   nothing. (`001 T051`, `001 T052`.)
-5. **Audit action keys are invented placeholders.** `issue.close`, `evidence.retention_purge` and the
-   merge path's absence of any audit entry are three different answers to the same gap: 002's closed
-   `policy_action.action_key` list does not exist. Merge/unmerge writes no `audit_entry` at all,
-   unlike close and purge. (`001 T057`, `001 T052`, `001 T049/T050`.)
-6. **`@ApiOkResponse` is the first swagger decorator in `apps/api`.** It documents the
-   `Idempotent-Replay` header; the dependency is already installed, but the rule is "new pattern ->
-   ADR first". Keep it and write the ADR, or revert the decorator. (`001 T057`.)
+1. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-74, C-75.** A merge hides an issue but does not absorb its future signals. (`001 T049/T050`.)
+2. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-78.** Cited evidence keeps its excerpt forever. (`001 T052`.)
+3. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-72.** A signal on a `stale` issue does not un-stale it. (`001 T051`.)
+4. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-90** (elevated to its own tracked item, not re-deferred piecemeal). Nothing schedules the staleness sweep or evidence retention. (`001 T051`, `001 T052`.)
+5. **Partially resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-76** closes the merge/unmerge half (writes an unregistered-key `audit_entry`, same tradeoff as close/purge). `issue.close`/`evidence.retention_purge` registration against 002's real `policy_action` list is still open — left as-is on purpose (see 2026-10-02 walkthrough item 6): routing 001's mutating actions through the policy gate is bigger than registering a key, not decided here.
+6. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-81: no separate ADR needed**, ADR 0012 already covers it. (`001 T057`.)
 7. **The human actor is a caller-asserted `X-Actor-Id` header** (free-form, can be `system` or
    `ingestion`), the same trust level as `X-Tenant-Id`: the auth layer carries only a tenant id.
    Real identity needs authentication, which does not exist. (`001 T057`.)
@@ -1916,7 +1905,7 @@ wrong. Ordered by how much a wrong default costs.
    `recordOccurrence` does ~7 round trips per signal with the row locked for 4 of them — folding the
    SELECT and event INSERT into one statement would cut the lock hold 3-4x, a source change for the
    owner of ingestion, not made here.
-10. **Deleting a survivor, or an issue that is itself merged, is refused**, and a deletion writes no
+10. **Confirmed 2026-10-02 — [decisions.md](docs/decisions.md) C-80.** Deleting a survivor, or an issue that is itself merged, is refused, and a deletion writes no
     `audit_entry` (the immutable tombstone is the record). Cheap alternatives: unmerge inside the
     deletion; an entry targeting the tombstone id (the fourth answer to item 5). A link from a conclusion
     the deletion cannot attribute to an issue is deleted with the evidence — unknowable until 006's
@@ -2076,7 +2065,7 @@ entry in the closed list. Fixing this in-run (folded into batch 7) rather than d
 thing currently keeping the full e2e suite from being green, the fix is mechanical and
 precedent-following (not a new design decision), and 002 is what broke the gate.
 
-## 002 batch 7 — two spec-vs-code disagreements found while wiring the HTTP surface
+## 002 batch 7 — two spec-vs-code disagreements found while wiring the HTTP surface — item 1 resolved 2026-10-02 ([decisions.md](docs/decisions.md) C-83), item 2 still open (waits on Phases 5-7)
 
 Per AGENTS.md ("if a document and the code disagree, say so and ask which is stale") — both
 independently confirmed by review, not fixed in code this run:
@@ -2109,7 +2098,7 @@ run — reconciling a spec doc against a shape that's still evolving (Phase 4-7 
 phases land, than incrementally per-batch. Whoever does that pass should start from this entry and
 from `decisionInputSchema`'s actual code, not from the yaml.
 
-## 002 — final whole-branch review: three spec deviations never formally logged
+## 002 — final whole-branch review: three spec deviations never formally logged — all three resolved 2026-10-02 ([decisions.md](docs/decisions.md) C-84, C-85, C-86 — item 1's original prediction turned out wrong, see C-86)
 
 Surfaced by the final review across the whole T001–T033 diff; each was mentioned in a batch
 hand-back but never got its own QUESTIONS.md entry — recording now per AGENTS.md ("if a document
@@ -2144,7 +2133,7 @@ Not elevated to "Decisions waiting on Pavlo" yet — (1) is settled (Phase 4's p
 are real open questions but don't block T001-T033's own scope; flagging here so whoever builds
 Phase 4/8/10 sees them before assuming either reading.
 
-## 002 — forward risk for Phase 5: `cooldownBounds` has no versioning, replay may not reproduce it
+## 002 — forward risk for Phase 5: `cooldownBounds` has no versioning, replay may not reproduce it — resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-82
 
 Batch 3 invented a `cooldownBounds` shape on `ResolvedRuleset` ahead of T054 (`action_limit`,
 Phase 5). `action_limit` as specified in `data-model.md` is a plain mutable table — no version
@@ -2157,7 +2146,7 @@ depended on a cooldown/rate-limit predicate cannot actually replay identically a
 table, or bounds embedded in the stored `decision_input` at decision time) rather than discovering
 it after replay already silently drifts.
 
-## 002 batch 9 — the ceiling is enforced for `actionClass`, not yet for `hasTestedUndo`/`autonomy.level`
+## 002 batch 9 — the ceiling is enforced for `actionClass`, not yet for `hasTestedUndo`/`autonomy.level` — the `autonomy.level` half landed with Phase 4 (0.48.0, `resolveRulesetAndEvaluate`); `hasTestedUndo` still genuinely blocked on 010's catalogue, not resolved
 
 Batch 9 fixed `actionClass` being caller-supplied and unverified (C1(b) — the ceiling could be
 defeated by claiming a lower class). Both re-review passes independently flagged, correctly, that
@@ -2174,7 +2163,7 @@ un-exceedable" guarantee — it closed the `actionClass` half. The other two rem
 hence unverified, until T039/T048 land. Any code comment claiming the ceiling is fully
 un-defeatable before then is overclaiming and should be corrected to name what's actually closed.
 
-## 002 batch 9 (round 3 re-review) — instant *literal* values still parse timezone-dependently
+## 002 batch 9 (round 3 re-review) — instant *literal* values still parse timezone-dependently — fixed 2026-10-02, see [decisions.md](docs/decisions.md) C-88 (`domain/predicates/instant-literal.ts`)
 
 Batch 9 tightened `evaluatedAt` (the evaluation instant) to require an offset-qualified ISO string
 (`z.string().datetime({offset:true})`), closing a replay-determinism risk (FR-002/SC-002: the same
@@ -2349,7 +2338,7 @@ rather than reading the code alone. Results:
   task **T040** — not yet implemented). Flagging here so it isn't lost by the time T040's owner looks
   for what it's supposed to catch.
 
-**Escalated — added to the Pavlo index below, not decided here:**
+**Escalated — added to the Pavlo index below. Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87:**
 - `graph_edge` has no `actor_ref` or `observation_ref` column at all (unlike `graph_node`, which has
   both), so a directly human-authored or human-confirmed edge — one that doesn't arrive through
   discovery's `edge_provenance` — has nowhere to record who asserted it or what it's based on. This
@@ -2367,7 +2356,7 @@ rather than reading the code alone. Results:
 
 ## Decisions waiting on Pavlo — 004 (index; detail in the named sections above)
 
-1. **Can a human directly author or confirm a `graph_edge` with no discovery observation behind it?**
+1. **Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87.** Can a human directly author or confirm a `graph_edge` with no discovery observation behind it?
    Today the schema has no column to record that on the edge itself, and `research.md` (R-04a) and
    `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
    reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this

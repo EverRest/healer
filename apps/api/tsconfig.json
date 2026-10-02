@@ -25,6 +25,9 @@
       "path": "../../packages/domain/evidence"
     },
     {
+      "path": "../../packages/domain/policy"
+    },
+    {
       "path": "../../packages/prisma-client"
     }
   ]
