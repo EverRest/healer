@@ -83,6 +83,28 @@ export async function seedIssue(pg: StartedPostgres, tenantId: string): Promise<
   return id;
 }
 
+/** `count` issues in one statement — the flood scenario's 400. Returns their ids. */
+export async function seedIssues(
+  pg: StartedPostgres,
+  tenantId: string,
+  count: number,
+): Promise<string[]> {
+  const out = await query(
+    pg,
+    `insert into "issue"."issue"
+       (id, tenant_id, kind, environment, severity, state, fingerprint, ruleset_version,
+        occurrence_count, first_seen_at, last_seen_at)
+     select gen_random_uuid(), '${tenantId}', 'production_incident', 'prod', 'high', 'detected',
+            'fp-' || gen_random_uuid(), 1, 1, now(), now()
+     from generate_series(1, ${count})
+     returning id`,
+  );
+  return out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^[0-9a-f-]{36}$/.test(line));
+}
+
 export interface SeedAgentRun {
   readonly tenantId: string;
   readonly cost: number;

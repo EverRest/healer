@@ -41,13 +41,15 @@ export function entryForStep(
   return entry;
 }
 
-/** Every step from 1 to where the scope is now — a jump over a step still records it, so "in
- *  order, one evidence record per step" holds however large a single charge is. */
+/** Every step from 1 to the last threshold crossed — a jump over a step still records it, so "in
+ *  order, one evidence record per step" holds however large a single charge is — and, when the
+ *  scope is exhausted, the exhaustion step. A refusal that arrives before any threshold was
+ *  crossed records only exhaustion: steps nothing ever reached are not claimed. */
 export function stepsToMark(state: {
   readonly crossed: number;
   readonly exhausted: boolean;
   readonly thresholdCount: number;
 }): readonly number[] {
-  const last = state.exhausted ? state.thresholdCount + 1 : state.crossed;
-  return Array.from({ length: last }, (_, i) => i + 1);
+  const steps = Array.from({ length: state.crossed }, (_, i) => i + 1);
+  return state.exhausted ? [...steps, state.thresholdCount + 1] : steps;
 }

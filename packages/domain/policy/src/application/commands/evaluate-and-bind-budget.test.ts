@@ -174,6 +174,19 @@ describe('evaluateAndBind — budget resolution (T056, T060, T066)', () => {
     expect(budgets.marks.map((m) => [m.step, m.issueId])).toEqual([[1, 'issue-1']]);
   });
 
+  it('a refusal by the budget marks exhaustion for the scope that refused, even below the limit', async () => {
+    // 90 of 100 spent, 20 declared: refused although consumed < limit. Nothing more can run here.
+    const { repos, budgets } = reposWith(nearlyFull(90));
+    const result = await evaluateAndBind(repos, CONTEXT, {
+      decisionInput: buildDecisionInput({
+        budget: { consumed: 0, limit: 100, declaredMaxCost: 20, degradationStep: 0 },
+      }),
+      binding: { issueId: 'issue-1' },
+    });
+    expect(result.decision.reasonCodes).toContain('BUDGET_EXHAUSTED');
+    expect(budgets.marks.map((m) => m.step)).toEqual([1, 2, 3, 4]);
+  });
+
   it('resolves the budget for the bound run and issue, at the decision instant', async () => {
     const { repos, budgets } = reposWith(roomyBudget());
     const input = buildDecisionInput();

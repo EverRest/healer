@@ -57,6 +57,10 @@ const HEAVY_E2E = [
   // mechanism as the four above: its own sequential group, not run concurrently with the rest.
   'apps/runner/runner-image.e2e.test.ts',
   'scripts/runner-build.e2e.test.ts',
+  // 002 T065: 400 serialized, overlapping budget charges against one Postgres (~9 s alone). Under
+  // the shared group's load the queue behind the charge lock stretches with scheduling latency, the
+  // same way the 12 000-signal replay does, so it gets its own group rather than a longer timeout.
+  'budget-flood.e2e.test.ts',
 ];
 
 function e2eProject(name: string, include: string[], exclude: string[], groupOrder: number) {

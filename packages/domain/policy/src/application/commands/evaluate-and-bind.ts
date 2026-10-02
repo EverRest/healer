@@ -23,7 +23,7 @@ import {
   evaluatePrepared,
   prepareEvaluation,
 } from '../resolve-ruleset-and-evaluate.js';
-import { markDegradation } from './mark-degradation.js';
+import { markDegradation, type MarkDegradationCommand } from './mark-degradation.js';
 
 // Re-exported so existing callers/tests importing these errors from here keep working — both now
 // live in `resolve-ruleset-and-evaluate.ts` since `ExplainDecision` (T024) throws them too.
@@ -82,8 +82,13 @@ export async function evaluateAndBind(
     asOf: input.decisionInput.evaluatedAt,
   });
 
+  let refusedBy: MarkDegradationCommand['refusedBy'];
   const build = (budget: ResolvedBudget): NewRecordedDecision => {
     const { decision, decisionInput, budgetState } = evaluatePrepared(prepared, budget);
+    if (decision.reasonCodes.includes('BUDGET_EXHAUSTED') && budgetState.binding !== undefined) {
+      const { scopeType, scopeId, periodKey } = budgetState.binding;
+      refusedBy = { scopeType, scopeId, periodKey };
+    }
     return {
       id: randomUUID(),
       decision,
@@ -116,6 +121,7 @@ export async function evaluateAndBind(
     budget,
     ...(binding.issueId !== undefined ? { issueId: binding.issueId } : {}),
     asOf: input.decisionInput.evaluatedAt,
+    ...(refusedBy !== undefined ? { refusedBy } : {}),
   });
 
   return { decision: recorded, autonomyEpoch };

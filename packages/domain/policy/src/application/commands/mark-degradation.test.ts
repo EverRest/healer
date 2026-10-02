@@ -91,6 +91,31 @@ describe('markDegradation', () => {
     ]);
   });
 
+  it('a refusal marks exhaustion for the scope that refused, though consumption is still below the limit', async () => {
+    // 9 of 10 spent and a step declaring 2 is refused: nothing more can run in this window, which
+    // is exhaustion in every sense that matters, even though consumed < limit.
+    rec = recorder();
+    const day = { ...tenantDay(9), spendLimit: 10 };
+    await markDegradation(rec.repo, CONTEXT, {
+      budget: budgetOf(day),
+      issueId: 'issue-1',
+      asOf: new Date('2026-10-02T12:00:00Z'),
+      refusedBy: { scopeType: 'tenant', scopeId: day.scopeId, periodKey: day.periodKey },
+    });
+    expect(rec.calls.at(-1)).toMatchObject({ step: 4, entryApplied: 'ai_steps_refused' });
+  });
+
+  it('does not mark exhaustion for a scope that did not refuse', async () => {
+    rec = recorder();
+    await markDegradation(rec.repo, CONTEXT, {
+      budget: budgetOf(tenantDay(60)),
+      issueId: 'issue-1',
+      asOf: new Date('2026-10-02T12:00:00Z'),
+      refusedBy: { scopeType: 'issue', scopeId: 'issue-9', periodKey: 'issue' },
+    });
+    expect(rec.calls.map((c) => c.step)).toEqual([1]);
+  });
+
   it('carries the consumed and limit figures, the scope and the pinned period key', async () => {
     rec = recorder();
     await run(budgetOf(tenantDay(60)));

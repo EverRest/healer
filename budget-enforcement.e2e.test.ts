@@ -1,39 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PrismaClient } from '@healer/prisma-client';
+import { budgetLockKey } from '@healer/domain-policy';
+import { query, type StartedPostgres } from './test/containers.js';
 import {
-  budgetLockKey,
-  evaluateAndBind,
-  PrismaAutonomyEpochRepository,
-  PrismaAutonomyGrantRepository,
-  PrismaBudgetLimitRepository,
-  PrismaBudgetRepository,
-  PrismaPolicyActionRepository,
-  PrismaPolicyDecisionRepository,
-  PrismaPolicyRulesetRepository,
-  publishRuleset,
-  putBudgetLimit,
-  SEED_POLICY_ACTIONS,
-  type EvaluateAndBindRepos,
-  type PutBudgetLimitCommand,
-  type RuleBody,
-} from '@healer/domain-policy';
-import { TenantContext, scope, withCorrelation } from '@healer/shared';
-import { applySqlFile, query, startPostgres, type StartedPostgres } from './test/containers.js';
-import {
-  decisionInput,
   hold,
   seedAgentRun,
-  seedBase,
   seededPromptVersionId,
   seedIssue,
-  seedTenant,
   seedTransition,
   seedWorkflowRun,
   waitForBlocked,
 } from './test/budget-fixtures.js';
+import {
+  NOON,
+  startBudgetHarness,
+  type BudgetHarness,
+} from './test/infrastructure/budget-harness.js';
 
 /**
  * 002 Phase 6 (US4) against a real Postgres: T056 (the aggregate is derived, never stored), T058
@@ -42,102 +24,24 @@ import {
  * cap), T088 (the bounds bind a direct write too). The degradation evidence record (T064) and the
  * 400-issue flood (T065) are `budget-degradation.e2e.test.ts` and `budget-flood.e2e.test.ts`.
  */
-const MIGRATIONS_DIR = fileURLToPath(new URL('./prisma/migrations/', import.meta.url));
-const migrationNames = () =>
-  readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .sort();
-
-const NOON = new Date('2026-10-02T12:00:00Z');
-const allowCodeChange: RuleBody = {
-  ruleKey: 'allow-code-change',
-  predicates: [
-    { kind: 'enumerated', field: 'action.actionClass', operator: 'equals', value: 'code_change' },
-  ],
-  outcome: 'allow',
-  reasonCode: 'NO_ADOPTED_EXPECTATION',
-  note: '',
-};
-
 describe('budget enforcement (002 T056-T066, T088)', () => {
+  let h: BudgetHarness;
   let pg: StartedPostgres;
-  let prisma: PrismaClient;
-  let repos: EvaluateAndBindRepos;
-  let budgets: PrismaBudgetRepository;
-  let limits: PrismaBudgetLimitRepository;
-  let rulesets: PrismaPolicyRulesetRepository;
+  let prisma: BudgetHarness['prisma'];
+  let setLimit: BudgetHarness['setLimit'];
+  let bind: BudgetHarness['bind'];
+  let resolve: BudgetHarness['resolve'];
+  let tenantDay: BudgetHarness['tenantDay'];
+  let newTenant: BudgetHarness['newTenant'];
 
   beforeAll(async () => {
-    pg = await startPostgres();
-    for (const name of migrationNames()) {
-      await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
-    }
-    await seedBase(pg);
-    prisma = new PrismaClient({ datasourceUrl: pg.url });
-    rulesets = new PrismaPolicyRulesetRepository(prisma);
-    budgets = new PrismaBudgetRepository(prisma);
-    limits = new PrismaBudgetLimitRepository(prisma);
-    repos = {
-      rulesets,
-      decisions: new PrismaPolicyDecisionRepository(prisma),
-      autonomyEpochs: new PrismaAutonomyEpochRepository(prisma),
-      actions: new PrismaPolicyActionRepository(prisma),
-      autonomyGrants: new PrismaAutonomyGrantRepository(prisma),
-      budgets,
-    };
-    for (const action of SEED_POLICY_ACTIONS) {
-      await prisma.policyAction.create({
-        data: { ...action, introducedAt: new Date('2026-01-01T00:00:00Z') },
-      });
-    }
+    h = await startBudgetHarness();
+    ({ pg, prisma, setLimit, bind, resolve, tenantDay, newTenant } = h);
   }, 180_000);
 
   afterAll(async () => {
-    await prisma?.$disconnect();
-    await pg?.stop();
+    await h?.stop();
   });
-
-  /** A fresh tenant with the allow-everything-code-change rule set published. */
-  async function newTenant() {
-    const tenantId = randomUUID();
-    const ctx = TenantContext.forTrustedInternalUse(tenantId);
-    await seedTenant(pg, tenantId);
-    await withCorrelation(randomUUID(), () =>
-      publishRuleset(rulesets, ctx, { rules: [allowCodeChange], publishedBy: 'pavlo' }),
-    );
-    return { tenantId, ctx };
-  }
-
-  const setLimit = (ctx: TenantContext, overrides: Partial<PutBudgetLimitCommand>) =>
-    putBudgetLimit(limits, ctx, {
-      scopeType: 'tenant',
-      period: 'day',
-      spendLimit: 10,
-      timeLimitMs: overrides.scopeType === 'issue' ? 3_600_000 : 86_400_000, // each within its bound
-      softThresholdPcts: [50, 75, 90],
-      escalationAttemptCap: 2,
-      updatedBy: 'pavlo',
-      ...overrides,
-    });
-
-  const bind = (
-    ctx: TenantContext,
-    declared: number,
-    binding: { issueId?: string; workflowRunId?: string } = {},
-    at: Date = NOON,
-  ) =>
-    withCorrelation(randomUUID(), () =>
-      evaluateAndBind(repos, ctx, { decisionInput: decisionInput(declared, at), binding }),
-    );
-
-  const resolve = (
-    ctx: TenantContext,
-    q: { issueId?: string; workflowRunId?: string } = {},
-    at = NOON,
-  ) => budgets.resolve(scope(ctx, { ...q, asOf: at }));
-  const tenantDay = (b: Awaited<ReturnType<typeof resolve>>) =>
-    b.scopes.find((s) => s.scopeType === 'tenant' && s.period === 'day')!;
 
   describe('T056 — consumption is derived, never stored', () => {
     it('spend is finished agent_run cost plus the open charge of an allowed step, replaced by the actual cost when the run lands', async () => {

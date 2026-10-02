@@ -79,4 +79,9 @@ describe('stepsToMark', () => {
   it('exhaustion is the step after the last threshold', () => {
     expect(stepsToMark({ crossed: 3, exhausted: true, thresholdCount: 3 })).toEqual([1, 2, 3, 4]);
   });
+
+  it('a refusal before any threshold was crossed records exhaustion only — unreached steps are not claimed', () => {
+    expect(stepsToMark({ crossed: 0, exhausted: true, thresholdCount: 3 })).toEqual([4]);
+    expect(stepsToMark({ crossed: 1, exhausted: true, thresholdCount: 3 })).toEqual([1, 4]);
+  });
 });

@@ -13,6 +13,15 @@ export interface MarkDegradationCommand {
    *  evaluation with no issue: nothing is recorded, rather than inventing an issue to hold it. */
   readonly issueId?: string;
   readonly asOf: Date;
+  /** The scope whose limit refused a step in this evaluation (the decision's binding scope, when
+   *  it carries `BUDGET_EXHAUSTED`). A refusal is exhaustion in every sense that matters — nothing
+   *  more can run in that window — even when consumed is still below the limit because the next
+   *  step's declared maximum would not fit. */
+  readonly refusedBy?: {
+    readonly scopeType: 'issue' | 'tenant';
+    readonly scopeId: string;
+    readonly periodKey: string;
+  };
 }
 
 /**
@@ -34,9 +43,13 @@ export async function markDegradation(
   for (const figures of command.budget.scopes) {
     const standing = scopeStanding(figures);
     const thresholdCount = figures.softThresholdPcts.length;
+    const refused =
+      command.refusedBy?.scopeType === figures.scopeType &&
+      command.refusedBy.scopeId === figures.scopeId &&
+      command.refusedBy.periodKey === figures.periodKey;
     const steps = stepsToMark({
       crossed: standing.crossed,
-      exhausted: standing.exhausted,
+      exhausted: standing.exhausted || refused,
       thresholdCount,
     });
     for (const step of steps) {
