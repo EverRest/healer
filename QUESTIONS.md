@@ -1957,3 +1957,81 @@ implementation beyond the port's three-to-four-method shape.
   strings rather than a shared "benign") live in `test-support/design-partner.ts` so T030's
   absence-check and a later sub-batch's e2e tests reference the same literal the fixture actually
   emits, rather than a second copy that could drift.
+
+## 004 Phase 3 — adapter collection (A2), round 2: coordinator review fixes
+
+Two independent reviews (code-reviewer, silent-failure-hunter) against the merged A1+A2 branch
+found four real issues in the three adapters. All four addressed, each with a mutation-check;
+details below.
+
+- **Every port method now takes `signal?: AbortSignal`, threaded from `scope.signal`.**
+  `GitlabProjectReader.project/listFiles/readFile`, `KubernetesReader.listWorkloads`,
+  `TraceReader.serviceEdges` all gained the parameter; each adapter's `collect()` passes
+  `scope.signal` into every reader call it makes, not only `throwIfAborted()`-checking between
+  them. This is the seam A1's `collect-discovery.ts` orchestrator needs: racing a hung call against
+  a timeout only stops *waiting* for it — if the signal never reaches the underlying client, the
+  real call (and whatever resource it holds) keeps running. The design-partner fixture's readers
+  now use a small `abortable()` helper (one microtask delay plus a real `signal.addEventListener`)
+  so a signal that aborts after a reader call starts but before it would resolve genuinely rejects
+  it, rather than only being checked before/after.
+- **Test design for this, and why the first attempt was wrong.** The first version of this fix's
+  test called `collect()` with a signal, then `controller.abort()` immediately after, expecting
+  rejection — but that passed even with the signal *not* forwarded, because the adapter's
+  pre-existing `scope.signal?.throwIfAborted()` check right after each `await` also catches an
+  abort that happens while that await is pending, regardless of whether the reader itself ever saw
+  the signal. That test wasn't discriminating the thing under review. Replaced with a direct,
+  deterministic test per adapter: a custom reader records the exact `signal` argument it received
+  and the test asserts it is the same object as `scope.signal` (`toBe`, reference equality) — this
+  fails immediately and exactly when a call site drops the parameter, with no timing dependency.
+  Mutation-checked per call site (`project`, `listFiles`, `readFile` in GitLab; `listWorkloads` in
+  Kubernetes; `serviceEdges` in OTel): removing the second argument at each site made its test fail
+  with `expected undefined to be AbortSignal {...}`; restored byte-for-byte, six checks in total.
+- **T031 flakiness, fixed with `vi.useFakeTimers()`/`vi.setSystemTime()`, not a clock parameter.**
+  Both GitLab's and Kubernetes's `observedAt` (not just GitLab's, the issue report's example) are
+  live `new Date().toISOString()` calls at collection time — graph-contract.md §3 has no field for
+  a real backend to supply this one, it is genuinely "now". Chose fake timers over threading a
+  `now: () => string` dependency into the adapter factories: the determinism is needed only inside
+  this one test's baseline-vs-injected comparison, and no other caller needs to inject a clock —
+  adding one unused parameter to two public factories for a single test's benefit would be the
+  "config for a value that never changes" ponytail forbids. Scoped to the T031 `describe` block
+  only (`beforeEach`/`afterEach`), not the whole file, since T030 doesn't compare timestamps across
+  two collects and doesn't need it. Verified `queueMicrotask` (what the fixture's new `abortable()`
+  helper uses) still resolves correctly under `vi.useFakeTimers()` before relying on it. Ran the
+  fixed test 8 times back to back with real timers off to confirm the straddle is actually gone.
+- **`ports-read-only.test.ts` broadened from name-specific to structural.** The three
+  `@ts-expect-error` probes (`writeFile`, `applyWorkload`, `recordSpan`) only prove those particular
+  names aren't callable — correctly flagged as missing a `deleteFile`-shaped case. Added a
+  stronger, name-agnostic proof alongside them (kept, as a readable illustration): a type-level
+  `Equals<A, B>` (the standard distributive-conditional-on-a-bare-type-parameter trick for true
+  type equality, since plain `extends` only proves "at least these keys") asserts each port's
+  `keyof` is *exactly* its documented method names; assigning `true` to the result fails `tsc
+  --build` if that ever stops holding, under any name. Mutation-checked: temporarily added
+  `deleteFile(path: string): Promise<void>` to `GitlabProjectReader` (plus a matching stub method
+  so the unrelated "missing property" errors in other implementers didn't mask the result) —
+  `ports-read-only.test.ts(58,7): error TS2322: Type 'true' is not assignable to type 'false'` is
+  exactly the new check firing; restored both files byte-for-byte, confirmed via `grep` that no
+  `deleteFile` text remained anywhere outside this section's own prose.
+  **Not fixed, out of scope for A2**: the review's other finding — an e2e assertion elsewhere that
+  checks a *fake* adapter object's own key set rather than the real port interfaces — isn't in
+  `packages/integrations/**`; no file matching that description exists in this worktree
+  (`packages/integrations` has no test asserting on `Object.keys` of an adapter). Likely lives in a
+  root e2e file from a different sub-batch (A1 or a later one) that this batch's scope doesn't
+  cover. Flagging here rather than guessing which file and editing outside scope.
+- **Timestamp normalisation, and a bug the naive version would have had.** Both OTel's
+  `firstSeen`/`lastSeen` and Kubernetes's `lastDeployedAt` are now passed through a `toOffsetIso`
+  helper (duplicated in each file, not a shared module, for two ~6-line functions) before being
+  emitted, so a bare `2026-10-01T00:00:00` from a real backend becomes offset-qualified rather than
+  failing egress validation. First version just did `new Date(value).toISOString()` unconditionally
+  — caught in review-before-merge (not by the coordinator) that this is wrong for a genuinely
+  zone-less string: ECMA-262 parses a date-time string with no zone designator as the *host's
+  local* time, so the same bare timestamp would normalise to a different UTC instant depending on
+  the machine running the adapter (confirmed with `TZ=America/New_York` vs `TZ=UTC`, four hours
+  apart on the same input). Both Kubernetes and OTel always report in UTC, so the fixed version
+  checks for a trailing zone designator (`/(Z|[+-]\d{2}:?\d{2})$/`) and, when absent, appends `Z`
+  before parsing — deterministic regardless of host timezone (re-verified under both `TZ` values
+  above). A value that fails to parse even with `Z` appended is passed through unchanged, left for
+  egress validation to reject as `schema_rejected` (graph-contract.md §3's own documented outcome)
+  rather than silently dropped here. Mutation-checked both call sites (OTel's two fields together,
+  Kubernetes's one): reverting to the raw passthrough value failed each adapter's new
+  "normalises ... with no timezone offset" test with the exact bare string where the `.000Z`-suffixed
+  one was expected; restored byte-for-byte.
