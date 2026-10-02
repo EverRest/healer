@@ -2376,6 +2376,9 @@ rather than reading the code alone. Results:
    `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
    found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
    instead of duplicating, since the dependency already runs that direction). No longer open.
+3. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
+   `component | deployment_unit -> endpoint`; confirm or narrow it. Not blocking — one table entry in
+   `structural-edges.ts`. See "004 T036-T052 — judgment calls", Split B.
 
 ## 004 T012–T015 — judgment calls
 
@@ -2658,3 +2661,39 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
   for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
   marker in).
+
+## 004 T036-T052 — judgment calls
+
+### Split B (T042-T048, T051, T052 — Phase 5 / US3)
+
+- **No migration.** `component_attr`, `deployment_unit_attr`, `repository_attr`, `endpoint_attr` and
+  their enums already exist from T002, and `characteristics` is `text[]`. T044/T045 are domain
+  types + validators + a repository; T046 is endpoint-kind rules over existing edges.
+- **One authority for the closed lists = `packages/domain/architecture/src/domain/graph-vocabulary.ts`.**
+  The Prisma enums are the database mirror; `graph-vocabulary.test.ts` parses `prisma/schema.prisma`
+  and fails when they differ (that test is the reader). `boundary-contract` keeps these as plain
+  strings (zero workspace deps, ADR 0001) — unchanged.
+- **Characteristics vocabulary is a value, not an env var or table.** `parseCharacteristicVocabulary(raw)`
+  validates a config-supplied list (snake_case, unique, non-empty; throws at start-up);
+  `DEFAULT_CHARACTERISTICS` is data-model's six plus `event_driven`. Nothing wires per-tenant or
+  env-driven extension yet — that composition-root wiring belongs with the API/discovery work (no
+  `shared/config` or `apps/api` edit here, both off-limits to this split).
+- **T004's fixtures used `user-facing`/`event-driven`, not in data-model's `user_facing` list.**
+  T048's all-fixtures-validate test was red on exactly that; fixtures now use `user_facing` /
+  `event_driven`. T047 itself was already satisfied by T004's loader (three fixtures); no new
+  fixture was added because T004's e2e asserts every component is `built_from` a repository, which
+  an `external` component (T051) deliberately is not.
+- **`exposes` endpoint rule is not specified anywhere.** Chose `component | deployment_unit ->
+  endpoint` (a unit or component that serves an endpoint). `implements` is `endpoint -> component`
+  (data-model). `calls`, `depends_on`, `serves_feature` are left unconstrained by this task.
+- **The edge-endpoint rule's reader.** There is no edge write path on master (Phase 3's confirmation
+  step), so nothing can refuse a bad edge at write time yet. The reader today is
+  `PrismaGraphStructureRepository.listEdgeEndpointViolations` (tenant-scoped, open edges), exercised
+  by e2e; Phase 3's confirmation write path should call `validateEdge`, and a continuous check
+  (Split A's `check:*` family) can call the lister. Not a DB trigger: T046 is "no migration".
+- **"External component" = `graph_node.node_kind = 'component'` with `component_type = 'external'`**
+  (plus characteristic `third_party`), not `node_kind = 'external'` (which is a separate kind in the
+  schema, meant for external systems). `placeDeploymentUnit` reuses the unit's natural key.
+- **Collision definition (T052):** same `natural_key`, at least two distinct components, and at
+  least two distinct repositories across them. Same key in the same repository is a different
+  defect and is not reported here. Output is candidates only; there is no merge function.
