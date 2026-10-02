@@ -141,3 +141,11 @@ describe('taskIsNoBehaviour', () => {
     expect(taskIsNoBehaviour(['- [ ] T001 [NB] a\n', '- [ ] T001 [US1] b\n'], 'T001')).toBe(false);
   });
 });
+
+describe('a push to the default branch (no change set)', () => {
+  it('has nothing to gate for an agent-presumed run on master itself', () => {
+    dir = fixtureRepo({ 'lib.mjs': LIB, [TASKS]: tasks() });
+    git(dir, ['checkout', '-q', 'master']);
+    expect(redFirst({ cwd: dir, isAgent: true, run })).toEqual({ skipped: 'empty change set' });
+  });
+});

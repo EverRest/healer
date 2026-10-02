@@ -111,9 +111,9 @@ repository being under real CI with a GitHub App installed.
   markers only; the task comes from `TASK_ID`.
 - Both are in `make ci` after `gate-no-send`, no-ops for a human-authored change set. A local run needs
   `HEALER_AUTHOR_IDENTITY=human`.
-- `scripts/lib/changed-files.mjs`: `resolveBaseRevision`, and renames report both sides.
+- `scripts/lib/changed-files.mjs`: `resolveBaseRevision` is the one base resolution (the diff uses it too), and renames report both sides.
 - Known ceilings: a gate edited in the same change set runs as edited until CI runs gates from the base
-  revision (T089/T090); a push with no pull-request payload is treated as agent-authored; any failure on
+  revision (T089/T090); a push with no pull-request payload is agent-authored, which is harmless on the default branch itself (empty change set, nothing to gate); any failure on
   the base counts as red (R-14), including a missing non-test support file.
 
 ## 0.52.0 — 2026-10-03

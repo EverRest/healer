@@ -50,21 +50,13 @@ function workingTreeChanges(cwd) {
 }
 
 export function changedFilesSinceBase(cwd = process.cwd()) {
-  const baseRef = resolveBaseRef(cwd);
-  if (!baseRef) {
-    throw new Error(
-      `changedFilesSinceBase: no base ref resolved (tried ${CANDIDATE_BASE_REFS.join(', ')}) — ` +
-        'refusing to silently treat this as "nothing changed" (R-10)',
-    );
-  }
-  const committed = execFileSync(
-    'git',
-    ['diff', '--name-only', '--no-renames', `${baseRef}...HEAD`],
-    {
-      cwd,
-      encoding: 'utf8',
-    },
-  ).split('\n');
+  // One resolution for the whole gate set: the diff and the gates' base-revision reads cannot
+  // disagree about what "the base" is. Throws when there is none (R-10).
+  const base = resolveBaseRevision(cwd);
+  const committed = execFileSync('git', ['diff', '--name-only', '--no-renames', `${base}..HEAD`], {
+    cwd,
+    encoding: 'utf8',
+  }).split('\n');
   const all = [...committed, ...workingTreeChanges(cwd)];
   return [...new Set(all.map((f) => f.trim()).filter(Boolean))];
 }
