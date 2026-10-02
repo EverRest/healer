@@ -398,23 +398,21 @@ describe('design-partner discovery over the real GitLab/Kubernetes/OTel adapters
 
   // ──────────────── T021/quickstart 44 (bounded, real-shaped): a non-cooperating reader ────────────────
 
-  describe("T021/quickstart 44: a reader that ignores the abort signal entirely (review finding, not this sub-batch's to fix)", () => {
+  describe('T021/quickstart 44: a non-cooperating reader is actually bounded (A1 review-fix: raceAgainstTimeout)', () => {
     const TENANT_ID = '00000000-0000-0000-8000-0000000e0005';
 
-    // KNOWN GAP (confirmed by review on the A1+A2 merge, both reviews independently; A1 is fixing
-    // the orchestrator-level race, A2 is fixing the three real adapters to honour the signal
-    // internally — neither fix is this sub-batch's to make): `collectOne` (collect-discovery.ts)
-    // only calls `timeoutController.abort()` when `perSourceTimeoutMs` elapses — it never races
-    // `adapter.collect(...)` itself against that timeout. The existing timeout tests (this file's
-    // T021 group in `discovery-run.e2e.test.ts`) only pass because the *fake* adapters used there
-    // cooperate by listening for `scope.signal`'s `abort` event and rejecting. A reader that is not
-    // wired to listen for it at all — which, per the review, is all three real
-    // GitLab/Kubernetes/OTel readers today — hangs the source, and therefore the whole run,
-    // forever. Proven here by racing the real call against a short real-time bound from *outside*
-    // `collectDiscovery`, since the call itself never settles to assert on directly; once A1's
-    // orchestrator-level race lands this test should be flipped to a plain `it` that awaits
-    // `collectDiscovery` directly and asserts `status: 'timed_out'` within `perSourceTimeoutMs`.
-    it('KNOWN GAP: a never-resolving, non-cooperating reader is not actually bounded by perSourceTimeoutMs', async () => {
+    // Was a KNOWN GAP test (documenting that `collectOne` only called `timeoutController.abort()`
+    // without ever racing `adapter.collect(...)` itself, so a reader that never listens for the
+    // signal hung the whole run forever — confirmed by two independent reviews on the A1+A2
+    // merge). A1's review-fix round landed `raceAgainstTimeout` in `collect-discovery.ts`, which
+    // races the adapter call against the orchestrator's own timeout rejection regardless of
+    // adapter cooperation (A1 has their own unit-level proof of this with a fake adapter; this is
+    // the full-pipeline/integration angle through the real `collectDiscovery` export, not a
+    // duplicate). Converted from the acknowledged-gap assertion to a real positive one now that
+    // the fix is merged — re-run after this lands and confirmed red-to-green (failed with
+    // "expected 'resolved' to be 'still-hanging'" against the old KNOWN GAP assertion, i.e. the
+    // call now genuinely resolves instead of hanging).
+    it('a never-resolving, non-cooperating reader is still bounded by perSourceTimeoutMs — status timed_out', async () => {
       const neverCooperates: DiscoveryAdapter = Object.freeze({
         key: 'hung-reader',
         version: '1.0.0',
@@ -429,19 +427,16 @@ describe('design-partner discovery over the real GitLab/Kubernetes/OTel adapters
         },
       });
 
-      const collecting = collectDiscovery([{ requested: true, adapter: neverCooperates }], {
+      const startedAt = Date.now();
+      const results = await collectDiscovery([{ requested: true, adapter: neverCooperates }], {
         tenantId: TENANT_ID,
         runnerId: 'runner-1',
         perSourceTimeoutMs: 300,
         itemCap: 1000,
       });
-      const outcome = await Promise.race([
-        collecting.then(() => 'resolved' as const),
-        new Promise<'still-hanging'>((resolve) => setTimeout(() => resolve('still-hanging'), 1500)),
-      ]);
-      // Acknowledged limit, see comment above — this should read 'resolved' once the orchestrator
-      // actually races the adapter promise against its own timeout.
-      expect(outcome).toBe('still-hanging');
+      expect(Date.now() - startedAt).toBeLessThan(2000); // well under the old external 1.5s probe
+      expect(results[0]!.status).toBe('timed_out');
+      expect(results[0]!.reasonCode).toBe('timeout');
     }, 4000);
   });
 
