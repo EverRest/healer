@@ -49,14 +49,6 @@ import {
 import type { RunnerRegistrationRepository } from './src/runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
-
-const noopAutonomyGrants: AutonomyGrantRepository = {
-  findActive: () => Promise.resolve([]),
-  findById: () => Promise.resolve(null),
-  list: () => Promise.resolve([]),
-  create: () => Promise.reject(new Error('not implemented in this test')),
-  revoke: () => Promise.reject(new Error('not implemented in this test')),
-};
 const noopGraphReads: GraphReadRepository = {
   listNodes: () => Promise.reject(new Error('not implemented in this test')),
   getNode: () => Promise.reject(new Error('not implemented in this test')),
