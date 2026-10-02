@@ -3013,3 +3013,15 @@ Recorded, not coded (coordinator's calls):
    owner accept that, or should the binding move?
 5. `agent_run.cost` has no provenance column and nothing writes `agent_run` yet, so
    `check:budget-reconcile` cannot prove a cost was measured, only refuse visible estimates.
+
+## 002 Phase 6–7 — `make ci` result on this machine (coordinator)
+
+`make ci` was run three times on the merged tree. Run 1 found a real defect (the data-model drift test
+tripping on backticks in C-84's note); run 2 found a real merge defect (A's evaluation-skew bound vs
+B's fixed-instant fixtures) — both fixed. Run 3 failed `apps/api/runners.e2e.test.ts` on a 120 s timeout
+under load and it passed alone (11/11). `apps/runner/runner-image.e2e.test.ts` "genuinely drains an
+in-flight heartbeat" is **red intermittently and also on an unmodified master checkout** on this
+machine (docker `inspect` returns an empty exit code): nothing under `apps/runner` or its dependencies
+changed in this batch (the only lockfile diff is master's own 0.49.0 `@healer/domain-policy` entry).
+It passed in run 3 and fails when run alone; the cause is not established — treat as a pre-existing
+012 T050 environmental failure, not caused by 002 phases 6–7.
