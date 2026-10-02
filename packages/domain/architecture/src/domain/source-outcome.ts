@@ -17,6 +17,10 @@ export type CollectionOutcome =
       readonly gaps: readonly CollectionGap[];
       /** The item cap (T021 "bounded") truncated this source's results. */
       readonly truncated: boolean;
+      /** Items `validateEgress` rejected before they ever reached `items` above (review fix:
+       *  these previously vanished without a trace, so a source with every item rejected read as
+       *  `collected/empty_result` instead of `partial/schema_rejected`). */
+      readonly egressRejectedCount: number;
     };
 
 export interface SourceOutcome {
@@ -38,6 +42,11 @@ export function deriveProvisionalSourceOutcome(outcome: CollectionOutcome): Sour
     case 'timed_out':
       return { status: 'timed_out', reasonCode: 'timeout' };
     case 'completed':
+      // Review fix: a schema_rejected egress item outranks a mere truncation or region gap — it
+      // is evidence something was actually wrong with what the adapter sent, not just that there
+      // was more of it than the cap or that a region was unreadable.
+      if (outcome.egressRejectedCount > 0)
+        return { status: 'partial', reasonCode: 'schema_rejected' };
       if (outcome.truncated) return { status: 'partial', reasonCode: null };
       if (outcome.gaps.length > 0) return { status: 'partial', reasonCode: null };
       if (outcome.items.length === 0) return { status: 'collected', reasonCode: 'empty_result' };
