@@ -9,7 +9,7 @@
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-ceiling gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics
+	gate-agent-scope gate-red-first gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -47,6 +47,8 @@ ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) gate-architecture-agnostic
 	$(MAKE) gate-graph-confirm-capability
 	$(MAKE) gate-no-send
+	$(MAKE) gate-agent-scope
+	$(MAKE) gate-red-first
 
 secret-scan: ## No secret material and no committed environment file (FR-008, FR-042)
 	pnpm run secret-scan
@@ -104,6 +106,15 @@ gate-graph-confirm-capability: ## No MCP tool/job/route exposes graph confirm; n
 
 gate-no-send: ## No package outside the egress allowlist imports an outbound mail/SMS/chat module (009 SC-005)
 	pnpm run gate-no-send
+
+# Both are no-ops for a human-authored change set. Outside CI the author is presumed an agent
+# (FR-054, R-13) until the developer says otherwise: HEALER_AUTHOR_IDENTITY=human. red-first reads
+# the task from TASK_ID to honour an [NB] marker.
+gate-agent-scope: ## An agent-authored change set touches no protected path and no existing test assertion (FR-055)
+	pnpm run gate-agent-scope
+
+gate-red-first: ## An agent-authored change set has a test that fails on the base revision (FR-056)
+	pnpm run gate-red-first
 
 # Runner targets (012 T049/T050, contracts/make-targets.md's "Runner targets" table). Not
 # composed into `ci` above: the contract's own `ci` composition list omits them, and

@@ -95,6 +95,27 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.53.0 — 2026-10-03
+
+012 Phase 13: the author-identity resolver and the two agent gates (T084–T087). T088–T092 wait on the
+repository being under real CI with a GitHub App installed.
+
+- `scripts/gates/agent-identity.mjs`: author is an agent when the PR author **or** the triggering actor
+  is not a `User` on the GitHub API, or either cannot be resolved; outside CI an agent unless
+  `HEALER_AUTHOR_IDENTITY=human` (a declaration never counts in CI).
+- `gate-agent-scope`: for an agent-authored change set, fails on a protected path (the list is parsed from
+  the contract **at the base revision**, so a change cannot shrink it first), a deleted or renamed-away
+  test file, a removed or edited assertion line, or a test switched off with `skip`/`todo`.
+- `gate-red-first`: base revision in a temporary worktree, the change set's tests laid over it, only
+  those run; passes only if one fails. `[NB]` is read from the base's `tasks.md`, from the leading
+  markers only; the task comes from `TASK_ID`.
+- Both are in `make ci` after `gate-no-send`, no-ops for a human-authored change set. A local run needs
+  `HEALER_AUTHOR_IDENTITY=human`.
+- `scripts/lib/changed-files.mjs`: `resolveBaseRevision`, and renames report both sides.
+- Known ceilings: a gate edited in the same change set runs as edited until CI runs gates from the base
+  revision (T089/T090); a push with no pull-request payload is treated as agent-authored; any failure on
+  the base counts as red (R-14), including a missing non-test support file.
+
 ## 0.52.0 — 2026-10-03
 
 002 Phase 8 polish and the Phase-9 additions that needed nothing external.

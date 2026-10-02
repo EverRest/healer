@@ -28,6 +28,8 @@
     "gate-graph-confirm-capability": "node scripts/gates/graph-confirm-capability.mjs",
     "gate-data-model": "node scripts/gates/data-model.mjs",
     "gate-no-send": "node scripts/gates/no-send.mjs",
+    "gate-agent-scope": "node scripts/gates/agent-scope.mjs",
+    "gate-red-first": "node scripts/gates/red-first.mjs",
     "gate-coverage-completeness": "node scripts/gates/coverage-completeness.mjs",
     "deps-check": "node scripts/gates/deps-check.mjs",
     "check:evidence-coverage": "node --env-file=.env scripts/checks/evidence-coverage.mjs",
