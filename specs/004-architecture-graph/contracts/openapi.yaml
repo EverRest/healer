@@ -129,6 +129,13 @@ components:
         state: { type: string, enum: [proposed, confirmed, rejected, stale] }
         lifecycleState: { type: string, enum: [active, unobserved, unresolved, possibly_removed] }
         provenance: { $ref: '#/components/schemas/Provenance' }
+        discoveryRunId:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: 'the discovery run that produced it (FR-006); null for a human-authored node',
+          }
         attributes:
           type: object
           additionalProperties: true

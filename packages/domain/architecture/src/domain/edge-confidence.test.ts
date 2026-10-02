@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ConfidenceInput,
   DEFAULT_CONFIDENCE_CONFIG,
   deriveEdgeConfidence,
   resolveConfidenceConfig,
@@ -112,15 +113,13 @@ describe('deriveEdgeConfidence (004 T039, R-15)', () => {
   });
 
   it('takes no confidence from the caller: the input type has no such field', () => {
-    deriveEdgeConfidence(
+    const selfReported = {
+      provenance: 'derived_from_trace' as const,
+      observationCount: 5,
+      lastObservedAt: NOW,
       // @ts-expect-error a model's self-reported confidence is not an input
-      {
-        provenance: 'derived_from_trace',
-        observationCount: 5,
-        lastObservedAt: NOW,
-        confidence: 99,
-      },
-      NOW,
-    );
+      confidence: 99,
+    } satisfies ConfidenceInput;
+    expect(deriveEdgeConfidence(selfReported, NOW)).toBe(derive('derived_from_trace', 5));
   });
 });

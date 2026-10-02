@@ -25,6 +25,7 @@ import {
   type RuleBody,
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, withCorrelation } from '@healer/shared';
+import { PrismaGraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import {
   assertTenantIsolated,
@@ -163,6 +164,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       actions,
       new PrismaRunnerRegistrationRepository(prisma),
       autonomyGrants,
+      new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

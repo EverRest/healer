@@ -26,10 +26,12 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type AutonomyGrantRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import {
@@ -42,6 +44,17 @@ import type { RunnerRegistrationRepository } from './src/runners/domain/reposito
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
 
+const noopAutonomyGrants: AutonomyGrantRepository = {
+  findActive: () => Promise.resolve([]),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  create: () => Promise.reject(new Error('not implemented in this test')),
+  revoke: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopGraphReads: GraphReadRepository = {
+  listNodes: () => Promise.reject(new Error('not implemented in this test')),
+  getNode: () => Promise.reject(new Error('not implemented in this test')),
+};
 const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
@@ -110,6 +123,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
       new PrismaAutonomyGrantRepository(prisma),
+      new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -405,6 +419,8 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopPolicyDecisions,
       noopPolicyActions,
       noopRunnerRegistrations,
+      noopAutonomyGrants,
+      noopGraphReads,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

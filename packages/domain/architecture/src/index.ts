@@ -11,3 +11,5 @@ export * from './infrastructure/prisma-graph-node-repository.js';
 export * from './domain/edge-observation.js';
 export * from './infrastructure/prisma-edge-provenance-repository.js';
 export * from './domain/edge-confidence.js';
+export * from './domain/graph-read.js';
+export * from './infrastructure/prisma-graph-read-repository.js';

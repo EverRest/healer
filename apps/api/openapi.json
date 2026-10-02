@@ -429,6 +429,48 @@
         "responses": { "200": { "description": "" } },
         "tags": ["AutonomyGrants"]
       }
+    },
+    "/api/v1/graph/nodes": {
+      "get": {
+        "operationId": "GraphNodesController_list",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["GraphNodes"]
+      }
+    },
+    "/api/v1/graph/nodes/{nodeId}": {
+      "get": {
+        "operationId": "GraphNodesController_get",
+        "parameters": [
+          {
+            "name": "nodeId",
+            "required": true,
+            "in": "path",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "graphVersion",
+            "required": true,
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["GraphNodes"]
+      }
     }
   },
   "info": {
