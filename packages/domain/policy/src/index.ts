@@ -166,3 +166,10 @@ export {
   PrismaBudgetRepository,
 } from './infrastructure/prisma-budget-repository.js';
 export { PrismaBudgetLimitRepository } from './infrastructure/prisma-budget-limit-repository.js';
+// The two aggregates behind `resolve`, exported so `check:budget-reconcile` (T069) can compare
+// them against an independent recomputation from the raw rows.
+export {
+  issueConsumption as deriveIssueConsumption,
+  tenantConsumption as deriveTenantConsumption,
+  type Consumption as DerivedConsumption,
+} from './infrastructure/budget-aggregate.js';

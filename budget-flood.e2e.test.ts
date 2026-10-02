@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedIssues } from './test/budget-fixtures.js';
+import { findBudgetDiscrepancies } from './scripts/checks/budget-reconcile.mjs';
 import { startBudgetHarness, type BudgetHarness } from './test/infrastructure/budget-harness.js';
 
 /**
@@ -76,5 +77,8 @@ describe('400-issue flood (002 T065, SC-006)', () => {
     // …and the product said so on the bus exactly once per step.
     expect(await h.prisma.outbox.count({ where: { tenantId, name: 'BudgetDegraded' } })).toBe(3);
     expect(await h.prisma.outbox.count({ where: { tenantId, name: 'BudgetExhausted' } })).toBe(1);
+
+    // The reader (T069): the 400 charges left the aggregate and the rows in agreement.
+    expect(await findBudgetDiscrepancies(h.prisma)).toEqual([]);
   }, 300_000);
 });

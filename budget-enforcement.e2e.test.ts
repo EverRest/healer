@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { budgetLockKey } from '@healer/domain-policy';
+import { findBudgetDiscrepancies } from './scripts/checks/budget-reconcile.mjs';
 import { query, type StartedPostgres } from './test/containers.js';
 import {
   hold,
@@ -338,5 +339,11 @@ describe('budget enforcement (002 T056-T066, T088)', () => {
     it('refuses a scope/period pairing the product has no budget for', async () => {
       await expect(insert(2, 1, 'issue', 'tenant')).rejects.toThrow(/budget_limit_scope_period/);
     });
+  });
+
+  // The reader of everything above (T069): after all of these scenarios, the aggregate policy
+  // enforced still matches the rows it was derived from. Part of `make ci` through this file.
+  it('check:budget-reconcile finds nothing in the data these scenarios left behind', async () => {
+    expect(await findBudgetDiscrepancies(prisma)).toEqual([]);
   });
 });

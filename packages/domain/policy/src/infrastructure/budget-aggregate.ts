@@ -34,7 +34,10 @@ type Db = Prisma.TransactionClient;
 
 /** The instant a charge is keyed by (T061/T062): the run's *start*, so every step of a workflow
  *  that straddles midnight stays in the window in force when it was requested. A run the table
- *  does not know falls back to the caller's instant. */
+ *  does not know falls back to the caller's instant. (An agent run or decision that happened
+ *  *before* its workflow was started — classified at ingest, say — is keyed by its own earlier
+ *  instant: `LEAST` in the aggregates below. That is also what makes pruning the scan on
+ *  `started_at >= window.start` sound.) */
 async function pinnedInstant(db: Db, tenantId: string, query: BudgetQuery): Promise<Date> {
   if (query.workflowRunId === undefined) return query.asOf;
   const rows = await db.$queryRaw<{ started_at: Date }[]>`
@@ -98,7 +101,7 @@ async function loadLimits(
   };
 }
 
-interface Consumption {
+export interface Consumption {
   readonly spend: number;
   readonly timeMs: number;
 }
@@ -106,7 +109,7 @@ interface Consumption {
 // "Elapsed" of a run: to its last update when terminal, to the caller's instant while live.
 // Waiting on a human counts — T056 says elapsed — which is the conservative reading.
 
-async function tenantConsumption(
+export async function tenantConsumption(
   db: Db,
   tenantId: string,
   window: { start: Date; end: Date },
@@ -115,25 +118,23 @@ async function tenantConsumption(
   const [finished] = await db.$queryRaw<{ v: number }[]>`
     SELECT COALESCE(SUM(ar.cost), 0)::float8 AS v
     FROM "agent"."agent_run" ar
+    CROSS JOIN LATERAL (
+      SELECT LEAST(ar.started_at, COALESCE(min(wr.started_at), ar.started_at)) AS pinned
+      FROM "workflow"."workflow_run" wr
+      WHERE wr.tenant_id = ar.tenant_id AND wr.correlation_id = ar.correlation_id) p
     WHERE ar.tenant_id = ${tenantId}::uuid
       AND ar.started_at >= ${window.start}::timestamptz
-      AND COALESCE((SELECT min(wr.started_at) FROM "workflow"."workflow_run" wr
-                    WHERE wr.tenant_id = ar.tenant_id AND wr.correlation_id = ar.correlation_id),
-                   ar.started_at) >= ${window.start}::timestamptz
-      AND COALESCE((SELECT min(wr.started_at) FROM "workflow"."workflow_run" wr
-                    WHERE wr.tenant_id = ar.tenant_id AND wr.correlation_id = ar.correlation_id),
-                   ar.started_at) < ${window.end}::timestamptz`;
+      AND p.pinned >= ${window.start}::timestamptz AND p.pinned < ${window.end}::timestamptz`;
   const [open] = await db.$queryRaw<{ v: number }[]>`
     SELECT COALESCE(SUM((pd.budget_state->>'reservedSpend')::numeric), 0)::float8 AS v
     FROM "policy"."policy_decision" pd
+    CROSS JOIN LATERAL (
+      SELECT LEAST(pd.evaluated_at, COALESCE(min(wr.started_at), pd.evaluated_at)) AS pinned
+      FROM "workflow"."workflow_run" wr
+      WHERE wr.tenant_id = pd.tenant_id AND wr.id = pd.workflow_run_id) p
     WHERE pd.tenant_id = ${tenantId}::uuid AND pd.outcome = 'allow' AND pd.invalidated_reason IS NULL
       AND pd.evaluated_at >= ${window.start}::timestamptz
-      AND COALESCE((SELECT wr.started_at FROM "workflow"."workflow_run" wr
-                    WHERE wr.tenant_id = pd.tenant_id AND wr.id = pd.workflow_run_id),
-                   pd.evaluated_at) >= ${window.start}::timestamptz
-      AND COALESCE((SELECT wr.started_at FROM "workflow"."workflow_run" wr
-                    WHERE wr.tenant_id = pd.tenant_id AND wr.id = pd.workflow_run_id),
-                   pd.evaluated_at) < ${window.end}::timestamptz
+      AND p.pinned >= ${window.start}::timestamptz AND p.pinned < ${window.end}::timestamptz
       AND NOT EXISTS (SELECT 1 FROM "agent"."agent_run" ar
                       WHERE ar.tenant_id = pd.tenant_id AND ar.policy_decision_id = pd.id
                         AND ar.finished_at IS NOT NULL)`;
@@ -147,7 +148,7 @@ async function tenantConsumption(
   return { spend: (finished?.v ?? 0) + (open?.v ?? 0), timeMs: time?.v ?? 0 };
 }
 
-async function issueConsumption(
+export async function issueConsumption(
   db: Db,
   tenantId: string,
   issueId: string,

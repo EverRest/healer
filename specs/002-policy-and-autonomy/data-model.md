@@ -183,7 +183,11 @@ been matched by a *finished* `agent_run` (its open charge, `budget_state.reserve
 time = Σ `workflow_run` elapsed (to `updated_at` when terminal, to the evaluation instant while
 live). A tenant period is keyed by the **workflow run's start** (`workflow_run.started_at`, found
 for an agent run through `correlation_id`, for a decision through `workflow_run_id`), so a run that
-straddles midnight stays in the window in force when it was requested (T062).
+straddles midnight stays in the window in force when it was requested (T062). An agent run or
+decision that happened *before* its workflow was started (classified at ingest, say) is keyed by its
+own earlier instant — `LEAST` of the two — which is also what makes pruning the scan on
+`started_at >= window.start` sound. `check:budget-reconcile` recomputes all of the above in JS from
+the raw rows and compares it with the SQL aggregate; it found the pruning gap that `LEAST` closes.
 
 ## policy.action_limit
 
