@@ -76,6 +76,30 @@ export const SEED_POLICY_ACTIONS: readonly Omit<PolicyAction, 'introducedAt'>[] 
     mutating: false,
     owningSpec: '002',
   },
+  {
+    actionKey: 'policy.request_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.resolve_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.expire_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.revoke_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
 ];
 
 /**

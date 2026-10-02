@@ -10,6 +10,7 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
   AutonomyGrantRepository,
   BudgetLimitRepository,
   BudgetRepository,
@@ -97,6 +98,14 @@ const noopBudgetLimits: BudgetLimitRepository = {
   list: () => Promise.resolve([]),
   put: () => Promise.reject(new Error('not implemented for contract generation')),
 };
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented for contract generation')),
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+  expire: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -127,6 +136,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopAutonomyGrants,
     noopBudgets,
     noopBudgetLimits,
+    noopApprovals,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

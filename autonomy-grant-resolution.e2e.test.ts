@@ -18,7 +18,6 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
-  type ApprovalCallbackPort,
   type RuleBody,
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer/shared';
@@ -289,12 +288,37 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       decisionId = bound.decision.id;
       recordedEpoch = bound.autonomyEpoch;
       approvalId = randomUUID();
+      // A real run parked on this approval's own callback (the sweep delivers it in-transaction).
+      const runId = randomUUID();
+      await prisma.workflowRun.create({
+        data: {
+          id: runId,
+          tenantId: context.tenantId,
+          issueId: randomUUID(),
+          definitionKey: 'remediation',
+          definitionVersion: 1,
+          state: 'awaiting_approval',
+          correlationId: randomUUID(),
+          deadlineAt: new Date('2099-01-01T00:00:00Z'),
+        },
+      });
+      await prisma.workflowCallback.create({
+        data: {
+          id: randomUUID(),
+          runId,
+          tenantId: context.tenantId,
+          kind: 'approval',
+          tokenHash: randomUUID(),
+          expiresAt: new Date('2099-01-01T00:00:00Z'),
+          approvalId,
+        },
+      });
       await prisma.approvalRequest.create({
         data: {
           id: approvalId,
           tenantId: context.tenantId,
           decisionId,
-          workflowRunId: randomUUID(),
+          workflowRunId: runId,
           summary: {},
           evidenceIds: [],
           autonomyEpoch: recordedEpoch,
@@ -327,15 +351,11 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     });
 
     it('quickstart 14: the sweep resolves the request to revoked and delivers the callback promptly', async () => {
-      const delivered: string[] = [];
-      const callback: ApprovalCallbackPort = {
-        deliver: async (input) => {
-          delivered.push(input.approvalId);
-        },
-      };
-      const result = await sweepRevokedApprovals({ approvals, autonomyEpochs }, callback, context);
+      const result = await sweepRevokedApprovals({ approvals, autonomyEpochs }, context);
       expect(result.revoked.map((r) => r.id)).toEqual([approvalId]);
-      expect(delivered).toEqual([approvalId]);
+      // Delivery is inside the revoke's own transaction now: the approval's callback is consumed.
+      const callback = await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId } });
+      expect(callback.consumedAt).not.toBeNull();
 
       const swept = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approvalId } });
       expect(swept.state).toBe('revoked');

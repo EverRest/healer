@@ -1,40 +1,48 @@
-import { NotFoundError, scope, type TenantContext } from '@healer/shared';
+import { randomUUID } from 'node:crypto';
+import { scope, type TenantContext } from '@healer/shared';
 import {
   ApprovalNotPendingError,
   type ApprovalRequestRepository,
   type ApprovalRequestSummary,
 } from '../../domain/approval-request-repository.js';
-import type { ApprovalCallbackPort } from '../../domain/approval-callback-port.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
+
+export const REVOKE_APPROVAL_AUDIT_ACTION = 'policy.revoke_approval';
 
 export interface SweepRevokedApprovalsResult {
   readonly revoked: readonly ApprovalRequestSummary[];
   /** Requests that stopped being pending between the read and the write — resolved or expired
-   *  concurrently. That is the sweep working, not failing (mirrors `markStaleIssues`). */
+   *  concurrently. That is the sweep working, not failing (mirrors `markStaleIssues`). Only
+   *  `ApprovalNotPendingError` counts: a missing run, callback or request is a failure. */
   readonly skipped: number;
 }
 
 /**
  * The revocation sweep (T045, R-07, quickstart 14): resolves every outstanding `pending`
- * approval whose recorded epoch has gone stale to `revoked` and delivers the `approval`
- * callback, so a parked run reaches `needs_human` immediately rather than at its own expiry.
+ * approval whose recorded epoch has gone stale to `revoked`. The repository's `revoke` does, in
+ * the same transaction, everything the revocation means — invalidates the decision, delivers the
+ * approval's callback, moves a live run to `needs_human` and writes the audit entry — so a failed
+ * delivery rolls the revocation back and the next sweep retries it, and a parked run reaches
+ * `needs_human` immediately rather than at its own expiry.
  *
  * Correctness never depends on this running (quickstart 15): the epoch check at redemption
  * (T043/T044) already refuses a stale approval with no sweep involved — this only makes the
  * refusal *prompt*. Any failure that is not "no longer pending" is collected and the sweep still
- * processes the rest, then raises `AggregateError` at the end (same posture as
- * `markStaleIssues` — a retry is safe, and no candidate silently blocks every one behind it).
+ * processes the rest, then raises `AggregateError` at the end (a retry is safe).
+ *
+ * No production caller schedules this yet (QUESTIONS.md, "002 Phase 7").
  */
 export async function sweepRevokedApprovals(
   repos: {
     readonly approvals: ApprovalRequestRepository;
     readonly autonomyEpochs: AutonomyEpochRepository;
   },
-  callback: ApprovalCallbackPort,
   context: TenantContext,
+  now: () => Date = () => new Date(),
 ): Promise<SweepRevokedApprovalsResult> {
   const currentEpoch = await repos.autonomyEpochs.current(scope(context, {}));
   const stale = await repos.approvals.findPendingWithStaleEpoch(scope(context, { currentEpoch }));
+  const at = now();
 
   const revoked: ApprovalRequestSummary[] = [];
   const failures: unknown[] = [];
@@ -42,17 +50,29 @@ export async function sweepRevokedApprovals(
 
   for (const approval of stale) {
     try {
-      const result = await repos.approvals.revoke(
-        scope(context, { id: approval.id, decisionId: approval.decisionId }),
+      revoked.push(
+        await repos.approvals.revoke(
+          scope(context, {
+            id: approval.id,
+            decisionId: approval.decisionId,
+            now: at,
+            auditEntry: scope(context, {
+              id: randomUUID(),
+              actorType: 'system' as const,
+              actorRef: 'revocation-sweep',
+              action: REVOKE_APPROVAL_AUDIT_ACTION,
+              targetType: 'approval_request',
+              targetId: approval.id,
+              reason: `autonomy epoch moved past ${approval.autonomyEpoch}; request revoked, run moved to needs_human`,
+              evidenceIds: [],
+              policyDecisionId: approval.decisionId,
+              outcome: 'ok',
+            }),
+          }),
+        ),
       );
-      revoked.push(result);
-      await callback.deliver({
-        tenantId: context.tenantId,
-        workflowRunId: approval.workflowRunId,
-        approvalId: approval.id,
-      });
     } catch (error) {
-      if (error instanceof ApprovalNotPendingError || error instanceof NotFoundError) skipped += 1;
+      if (error instanceof ApprovalNotPendingError) skipped += 1;
       else failures.push(error);
     }
   }

@@ -10,6 +10,7 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
   AutonomyGrantRepository,
   BudgetLimitRepository,
   BudgetRepository,
@@ -89,6 +90,15 @@ const noopBudgetLimits: BudgetLimitRepository = {
   put: () => Promise.reject(new Error('not implemented in this test')),
 };
 
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented in this test')),
+  resolve: () => Promise.reject(new Error('not implemented in this test')),
+  expire: () => Promise.reject(new Error('not implemented in this test')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
+
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
  * function `health.test.ts` covers. Nothing exercised `NestFactory.create` against the actual
@@ -122,6 +132,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopAutonomyGrants,
       noopBudgets,
       noopBudgetLimits,
+      noopApprovals,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

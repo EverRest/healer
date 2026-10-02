@@ -299,7 +299,15 @@ components:
             invalidatedReason:
               type: string
               nullable: true
-              enum: [epoch_bump, approval_expired, digest_mismatch, charge_abandoned, null]
+              enum:
+                [
+                  epoch_bump,
+                  approval_expired,
+                  approval_rejected,
+                  digest_mismatch,
+                  charge_abandoned,
+                  null,
+                ]
     AutonomyGrant:
       type: object
       required: [id, actionKey, level, grantedBy, grantedAt]

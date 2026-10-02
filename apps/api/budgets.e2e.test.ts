@@ -16,6 +16,7 @@ import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer
 import {
   BUDGET_BOUNDS,
   PrismaAutonomyGrantRepository,
+  PrismaApprovalLifecycleRepository,
   PrismaBudgetLimitRepository,
   PrismaBudgetRepository,
   PrismaPolicyActionRepository,
@@ -82,6 +83,7 @@ describe('/budgets (002 T067)', () => {
       new PrismaAutonomyGrantRepository(prisma),
       new PrismaBudgetRepository(prisma),
       new PrismaBudgetLimitRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

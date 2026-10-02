@@ -6,6 +6,7 @@
 export const INVALIDATED_REASONS = [
   'epoch_bump',
   'approval_expired',
+  'approval_rejected',
   'digest_mismatch',
   // 002 T060: an allowed AI step whose run never landed, released by `releaseAbandonedCharges` so
   // its open charge stops counting against the budget.

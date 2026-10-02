@@ -121,7 +121,7 @@ write that makes revocation immediate.
 | request_key | text? | a *charged* step's idempotency key: the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step returns the decision it already minted instead of charging twice (T060) |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
-| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `digest_mismatch` · `charge_abandoned` |
+| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `digest_mismatch` · `charge_abandoned` |
 
 `UPDATE` is rejected except for `consumed_at` and `invalidated_reason` transitioning from null.
 
@@ -136,7 +136,7 @@ cooldown and attempt-cap predicates read (R-13, C-11). Index `(workflow_run_id)`
 | tenant_id | uuid | |
 | decision_id | uuid | the `require_approval` decision |
 | workflow_run_id | uuid | 012 |
-| summary | jsonb | proposed action, reason, evidence ids, impact summary, rollback plan (FR-015) |
+| summary | jsonb | proposed action, reason codes, ruleset version, target identifiers, impact summary, rollback plan (FR-015) — a **closed shape** built from the stored decision, never from caller input (`approvalSummarySchema`, T070/T071) |
 | evidence_ids | uuid[] | 001 — the approver sees the evidence, not a narrative |
 | autonomy_epoch | bigint | recorded at issue; re-checked at redemption (R-07) |
 | expires_at | timestamptz | projected onto `workflow_run.deadline_at` |
@@ -149,6 +149,55 @@ Unique `(decision_id)`. Index `(tenant_id, state, expires_at)`.
 `summary` holds identifiers and structured fields. Collected customer text never enters it: an
 approval screen that renders attacker-influenced prose is a phishing surface aimed at the one human
 whose click authorises a mutation.
+
+> Implementation notes (T070–T076). **No migration**: the table, its `(decision_id)` uniqueness and
+> the `(tenant_id, state, expires_at)` index already existed from T002.
+>
+> - *Unrepresentable, not checked.* `RequestApproval` accepts no summary from its caller. It builds
+>   one from the stored `policy_decision` (closed enums, booleans, counts) and every free-string
+>   slot must match the identifier alphabet (no whitespace), so a sentence of collected text has no
+>   slot to occupy — it fails the parse instead of being rendered. Evidence appears only as
+>   `evidence_ids`, never as an excerpt.
+> - *The ruleset version a human decided under* is the immutable `policy_decision.ruleset_version`
+>   of the decision the request is `decision_id` for; it is read through that join and written into
+>   the resolution's `audit_entry`, so there is no second column to drift from it.
+> - *Projection (R-09).* `expires_at = min(requested, run.deadline_at)` and the run's `deadline_at`
+>   is set to that value in the same transaction that creates the request, under `FOR UPDATE` on the
+>   run. With neither an expiry nor a run deadline the request is refused: nothing would fire it.
+> - *Races.* `ResolveApproval`, `ExpireApproval` and the revocation sweep all lock the request row
+>   `FOR UPDATE` and re-check `state = pending` under it; `ResolveApproval` additionally reads the
+>   tenant's `autonomy_epoch` `FOR SHARE` in the same transaction. Exactly one of resolve and
+>   expire wins; a request past `expires_at` is refused for resolution even before its tick fires.
+> - *A lapse is recorded, not evaluated.* `ExpireApproval` writes a `policy_decision` with outcome
+>   `deny`, reason `APPROVAL_EXPIRED`, **no matched rule keys**, and the original decision's input,
+>   digest and ruleset version; it also sets the original decision's
+>   `invalidated_reason = 'approval_expired'`. `check:decision-replay` skips exactly that shape
+>   (no input replays to a rule-less deny).
+> - *`check:stale-approvals`* reports a `pending` request past `expires_at` (plus a grace window), one
+>   whose run has no deadline at or after `expires_at`, one whose run is terminal or does not exist,
+>   one whose own `approval` callback is absent or already consumed, and — the other direction — a
+>   live run `awaiting` an approval that no pending request backs.
+>
+> Review follow-up (one migration, `20261003100000_approval_callback_binding`):
+>
+> - *`workflow_callback.approval_id`* (012's table, nullable, unique, no FK so 012 does not depend on
+>   002). An `approval` callback is bound to exactly one request and every delivery — resolve, expire,
+>   revoke — finds it by that key, never by run. A delivery that matches no row is an error and rolls
+>   the surrounding transaction back.
+> - *One outstanding approval per run.* `RequestApproval` refuses (`ApprovalAlreadyPendingError`,
+>   409/CONFLICT) when the locked run already has a `pending` request or is `awaiting` something other
+>   than an approval; a run whose marker is a *resolved* approval's may be re-parked. Resolving
+>   clears `awaiting`.
+> - *Decision-time epoch.* `RequestApproval` takes the epoch `evaluateAndBind` returned, records it,
+>   and refuses (`STALE_AUTONOMY_EPOCH`) if it is no longer current; it also refuses a consumed or
+>   invalidated decision, and an empty `evidence_ids`.
+> - *`rejected`* invalidates the original decision (`invalidated_reason = 'approval_rejected'`),
+>   delivers the callback and moves the run to `needs_human` (cause `human`). `ResolveApproval` locks
+>   the run and refuses (`ApprovalRunTerminalError`) when it is already terminal.
+> - *The revocation sweep* revokes, invalidates the decision, delivers the callback, moves the run to
+>   `needs_human` (cause `policy`) and writes a `policy.revoke_approval` audit entry in one transaction.
+> - *`check:decision-replay`* exempts a lapse only when an `expired` request on the same run, an
+>   original decision with `invalidated_reason = 'approval_expired'` and the same digest all exist.
 
 ## policy.budget_limit
 

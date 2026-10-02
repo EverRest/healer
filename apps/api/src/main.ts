@@ -22,12 +22,14 @@ import {
   type EvidenceRepository,
 } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaBudgetLimitRepository,
   PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type ApprovalLifecycleRepository,
   type AutonomyGrantRepository,
   type BudgetLimitRepository,
   type BudgetRepository,
@@ -74,6 +76,10 @@ import {
   BUDGET_REPOSITORY,
   BudgetsController,
 } from './policy/budgets.controller.js';
+import {
+  APPROVAL_LIFECYCLE_REPOSITORY,
+  ApprovalsController,
+} from './policy/approvals.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -124,6 +130,7 @@ export function createApiModule(
   autonomyGrants: AutonomyGrantRepository,
   budgets: BudgetRepository,
   budgetLimits: BudgetLimitRepository,
+  approvals: ApprovalLifecycleRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -136,6 +143,7 @@ export function createApiModule(
       RunnersController,
       AutonomyGrantsController,
       BudgetsController,
+      ApprovalsController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -153,6 +161,7 @@ export function createApiModule(
       { provide: AUTONOMY_GRANT_REPOSITORY, useValue: autonomyGrants },
       { provide: BUDGET_REPOSITORY, useValue: budgets },
       { provide: BUDGET_LIMIT_REPOSITORY, useValue: budgetLimits },
+      { provide: APPROVAL_LIFECYCLE_REPOSITORY, useValue: approvals },
     ],
   })
   class ApiModule {}
@@ -186,6 +195,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaAutonomyGrantRepository(prisma),
     new PrismaBudgetRepository(prisma, { log: logger }),
     new PrismaBudgetLimitRepository(prisma),
+    new PrismaApprovalLifecycleRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

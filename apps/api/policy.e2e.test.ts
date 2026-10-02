@@ -17,6 +17,7 @@ import {
   evaluateAndBind,
   publishRuleset,
   PrismaAutonomyEpochRepository,
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaBudgetLimitRepository,
   PrismaBudgetRepository,
@@ -35,6 +36,7 @@ import {
 } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { seedAgentRun, seedBase, seedIssue } from '../../test/budget-fixtures.js';
+import { seedPendingApproval } from '../../test/approval-fixture.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 
@@ -171,6 +173,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       autonomyGrants,
       budgets,
       new PrismaBudgetLimitRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -654,6 +657,52 @@ describe('/policy (002 T027-T030, T032)', () => {
         tenantB: randomUUID(),
         tenantHeader: 'X-Tenant-Id',
         createUnderA: async () => decision.id,
+        responseContainsMarker: (body, marker) =>
+          (body as { items: { id: string }[] }).items.some((item) => item.id === marker),
+      });
+    });
+  });
+
+  // T032 extended for Phase 7 (approval reads and the resolve mutation): its own note said
+  // "extend, don't rewrite, when those land". Behaviour of the endpoints is `approvals.e2e.test.ts`.
+  describe('approvals are tenant-scoped (T032, T075, FR-018, SC-008)', () => {
+    it("GET /approvals/{approvalId}: another tenant's approval id returns 404, never 403", async () =>
+      assertTenantIsolated(app, 'GET', '/api/v1/approvals/:approvalId', {
+        tenantA: randomUUID(),
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        createUnderTenant: async (tenantId) =>
+          (await seedPendingApproval(prisma, tenantId)).approval.id,
+      }));
+
+    it('POST /approvals/{approvalId}/resolve: another tenant cannot resolve it — 404, and it stays pending', async () => {
+      let approvalId = '';
+      const tenantA = randomUUID();
+      await assertTenantIsolated(app, 'POST', '/api/v1/approvals/:approvalId/resolve', {
+        tenantA,
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        requestHeaders: { 'X-Actor-Id': 'alice', 'Idempotency-Key': randomUUID() },
+        body: { resolution: 'approved' },
+        createUnderTenant: async (tenantId) => {
+          approvalId = (await seedPendingApproval(prisma, tenantId)).approval.id;
+          return approvalId;
+        },
+      });
+      // The foreign request ran after tenant A's own; had tenant B's succeeded first it would have
+      // resolved A's request as B. A's resolution (by `alice`) is what is on record.
+      const row = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approvalId } });
+      expect(row).toMatchObject({ state: 'approved', resolvedBy: 'alice', tenantId: tenantA });
+    });
+
+    it("GET /approvals: a list never contains another tenant's approvals", async () => {
+      const tenantId = randomUUID();
+      const { approval } = await seedPendingApproval(prisma, tenantId);
+      await assertTenantIsolatedList(app, 'GET', '/api/v1/approvals', {
+        tenantA: tenantId,
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        createUnderA: async () => approval.id,
         responseContainsMarker: (body, marker) =>
           (body as { items: { id: string }[] }).items.some((item) => item.id === marker),
       });
