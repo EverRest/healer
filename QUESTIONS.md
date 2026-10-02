@@ -3075,6 +3075,146 @@ T023/T030-T032 done, T035's write path done). Judgment calls, in the order a rev
   on the very next run). The digest/filter logic itself (`proposal-digest.ts`, `diff-builder.ts`'s
   `push`) is A1's own code, already mutation-checked in "004 Phase 3 — discovery run and draft (A1)".
 
+## 004 Phase 3 — sub-batch D (T033, T034, T035's check): HTTP surface, both continuous checks
+
+Scope: T033 (`POST/GET /discovery/runs`, `GET /discovery/drafts/{draftId}`, `/confirm`, `/reject`),
+T034 (`check:confirmation-actors`), and T035's remaining half (`check:graph-fact-coverage`). Built
+on `004-phase3-subbatch-b`@`37f461c` (sub-batch B's final state — T018-T032, T035's write path all
+done). Judgment calls, roughly in the order a reviewer would hit them:
+
+- **Actor identity: `X-Actor-Type` + `X-Actor-Id` + `X-Agent-Run-Id` headers, mirroring
+  `X-Tenant-Id`'s existing stub-auth convention exactly** (`discovery-http.ts`'s
+  `resolveGraphReviewActor`). `confirmDraftItems`/`rejectDraftItems` take a plain
+  `GraphReviewActor` and parse nothing themselves (sub-batch B's own note, repeated in the
+  sub-batch D brief) — this is the one place that translation happens. Same standing gap as every
+  earlier header-based identity in this app: no credential or capability registry exists yet
+  (`capabilities.ts`'s own doc comment), so a caller asserts its own actor type exactly as it
+  asserts its own tenant id today. `X-Agent-Run-Id` is required and UUID-shaped whenever
+  `X-Actor-Type: agent` — enforced at the HTTP boundary because `GraphReviewActor`'s own
+  discriminated union already makes "agent with no agentRunId" unrepresentable one layer down
+  (SC-007), so the header parser has to honour the same shape rather than silently default it.
+- **`POST /discovery/runs` only creates the `discovery_run` row (`startDiscoveryRun`) and returns
+  202 — it does not run `collectDiscovery`/`ingestDiscoveryBatch`.** Real collection needs live,
+  execution-plane adapter credentials (graph-contract.md §3: "discovery collectors run in the
+  execution plane"); `apps/api` has none and no dispatch-to-runner mechanism exists yet to hand a
+  request to a real runner (the exact same gap already named repeatedly for 012 — "directives have
+  no producer", "no registry exists for the runner image"). Building a queue/directive mechanism
+  here would be new machinery this task never asked for and nothing yet consumes. The
+  `trigger`/`sources` request body matches `contracts/openapi.yaml`'s own shape; `sources` is
+  accepted, echoed back in the response, and otherwise unused (not persisted — `discovery_run` has
+  no column for it).
+- **`runnerId` added as an optional request field, not in `contracts/openapi.yaml`'s hand-written
+  body** (`discovery.dto.ts`). Needed for a real reason, not invented for its own sake: with no
+  caller-supplied value, `discovery_run.runner_id` would be a fixed constant
+  (`UNASSIGNED_RUNNER_ID = 'control-plane'`) for every request, and the tenant-isolation rule
+  (`.claude/rules/backend-nestjs.md`) needs some real, inspectable field to prove a value scoped to
+  tenant A never lands under tenant B — `assertTenantScopedEnqueue`'s whole mechanism is "embed a
+  marker, read it back by querying for it." `trigger` is a closed enum and `sources` isn't
+  persisted, so `runnerId` was the only honest lever. Same "undocumented stub field" shape 012
+  T042's own `name` field already is.
+- **Error mapping found and fixed a real gap while wiring it: `GraphConcurrencyError` is a plain
+  `Error`, not a `HealerError`** — `confirmDraftItems`'s own version-mint race (sub-batch B's T026)
+  throws it on a genuine concurrent confirm, and without an explicit catch it would have reached the
+  HTTP boundary as an opaque 500 instead of a retryable 409. Fixed in
+  `discovery-drafts.controller.ts`'s `throwMapped`, mapped to `ConflictException` — same posture as
+  `PolicyRulesetsController`'s existing `StaleRulesetVersionError` → `ConflictException` mapping.
+  **Still true, not re-decided here**: sub-batch B's own index item 6 ("no retry loop exists yet for
+  `GraphConcurrencyError`") — this gives the caller a clean 409 to retry against, it does not retry
+  on the caller's behalf, matching `GraphConcurrencyError`'s own doc comment.
+- **`GET /discovery/drafts/{draftId}` and the two write methods reuse the plain `confirmDraftItems`/
+  `rejectDraftItems` command functions directly — no new application-layer wrapper for the reads.**
+  `DiscoveryRepository` gained `listRuns`/`getDraft` (two plain read methods, same shape as every
+  other repository's `list`/`findById` in this app) rather than a second query-handler layer;
+  matches `IssuesController`/`PolicyDecisionsController`'s own precedent of controllers calling a
+  repository directly for a `GET`, with no intervening command object, since neither of those
+  reads mutates anything a command's own guarantees would need to wrap.
+- **`scripts/gates/graph-confirm-capability.mjs`: `apps/api/src` moved from `STRICT_SCAN_ROOTS`
+  into the same "legitimate once capped" treatment `COMMANDS_DIR_PATTERN`/`ARCHITECTURE_INFRA_DIR`
+  already get**, walked wholesale via a new `API_CAPPED_SCAN_ROOTS`. Two real incidental matches
+  surfaced immediately once the whole tree was in scope, both fixed rather than silenced with a
+  dummy reference:
+  - `discovery.dto.ts`'s `confirmDraftItemsRequestSchema`/`rejectDraftItemsRequestSchema` names
+    matched the confirm pattern with no other reason for that file to import the capability — moved
+    both schemas into `discovery-drafts.controller.ts` itself (the file that already references the
+    capability for a real reason), rather than adding a second, dummy reference to a pure-DTO file.
+  - `openapi.ts`'s `noopDraftReview` stub has `confirmDraftItems`/`rejectDraftItems` methods purely
+    because `DraftReviewRepository`'s interface requires them — added a `void
+    GRAPH_CONFIRM_CAPABILITY;` reference with a comment, the exact precedent
+    `PrismaDraftReviewRepository`'s own constructor already set for "this file legitimately carries
+    confirm-shaped identifiers without enforcing anything itself."
+  - Gate's header comment and `specs/012-engineering-foundation/contracts/make-targets.md`'s two
+    `gate-graph-confirm-capability` descriptions updated to match — the old wording ("no MCP tool,
+    worker job or API route exposes a graph confirmation path") was no longer true the moment a real
+    route landed.
+  - `graph-confirm-capability.test.ts` extended per the task's own four-part proof: the real
+    controller file passes as written; a synthetic confirm-shaped route under `apps/api/src` with
+    no capability reference fails; a live mutation round-trip against the real file on disk (strip
+    the import and both `void` references, confirm the gate fails for the right reason, restore
+    byte-for-byte via `afterEach`); and a regression check that `apps/mcp-server/src`/
+    `apps/worker/src` stay unconditionally strict (a confirm-shaped match there still fails even
+    when it references the capability — no escape hatch, unchanged) plus a direct proof that
+    `collectStrictSurfaceFiles()` no longer walks `apps/api/src` at all.
+- **`check:confirmation-actors`/`check:graph-fact-coverage` initially added as `package.json`
+  scripts only, deliberately NOT wired into the `Makefile`/`make ci`**, despite the sub-batch
+  brief's own instruction to add them there. Checked first: none of the five existing checks in
+  this exact family (`check:policy-coverage`, `check:evidence-coverage`, `check:decision-replay`,
+  `check:append-only`, `check:expired-evidence`) appear anywhere in the `Makefile` or in
+  `specs/012-engineering-foundation/contracts/make-targets.md`'s `make ci` composition list —
+  `policy-coverage.mjs`'s own header comment says plainly: "designed to run continuously (a
+  cron/monitoring job later, out of scope here), same posture as `check:evidence-coverage` and
+  `check:decision-replay`." `tasks.md` itself names every check in this family — T034, T040, T071,
+  T079, T084 alike — "**Continuous check**", the identical label the five existing ones already
+  carry, not "gate". Flagged rather than guessed at silently, per AGENTS.md ("if a document and
+  the code disagree, say so and ask which is stale"), **and Pavlo answered directly: wire both
+  in anyway** — see the index item below for what that actually took (a real `--env-file`-vs-
+  `DATABASE_URL` gap, not just a Makefile edit) and the full `make ci` result.
+- **`check:confirmation-actors`'s query reads `audit.audit_entry` directly — there is no
+  `graph_audit_entry` table.** `graph-audit-entry.ts`'s own header comment already says
+  `NewGraphAuditEntry` mirrors the shared table locally rather than importing a second one; checked
+  this before writing the query, per the task's own instruction. There is also no
+  `outcome = 'confirmed'` value — `audit_entry.outcome` is a plain `'ok' | 'refused'` regardless of
+  action. Two violation shapes instead: a direct `architecture.draft_item.confirm` / `outcome='ok'`
+  / non-human-actor row (SC-002), and a `draft_item` with `state='confirmed'` whose confirming audit
+  trail (joined via the resulting `graph_node`/`graph_edge` id `confirmDraftItems` backfills onto
+  `target_node_id`/`target_edge_id` — the T018 migration's own comment names this exact join as
+  "how `check:confirmation-actors` walks from a confirmed graph row back to its deciding human")
+  either doesn't exist or names a non-human actor (SC-003 — a confirmed item not reachable by that
+  audited path is indistinguishable from one discovery itself somehow wrote).
+- **`check:graph-fact-coverage`'s query treats a `mark_removed` absence row as ordinary
+  coverage, no special case** — read `mark-removed.ts` and `prisma-discovery-repository.ts`'s
+  `ingestBatch` before writing the query, per the task's own instruction: `where.absenceEvidence`
+  rows are inserted with `type: 'graph_fact'`, identical to every positively-observed shape, so the
+  plain "does this `observation_ref` resolve to a `graph_fact` evidence row" check needs no
+  branching for them and produces no false positive against real passing state.
+- **Mutation checks performed and reported** (red-for-the-right-reason, then restored byte-for-
+  byte): both new check scripts' core predicate (`confirmation-actors.mjs`'s `actor_type <>
+  'human'` inverted; `graph-fact-coverage.mjs`'s `IS NOT NULL` inverted), and the
+  `graph-confirm-capability.mjs` gate change itself (the live round-trip against the real
+  controller file, described above).
+- **Full verification run**: `typecheck`, `lint`, `format-check`, `build`, `test-unit` (862 tests,
+  120 files, all green — the two new check scripts are proven only by their own e2e tests, same as
+  `policy-coverage.mjs` itself, which also carries no unit coverage), `gate-coverage-completeness`,
+  `gate-graph-confirm-capability`, `contracts-check` (against the regenerated `apps/api/openapi.json`),
+  `gate-isolation`, `gate-data-model`, `gate-architecture-agnostic`, `gate-evidence`, `gate-undo`,
+  `gate-no-send`, `deps-check`, `db-check`, plus a regression pass over 19 existing architecture/
+  evidence/policy e2e files (144 tests) and all 8 `apps/api/*createApiModule*` call sites (132
+  tests across 11 files). `make ci`/`test-e2e` in full and integration are the coordinator's next
+  step, per this batch's own instruction not to run them here.
+- **Pre-existing bug found and fixed in passing: `apps/api/policy.e2e.test.ts`'s `createApiModule(
+  ...)` call was missing the `runnerRegistrations` argument entirely** (11 args where the function
+  needs 12) — invisible to `pnpm run typecheck` because this file lives at the app root, outside
+  `apps/api/tsconfig.json`'s `include: ["src/**/*"]`, the exact gap QUESTIONS.md "012 phase 6"
+  already names for every root-level `*.e2e.test.ts` in this app. Harmless until now only because
+  that suite never calls `/runners/*`; fixed directly (one import, one argument) rather than left
+  for whoever next touches that file to trip over, since it was directly adjacent to the 8-call-site
+  change this task already required.
+- **`@healer/domain-architecture` added as a declared dependency in `apps/api/package.json` and a
+  project reference in `apps/api/tsconfig.json`**, not left to resolve only via pnpm's workspace
+  hoisting — the exact "phantom dependency" gap already flagged (and left unfixed, out of scope)
+  for `@healer/domain-policy` in the same file (QUESTIONS.md "012 phase 6", second rebase section).
+  Did not fix `@healer/domain-policy`'s own pre-existing gap — out of scope for this task, flagged
+  there already, not mine to fix as a drive-by.
+
 ## Decisions waiting on Pavlo — 004 Phase 3 (index; detail in the named sections above)
 
 1. **Once Phase 7 exists, does a contradiction of a confirmed element go to drift *instead of* the
@@ -3100,12 +3240,47 @@ T023/T030-T032 done, T035's write path done). Judgment calls, in the order a rev
    second concrete instance: sub-batch B's `adapterKey: 'human'`/`adapterVersion: 'confirmation'`
    stand-in for a human-confirmed edge's own `edge_provenance` row. Two independent sub-batches
    improvising the same workaround is a signal this is worth resolving once, not twice more.
-6. **No retry loop exists yet for `GraphConcurrencyError` from `confirmDraftItems`** — a caller
-   (T033's HTTP route, or whatever calls this in-process) gets a clean, catchable "re-read and retry"
-   signal but has to build the retry itself, unlike `publishRuleset`'s self-retrying pattern in 002.
-   Not built because nothing in T026's scope asked for a retrying caller; flagging in case T033 wants
-   one.
+6. ~~No retry loop exists yet for `GraphConcurrencyError` from `confirmDraftItems`~~ — **T033
+   landed (sub-batch D)**: `discovery-drafts.controller.ts` now maps it to a plain `409 Conflict`
+   (`ConflictException`), same posture as `publishRuleset`'s own `StaleRulesetVersionError`
+   mapping, but still does **not** retry on the caller's behalf — `GraphConcurrencyError`'s own doc
+   comment says that's deliberate. Whether the HTTP caller (a human retrying in a UI, presumably)
+   needs this automated is still open; not decided here.
 7. ~~Does `audit_entry.before`/`.after` deserve the mirror update in 001's own `data-model.md`~~ —
    done: added to `specs/001-issue-and-evidence/data-model.md`'s own `audit.audit_entry` section,
    matching T018's precedent for `evidence.issue_id`. Removed from this index, kept struck through
    rather than deleted so the "did I check this" trail stays visible.
+8. ~~Should `check:confirmation-actors`/`check:graph-fact-coverage` (T034, T035) be wired into
+   `make ci`~~ — **Pavlo's call (2026-10-02): yes, wire both in, overriding the 5-check
+   precedent.** Done: `Makefile` (two new targets, added to `ci` right after `gate-no-send`) and
+   `specs/012-engineering-foundation/contracts/make-targets.md` (composition block, focused-
+   targets list, gate-semantics table). Wiring this in surfaced a real gap neither of us caught
+   until actually running it: both checks' `package.json` entries used `node --env-file=.env`,
+   which hard-fails with `node: .env: not found` when no `.env` exists — and nothing else `make
+   ci` runs has ever needed a live, persistent `DATABASE_URL` (every other DB-touching step is
+   either static analysis or an ephemeral testcontainers instance), so this was the first time
+   `make ci` as a whole depended on one. Fixed: both entries use `--env-file-if-exists=.env`
+   instead, falling back to whatever `DATABASE_URL` is already in the real process environment.
+   Verified for real: started the local dev Postgres (`docker compose -f
+   docker/docker-compose.yml up -d --wait`), ran `prisma migrate deploy` against it, ran both
+   `make check-confirmation-actors`/`check-graph-fact-coverage` directly — both pass (0
+   violations, as expected against an empty-but-migrated database) — then ran the full `make ci`
+   with `DATABASE_URL` exported for the session. Left the other 5 checks' `package.json` entries
+   on hard `--env-file=.env`, unchanged: they are not in `ci` and keep their existing manual/
+   cron-invoked convention, so this asymmetry is deliberate, not an oversight.
+   **Full `make ci` result**: every step passed except the one already-known, already-decided
+   flaky test — `apps/runner/runner-image.e2e.test.ts`'s "genuinely drains an in-flight heartbeat
+   before exiting on SIGTERM" (the exact test QUESTIONS.md's own "T049/T050 landed" section
+   documents across five prior fix attempts and Pavlo's own 2026-09-30 decision to stop iterating
+   locally and treat it as this shared machine's contention, not a logic bug). Re-ran that one
+   file alone per instruction before concluding it was transient: failed again, identically
+   ("container still running after 120s"), and `docker stats` at the time showed two unrelated,
+   CPU-heavy Kubernetes-in-Docker containers from other projects on this machine (`devops-control-
+   plane` at 40% CPU/707 PIDs, `autoscaler-control-plane` at 24%/295 PIDs) — independent
+   corroboration of the exact root cause already on record, not a new regression and nothing
+   touched by this sub-batch. `make`'s own `ci` target aborts its recursive-invocation chain at
+   the first failure (`test-e2e`), so every step after it (`contracts-check` through
+   `check-graph-fact-coverage`) never got a chance to run inside that one invocation; ran all ten
+   of them individually afterward against the same live Postgres — every one passes. Not re-fixing
+   the runner-image test a sixth time, consistent with the standing decision; flagging the fresh
+   evidence rather than silently re-running until it got lucky.
