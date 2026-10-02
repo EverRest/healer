@@ -1,3 +1,4 @@
+import { validateEgress } from '@healer/boundary-contract';
 import { describe, expect, it } from 'vitest';
 import { createOtelAdapter } from './otel-adapter.js';
 import { createDesignPartnerOtelReader } from '../test-support/design-partner.js';
@@ -44,5 +45,39 @@ describe('createOtelAdapter (A2, FR-020, contracts/graph-contract.md §3)', () =
       createOtelAdapter(reader).collect({ ...scope, signal: controller.signal }),
     ).rejects.toThrow();
     expect(calls).toEqual([]);
+  });
+
+  it('forwards the collect scope signal into the serviceEdges call, not only checking it between steps', async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const reader = {
+      async serviceEdges(_windowSeconds: number, signal?: AbortSignal) {
+        seenSignal = signal;
+        return [];
+      },
+    };
+    await createOtelAdapter(reader).collect({ ...scope, signal: controller.signal });
+    expect(seenSignal).toBe(controller.signal);
+  });
+
+  it('normalises an edge timestamp with no timezone offset to an offset-qualified ISO string', async () => {
+    const reader = {
+      async serviceEdges() {
+        return [
+          {
+            fromService: 'frontend',
+            toService: 'backend',
+            spanCount: 7,
+            firstSeen: '2026-09-01T00:00:00',
+            lastSeen: '2026-09-30T00:00:00+02:00',
+          },
+        ];
+      },
+    };
+    const facts = await createOtelAdapter(reader).collect(scope);
+    const [observation] = facts.dependencyObservations;
+    expect(observation?.firstObservedAt).toBe('2026-09-01T00:00:00.000Z');
+    expect(observation?.lastObservedAt).toBe('2026-09-29T22:00:00.000Z');
+    expect(validateEgress(observation).ok).toBe(true);
   });
 });

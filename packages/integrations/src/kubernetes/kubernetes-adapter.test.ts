@@ -1,3 +1,4 @@
+import { validateEgress } from '@healer/boundary-contract';
 import { describe, expect, it } from 'vitest';
 import { createKubernetesAdapter } from './kubernetes-adapter.js';
 import { createDesignPartnerKubernetesReader } from '../test-support/design-partner.js';
@@ -62,5 +63,40 @@ describe('createKubernetesAdapter (A2, FR-020, contracts/graph-contract.md §3)'
       createKubernetesAdapter(reader).collect({ ...scope, signal: controller.signal }),
     ).rejects.toThrow();
     expect(calls).toEqual([]);
+  });
+
+  it('forwards the collect scope signal into the listWorkloads call, not only checking it between steps', async () => {
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    const reader = {
+      async listWorkloads(signal?: AbortSignal) {
+        seenSignal = signal;
+        return [];
+      },
+    };
+    await createKubernetesAdapter(reader).collect({ ...scope, signal: controller.signal });
+    expect(seenSignal).toBe(controller.signal);
+  });
+
+  it('normalises a lastDeployedAt with no timezone offset to an offset-qualified ISO string', async () => {
+    const reader = {
+      async listWorkloads() {
+        return [
+          {
+            namespace: 'production',
+            kind: 'Deployment',
+            name: 'backend',
+            labels: {},
+            annotations: {},
+            image: 'registry.example.com/design-partner/backend:1.4.2',
+            lastDeployedAt: '2026-09-01T00:00:00',
+          },
+        ];
+      },
+    };
+    const facts = await createKubernetesAdapter(reader).collect(scope);
+    const [candidate] = facts.deploymentUnitCandidates;
+    expect(candidate?.lastDeployedAt).toBe('2026-09-01T00:00:00.000Z');
+    expect(validateEgress(candidate).ok).toBe(true);
   });
 });
