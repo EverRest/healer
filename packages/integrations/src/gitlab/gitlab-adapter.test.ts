@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createGitlabAdapter } from './gitlab-adapter.js';
+import type { GitlabProjectReader } from './gitlab-adapter.js';
 import { createDesignPartnerGitlabReader } from '../test-support/design-partner.js';
 
 const scope = { tenantId: 'tenant-1', runnerId: 'runner-1' };
@@ -97,5 +98,26 @@ describe('createGitlabAdapter (A2, FR-020, contracts/graph-contract.md §3)', ()
       createGitlabAdapter(reader).collect({ ...scope, signal: controller.signal }),
     ).rejects.toThrow();
     expect(calls).toEqual([]);
+  });
+
+  it('forwards the collect scope signal into every reader call (project/listFiles/readFile), not only checking it between steps', async () => {
+    const controller = new AbortController();
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    const reader: GitlabProjectReader = {
+      async project(signal) {
+        seenSignals.push(signal);
+        return { projectRef: 'x', defaultBranch: 'main', headSha: 'abc', headCommitMessage: 'm' };
+      },
+      async listFiles(signal) {
+        seenSignals.push(signal);
+        return ['apps/a/package.json'];
+      },
+      async readFile(_path, signal) {
+        seenSignals.push(signal);
+        return JSON.stringify({ name: 'a' });
+      },
+    };
+    await createGitlabAdapter(reader).collect({ ...scope, signal: controller.signal });
+    expect(seenSignals).toEqual([controller.signal, controller.signal, controller.signal]);
   });
 });

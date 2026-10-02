@@ -36,10 +36,38 @@ function typeProofNeverCalled(): void {
 }
 void typeProofNeverCalled;
 
+/**
+ * The three `@ts-expect-error` probes above only prove that *these particular* write-shaped names
+ * aren't callable — a method named `deleteFile` would pass undetected (review finding). This is
+ * the broader, name-agnostic proof: each port's key set is EXACTLY the given method names, not
+ * merely "has at least these" (plain `extends` is satisfied by a wider type too, so it wouldn't
+ * catch an addition). `Equals` is the standard distributive-conditional-on-a-bare-type-parameter
+ * trick for true type equality in TypeScript.
+ */
+type Equals<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+type GitlabKeysExact = Equals<keyof GitlabProjectReader, 'project' | 'listFiles' | 'readFile'>;
+type KubernetesKeysExact = Equals<keyof KubernetesReader, 'listWorkloads'>;
+type TraceKeysExact = Equals<keyof TraceReader, 'serviceEdges'>;
+
+// If a method (ANY method — `deleteFile`, `patchWorkload`, anything) were ever added to one of
+// these interfaces, its `Equals<...>` above would evaluate to `false`, and assigning `true` to a
+// `false`-typed binding below fails `tsc --build` — not a name-specific probe, a structural one.
+const gitlabKeysExact: GitlabKeysExact = true;
+const kubernetesKeysExact: KubernetesKeysExact = true;
+const traceKeysExact: TraceKeysExact = true;
+
 describe('discovery ports are read-only by construction (A2, FR-022)', () => {
   it('compiles only because the stubs above satisfy the real read-only interfaces', () => {
     expect(gitlabReader).toBeDefined();
     expect(kubernetesReader).toBeDefined();
     expect(traceReader).toBeDefined();
+  });
+
+  it('compiles only because each port exposes exactly its read method(s), nothing more', () => {
+    expect(gitlabKeysExact).toBe(true);
+    expect(kubernetesKeysExact).toBe(true);
+    expect(traceKeysExact).toBe(true);
   });
 });
