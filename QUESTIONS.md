@@ -2997,3 +2997,19 @@ Recorded, not coded (coordinator's calls):
   deliberately: they are admin/control writes, not guarded actions; flipping them to `true` would
   make the check flag every approval audit entry (each links a non-`allow`, non-consumed decision)
   as a missing consumed ALLOW. Left as is.
+
+## Decisions waiting on Pavlo — 002 phases 6–7 (index; detail in "002 Phase 6 (T056–T069)" and "002 Phase 7 (T070–T076)" above)
+
+1. Nothing in 002 turns an `approved` request into an `ALLOW`, and a `require_approval` decision
+   reserves no budget charge — so an approved step that runs without re-evaluation could overshoot
+   a budget. Which spec owns the redemption path (008/010), and does redemption re-charge?
+2. Nothing schedules `expireDueApprovals`, the revocation sweep, `releaseAbandonedCharges`,
+   `check:stale-approvals` or `check:budget-reconcile` in production — T072/T073/T076 are ticked as
+   mechanisms with that gap named. Fold into C-90 (tenant enumerator + repeatable schedule), or
+   un-tick until it lands?
+3. T058b and T066b are un-ticked: who owns the workflow suspension on `BUDGET_EXHAUSTED`, the
+   producer of the `escalating` state and the hand-off package (006/008/012)?
+4. Approval migration `20261003100000` adds a column to 012's `workflow_callback` table — does 012's
+   owner accept that, or should the binding move?
+5. `agent_run.cost` has no provenance column and nothing writes `agent_run` yet, so
+   `check:budget-reconcile` cannot prove a cost was measured, only refuse visible estimates.

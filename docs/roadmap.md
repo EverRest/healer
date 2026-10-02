@@ -192,8 +192,8 @@ needed combining by hand across every e2e test file that boots the real app, che
 call site this time rather than waiting for a full e2e run to find the one that got missed (012's
 own 0.47.0 entry already hit exactly that gap once).
 
-Next: **002 phases 5–7** (reversible-action governance — blocked on 010's catalogue, budgets,
-approvals) and **a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR —
+Next: **002 phase 5** (reversible-action governance — blocked on 010's catalogue; phases 6–7 landed
+in 0.50.0) and the consumers phases 6–7 left unbuilt (T058b, T066b, the sweep/tick scheduler of C-90) and **a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR —
 the first CI/CD pipeline this repo will have). 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
 (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub
