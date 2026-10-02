@@ -14,9 +14,11 @@ import {
   type DiscoverySourceRequest,
   type RepositoryRef,
   PrismaDiscoveryRepository,
+  PrismaDraftReviewRepository,
   collectDiscovery,
   ingestDiscoveryBatch,
   proposalDigest,
+  rejectDraftItems,
   runDiscovery,
   startDiscoveryRun,
 } from '@healer/domain-architecture';
@@ -62,6 +64,7 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
   let pg: StartedPostgres;
   let prisma: PrismaClient;
   let repo: PrismaDiscoveryRepository;
+  let reviewRepo: PrismaDraftReviewRepository;
 
   beforeAll(async () => {
     pg = await startPostgres();
@@ -70,6 +73,7 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     await prisma.$connect();
     repo = new PrismaDiscoveryRepository(prisma);
+    reviewRepo = new PrismaDraftReviewRepository(prisma);
   }, 180_000);
 
   afterAll(async () => {
@@ -1010,6 +1014,224 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
       // confidence.ts: derived_from_code -> 60, derived_from_trace -> 70. Genuinely different.
       await runOnce('gitlab-reject', 'derived_from_code');
       await runOnce('otel-reject', 'derived_from_trace');
+    });
+  });
+
+  // ─────────────────── T022: a rejected edge survives re-discovery and new trace volume ───────────────────
+
+  describe('T022: reject an edge, re-run discovery twice — not re-raised either time (FR-011, R-08)', () => {
+    const TENANT_ID = '00000000-0000-0000-8000-0000000d0009';
+    const CONTEXT = TenantContext.forTrustedInternalUse(TENANT_ID);
+
+    const components: ComponentCandidate[] = [
+      {
+        kind: 'component_candidate',
+        naturalKey: 't022-a',
+        name: 't022-a',
+        componentType: 'service',
+        characteristics: [],
+        sourcePaths: [],
+        adapterKey: 'gitlab-t022',
+        adapterVersion: '1.0.0',
+      },
+      {
+        kind: 'component_candidate',
+        naturalKey: 't022-b',
+        name: 't022-b',
+        componentType: 'service',
+        characteristics: [],
+        sourcePaths: [],
+        adapterKey: 'gitlab-t022',
+        adapterVersion: '1.0.0',
+      },
+    ];
+    const edgeObservation = (
+      observationCount: number,
+      lastObservedAt: string,
+    ): DependencyObservation => ({
+      kind: 'dependency_observation',
+      fromNaturalKey: 't022-a',
+      toNaturalKey: 't022-b',
+      edgeType: 'depends_on',
+      layer: 'code',
+      provenance: 'derived_from_code',
+      observationCount,
+      firstObservedAt: lastObservedAt,
+      lastObservedAt,
+      windowSeconds: 3600,
+    });
+
+    const sourcesWith = (observation: DependencyObservation): DiscoverySourceRequest[] => [
+      {
+        requested: true,
+        adapter: fakeAdapter('gitlab-t022', 'code', 'derived_from_code', async () => ({
+          ...emptyFacts,
+          componentCandidates: components,
+          dependencyObservations: [observation],
+        })),
+      },
+    ];
+
+    it('is not re-raised on the next run, nor on a third run after trace volume moves', async () => {
+      const firstDraft = await withCorrelation('corr-t022-first', () =>
+        runDiscovery(repo, CONTEXT, {
+          trigger: 'manual',
+          runnerId: 'runner-1',
+          sources: sourcesWith(edgeObservation(1, new Date().toISOString())),
+          perSourceTimeoutMs: 5000,
+          itemCap: 1000,
+        }),
+      );
+      expect(firstDraft).not.toBeNull();
+      const firstItems = await prisma.draftItem.findMany({
+        where: { tenantId: TENANT_ID, draftId: firstDraft!.draftId },
+      });
+      const edgeItem = firstItems.find((i) => i.op === 'add_edge');
+      expect(edgeItem).toBeDefined();
+
+      await withCorrelation('corr-t022-reject', () =>
+        rejectDraftItems(reviewRepo, CONTEXT, {
+          draftId: firstDraft!.draftId,
+          itemIds: [edgeItem!.id],
+          actor: { actorType: 'human', actorRef: 'human:reviewer' },
+          reason: 'not a real dependency',
+        }),
+      );
+
+      const secondDraft = await withCorrelation('corr-t022-second', () =>
+        runDiscovery(repo, CONTEXT, {
+          trigger: 'manual',
+          runnerId: 'runner-1',
+          sources: sourcesWith(edgeObservation(1, new Date().toISOString())),
+          perSourceTimeoutMs: 5000,
+          itemCap: 1000,
+        }),
+      );
+      expect(secondDraft).not.toBeNull();
+      const secondItems = await prisma.draftItem.findMany({
+        where: { tenantId: TENANT_ID, draftId: secondDraft!.draftId },
+      });
+      expect(secondItems.some((i) => i.op === 'add_edge')).toBe(false);
+
+      // Trace volume moved (observationCount 1 -> 412, a new lastObservedAt) — digest excludes
+      // both (ProposedPayload for add_edge carries no such field at all), so still not re-raised.
+      const thirdDraft = await withCorrelation('corr-t022-third', () =>
+        runDiscovery(repo, CONTEXT, {
+          trigger: 'manual',
+          runnerId: 'runner-1',
+          sources: sourcesWith(
+            edgeObservation(412, new Date(Date.now() + 86_400_000).toISOString()),
+          ),
+          perSourceTimeoutMs: 5000,
+          itemCap: 1000,
+        }),
+      );
+      expect(thirdDraft).not.toBeNull();
+      const thirdItems = await prisma.draftItem.findMany({
+        where: { tenantId: TENANT_ID, draftId: thirdDraft!.draftId },
+      });
+      expect(thirdItems.some((i) => i.op === 'add_edge')).toBe(false);
+    });
+  });
+
+  // ─────────────────────── T024: a changed proposal reappears as a new proposal ───────────────────────
+
+  describe('T024: re-run after the proposed edge type changes — raised as a new proposal (R-08)', () => {
+    const TENANT_ID = '00000000-0000-0000-8000-0000000d000a';
+    const CONTEXT = TenantContext.forTrustedInternalUse(TENANT_ID);
+
+    const components: ComponentCandidate[] = [
+      {
+        kind: 'component_candidate',
+        naturalKey: 't024-a',
+        name: 't024-a',
+        componentType: 'service',
+        characteristics: [],
+        sourcePaths: [],
+        adapterKey: 'gitlab-t024',
+        adapterVersion: '1.0.0',
+      },
+      {
+        kind: 'component_candidate',
+        naturalKey: 't024-b',
+        name: 't024-b',
+        componentType: 'service',
+        characteristics: [],
+        sourcePaths: [],
+        adapterKey: 'gitlab-t024',
+        adapterVersion: '1.0.0',
+      },
+    ];
+    const edgeObservation = (
+      edgeType: DependencyObservation['edgeType'],
+    ): DependencyObservation => {
+      const now = new Date().toISOString();
+      return {
+        kind: 'dependency_observation',
+        fromNaturalKey: 't024-a',
+        toNaturalKey: 't024-b',
+        edgeType,
+        layer: 'code',
+        provenance: 'derived_from_code',
+        observationCount: 1,
+        firstObservedAt: now,
+        lastObservedAt: now,
+        windowSeconds: 3600,
+      };
+    };
+    const sourcesWith = (observation: DependencyObservation): DiscoverySourceRequest[] => [
+      {
+        requested: true,
+        adapter: fakeAdapter('gitlab-t024', 'code', 'derived_from_code', async () => ({
+          ...emptyFacts,
+          componentCandidates: components,
+          dependencyObservations: [observation],
+        })),
+      },
+    ];
+
+    it('rejecting depends_on does not suppress the same edge proposed as calls', async () => {
+      const firstDraft = await withCorrelation('corr-t024-first', () =>
+        runDiscovery(repo, CONTEXT, {
+          trigger: 'manual',
+          runnerId: 'runner-1',
+          sources: sourcesWith(edgeObservation('depends_on')),
+          perSourceTimeoutMs: 5000,
+          itemCap: 1000,
+        }),
+      );
+      const firstItems = await prisma.draftItem.findMany({
+        where: { tenantId: TENANT_ID, draftId: firstDraft!.draftId },
+      });
+      const edgeItem = firstItems.find((i) => i.op === 'add_edge');
+      expect(edgeItem).toBeDefined();
+      expect((edgeItem!.proposed as { edgeType: string }).edgeType).toBe('depends_on');
+
+      await withCorrelation('corr-t024-reject', () =>
+        rejectDraftItems(reviewRepo, CONTEXT, {
+          draftId: firstDraft!.draftId,
+          itemIds: [edgeItem!.id],
+          actor: { actorType: 'human', actorRef: 'human:reviewer' },
+          reason: 'wrong edge type',
+        }),
+      );
+
+      const secondDraft = await withCorrelation('corr-t024-second', () =>
+        runDiscovery(repo, CONTEXT, {
+          trigger: 'manual',
+          runnerId: 'runner-1',
+          sources: sourcesWith(edgeObservation('calls')), // the type changed
+          perSourceTimeoutMs: 5000,
+          itemCap: 1000,
+        }),
+      );
+      expect(secondDraft).not.toBeNull();
+      const secondItems = await prisma.draftItem.findMany({
+        where: { tenantId: TENANT_ID, draftId: secondDraft!.draftId },
+      });
+      const reraised = secondItems.find((i) => i.op === 'add_edge');
+      expect(reraised).toBeDefined(); // raised as a new proposal — the digest differs on edgeType
+      expect((reraised!.proposed as { edgeType: string }).edgeType).toBe('calls');
     });
   });
 
