@@ -74,6 +74,17 @@ Every contributing observation for an edge, so a merged edge stays inspectable (
 The denormalised `strength` and `confidence` on `graph_edge` are the maximum over these rows;
 keeping them on the edge is what lets the traversal stay a single self-join.
 
+Unique `(tenant_id, edge_id, observation_ref)`: an observation is recorded at most once per edge, so a
+job that runs twice cannot double-count `graph_edge.observation_count` (004 T038). The merge path
+locks the edge row (`SELECT ... FOR UPDATE`) before inserting, because the trigger that maintains the
+maximum computes it from a statement snapshot and two unserialised writers would lower the edge.
+There is no `actor_ref` and no validity range here: human classes never enter through this table.
+
+### architecture.confidence_config
+
+`tenant_id` (PK), `config` jsonb (only the overridden R-15 constants), `updated_at`. A tenant with no
+row uses the defaults in `domain/edge-confidence.ts`. Read at write time only (004 T039).
+
 ## Kind attributes
 
 Keyed by `graph_node.id`, one row each. Nothing here is traversed.

@@ -8,3 +8,6 @@ export * from './domain/read-envelope.js';
 export * from './domain/events.js';
 export * from './domain/capabilities.js';
 export * from './infrastructure/prisma-graph-node-repository.js';
+export * from './domain/edge-observation.js';
+export * from './infrastructure/prisma-edge-provenance-repository.js';
+export * from './domain/edge-confidence.js';

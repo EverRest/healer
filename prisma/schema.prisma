@@ -1478,6 +1478,8 @@ model EdgeProvenance {
   edge GraphEdge @relation(fields: [edgeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([tenantId, edgeId])
+  // Replay key: one observation is recorded at most once per edge (004 T038).
+  @@unique([tenantId, edgeId, observationRef])
   @@map("edge_provenance")
   @@schema("architecture")
 }
@@ -1588,6 +1590,18 @@ model FlowAttr {
   @@unique([nodeId, tenantId])
   @@index([tenantId])
   @@map("flow_attr")
+  @@schema("architecture")
+}
+
+/// Per-tenant overrides of the R-15 confidence constants (004 T039); only the overridden knobs
+/// are stored. Validated and merged over the default by `domain/edge-confidence.ts`. The PK leads
+/// on `tenant_id`, which is the tenant-leading index rule.
+model ConfidenceConfig {
+  tenantId  String   @id @map("tenant_id") @db.Uuid
+  config    Json     @default("{}")
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("confidence_config")
   @@schema("architecture")
 }
 
