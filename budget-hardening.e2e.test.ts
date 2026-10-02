@@ -327,7 +327,7 @@ describe('budget hardening (review fixes)', () => {
       });
       try {
         const started = Date.now();
-        const pending = h.bind(t.ctx, 1);
+        const pending = h.bindOnce(t.ctx, 1);
         await waitForBlocked(h.pg, 1, holder);
         await expect(pending).rejects.toThrow(BudgetContentionError);
         expect(Date.now() - started).toBeLessThan(BUDGET_LOCK_WAIT_MS + 5_000);

@@ -25,6 +25,9 @@ import {
  * cap), T088 (the bounds bind a direct write too). The degradation evidence record (T064) and the
  * 400-issue flood (T065) are `budget-degradation.e2e.test.ts` and `budget-flood.e2e.test.ts`.
  */
+// An escalating proposal: the one the escalation cap applies to (T066).
+const ESCALATING = { escalation: { attemptCount: 0, escalating: true } } as const;
+
 describe('budget enforcement (002 T056-T066, T088)', () => {
   let h: BudgetHarness;
   let pg: StartedPostgres;
@@ -284,18 +287,23 @@ describe('budget enforcement (002 T056-T066, T088)', () => {
         startedAt: '2026-10-02T11:00:00Z',
       });
 
-      await seedTransition(pg, tenantId, run.id, 'escalating');
-      expect((await bind(ctx, 1, { workflowRunId: run.id })).decision.outcome).toBe('allow');
+      const escalate = () => bind(ctx, 1, { workflowRunId: run.id }, NOON, ESCALATING);
+      const ordinary = () => bind(ctx, 1, { workflowRunId: run.id });
 
       await seedTransition(pg, tenantId, run.id, 'escalating');
-      const stopped = await bind(ctx, 1, { workflowRunId: run.id });
+      expect((await escalate()).decision.outcome).toBe('allow');
+
+      await seedTransition(pg, tenantId, run.id, 'escalating');
+      const stopped = await escalate();
       expect(stopped.decision.outcome).toBe('deny');
-      expect(stopped.decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+      expect(stopped.decision.reasonCodes).toContain('ESCALATION_CAP_REACHED');
+      // the cap bounds escalation, not the run: a non-escalating step is still allowed
+      expect((await ordinary()).decision.outcome).toBe('allow');
 
       // other states do not count as escalation
       await seedTransition(pg, tenantId, run.id, 'collecting');
       await setLimit(ctx, { spendLimit: 100, escalationAttemptCap: 3 });
-      expect((await bind(ctx, 1, { workflowRunId: run.id })).decision.outcome).toBe('allow');
+      expect((await escalate()).decision.outcome).toBe('allow');
     });
 
     it('an unconfigured tenant runs on the fail-closed default cap, never an unbounded one', async () => {
@@ -308,8 +316,8 @@ describe('budget enforcement (002 T056-T066, T088)', () => {
       });
       await seedTransition(pg, tenantId, run.id, 'escalating');
       await seedTransition(pg, tenantId, run.id, 'escalating');
-      const decided = await bind(ctx, 0.1, { workflowRunId: run.id });
-      expect(decided.decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+      const decided = await bind(ctx, 0.1, { workflowRunId: run.id }, NOON, ESCALATING);
+      expect(decided.decision.reasonCodes).toContain('ESCALATION_CAP_REACHED');
     });
   });
 

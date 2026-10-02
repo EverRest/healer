@@ -14,6 +14,9 @@ import {
   publishRuleset,
   putBudgetLimit,
   SEED_POLICY_ACTIONS,
+  BudgetContentionError,
+  type DecisionBinding,
+  type DecisionInput,
   type EvaluateAndBindRepos,
   type PutBudgetLimitCommand,
   type RuleBody,
@@ -96,10 +99,33 @@ export async function startBudgetHarness() {
       ...overrides,
     });
 
-  const bind = (ctx: TenantContext, declared: number, binding: Binding = {}, at: Date = NOON) =>
+  /** One evaluation, no retry — what a test of the contention bound itself needs. */
+  const bindOnce = (
+    ctx: TenantContext,
+    declared: number,
+    binding: DecisionBinding = {},
+    at: Date = NOON,
+    overrides: Partial<DecisionInput> = {},
+  ) =>
     withCorrelation(randomUUID(), () =>
-      evaluateAndBind(repos, ctx, { decisionInput: decisionInput(declared, at), binding }),
+      evaluateAndBind(repos, ctx, {
+        decisionInput: decisionInput(declared, at, overrides),
+        binding,
+      }),
     );
+
+  /** What a job does: retry a charge that lost the bounded lock wait (BudgetContentionError is
+   *  retryable by contract). A box running a dozen database containers at once is exactly where a
+   *  5 s bound is reached; a real queue retries, and so does the harness. */
+  const bind: typeof bindOnce = async (...args) => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await bindOnce(...args);
+      } catch (error) {
+        if (!(error instanceof BudgetContentionError) || attempt >= 20) throw error;
+      }
+    }
+  };
 
   const resolve = (ctx: TenantContext, q: Binding = {}, at = NOON) =>
     budgets.resolve(scope(ctx, { ...q, asOf: at }));
@@ -117,6 +143,7 @@ export async function startBudgetHarness() {
     newTenant,
     setLimit,
     bind,
+    bindOnce,
     resolve,
     tenantDay,
     stop: async () => {
