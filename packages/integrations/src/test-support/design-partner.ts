@@ -21,6 +21,32 @@ function recordCall(calls: RecordedCall[], method: string, args: readonly unknow
   calls.push({ method, args });
 }
 
+/**
+ * Resolves `value` one microtask later — standing in for the real I/O a runner-side HTTP client
+ * will eventually do — while actually honouring `signal`: an abort fired after this is called but
+ * before that microtask runs rejects the pending promise instead of resolving it, exactly as a real
+ * `fetch(url, { signal })` would be cancelled mid-flight. Not just a pre-call `aborted` check (that
+ * part is `scope.signal?.throwIfAborted()` in the adapters) — this is what proves a reader call that
+ * is actually in flight can be interrupted, the gap the coordinator's review flagged.
+ */
+function abortable<T>(value: T, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+  }
+  if (!signal) return Promise.resolve(value);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    queueMicrotask(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(value);
+    });
+  });
+}
+
 /** Appears verbatim in the fixture's README and one source file — T030 asserts it never appears
  *  in anything the three adapters emit; never treat it as anything but an inert test string. */
 export const DESIGN_PARTNER_FILE_MARKER = 'DESIGN_PARTNER_FILE_MARKER_9f2c81';
@@ -90,26 +116,29 @@ export function createDesignPartnerGitlabReader(
   const calls: RecordedCall[] = [];
   const files = designPartnerFiles(overrides.fileOverrides ?? {});
   const reader: GitlabProjectReader = {
-    async project() {
+    project(signal?: AbortSignal) {
       recordCall(calls, 'project');
-      return {
-        projectRef: 'design-partner/monorepo',
-        defaultBranch: 'main',
-        headSha: 'a1b2c3d4e5f6headsha',
-        headCommitMessage: overrides.headCommitMessage ?? DESIGN_PARTNER_COMMIT_MESSAGE,
-      };
+      return abortable(
+        {
+          projectRef: 'design-partner/monorepo',
+          defaultBranch: 'main',
+          headSha: 'a1b2c3d4e5f6headsha',
+          headCommitMessage: overrides.headCommitMessage ?? DESIGN_PARTNER_COMMIT_MESSAGE,
+        },
+        signal,
+      );
     },
-    async listFiles() {
+    listFiles(signal?: AbortSignal) {
       recordCall(calls, 'listFiles');
-      return Object.keys(files);
+      return abortable(Object.keys(files), signal);
     },
-    async readFile(path: string) {
+    readFile(path: string, signal?: AbortSignal) {
       recordCall(calls, 'readFile', [path]);
       const content = files[path];
       if (content === undefined) {
-        throw new Error(`design-partner fixture has no file at ${path}`);
+        return Promise.reject(new Error(`design-partner fixture has no file at ${path}`));
       }
-      return content;
+      return abortable(content, signal);
     },
   };
   return { reader, calls };
@@ -166,9 +195,9 @@ export function createDesignPartnerKubernetesReader(
     overrides.annotationValue ?? DESIGN_PARTNER_ANNOTATION_VALUES.backend,
   );
   const reader: KubernetesReader = {
-    async listWorkloads() {
+    listWorkloads(signal?: AbortSignal) {
       recordCall(calls, 'listWorkloads');
-      return workloads;
+      return abortable(workloads, signal);
     },
   };
   return { reader, calls };
@@ -202,9 +231,9 @@ export function createDesignPartnerOtelReader(): DesignPartnerOtelFixture {
   const calls: RecordedCall[] = [];
   const edges = designPartnerServiceEdges();
   const reader: TraceReader = {
-    async serviceEdges(windowSeconds: number) {
+    serviceEdges(windowSeconds: number, signal?: AbortSignal) {
       recordCall(calls, 'serviceEdges', [windowSeconds]);
-      return edges;
+      return abortable(edges, signal);
     },
   };
   return { reader, calls };

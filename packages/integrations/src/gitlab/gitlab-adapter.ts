@@ -16,15 +16,15 @@ import type {
  * method is read-only by construction: there is no write method on this interface to call.
  */
 export interface GitlabProjectReader {
-  project(): Promise<{
+  project(signal?: AbortSignal): Promise<{
     readonly projectRef: string;
     readonly defaultBranch: string;
     readonly headSha: string;
     readonly headCommitMessage: string;
   }>;
   /** Repository-relative paths only — never contents (FR-021, FR-026). */
-  listFiles(): Promise<readonly string[]>;
-  readFile(path: string): Promise<string>;
+  listFiles(signal?: AbortSignal): Promise<readonly string[]>;
+  readFile(path: string, signal?: AbortSignal): Promise<string>;
 }
 
 const GITLAB_ADAPTER_KEY = 'gitlab';
@@ -100,7 +100,7 @@ async function readManifests(
   const gaps: CollectionGap[] = [];
   for (const path of paths) {
     scope.signal?.throwIfAborted();
-    const content = await reader.readFile(path);
+    const content = await reader.readFile(path, scope.signal);
     scope.signal?.throwIfAborted();
     const manifest = parseManifest(path, content);
     if (manifest === 'unparsable') {
@@ -175,9 +175,9 @@ export function createGitlabAdapter(reader: GitlabProjectReader) {
     provenance: GITLAB_PROVENANCE,
     async collect(scope: DiscoveryScope): Promise<DiscoveryFacts> {
       scope.signal?.throwIfAborted();
-      const project = await reader.project();
+      const project = await reader.project(scope.signal);
       scope.signal?.throwIfAborted();
-      const files = await reader.listFiles();
+      const files = await reader.listFiles(scope.signal);
       scope.signal?.throwIfAborted();
 
       const manifestPaths = files.filter(

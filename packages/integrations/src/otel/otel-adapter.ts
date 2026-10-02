@@ -15,7 +15,7 @@ export interface ServiceEdge {
 }
 
 export interface TraceReader {
-  serviceEdges(windowSeconds: number): Promise<readonly ServiceEdge[]>;
+  serviceEdges(windowSeconds: number, signal?: AbortSignal): Promise<readonly ServiceEdge[]>;
 }
 
 const OTEL_ADAPTER_KEY = 'otel';
@@ -27,6 +27,22 @@ const OTEL_PROVENANCE = 'derived_from_trace';
 // caller ever needs a different window than this adapter default.
 const DEFAULT_WINDOW_SECONDS = 86_400;
 
+const HAS_ZONE_DESIGNATOR = /(Z|[+-]\d{2}:?\d{2})$/;
+
+/** The wire schema requires an offset-qualified ISO datetime (`z.string().datetime({ offset: true
+ *  })`); a real trace backend can hand back a bare `2026-10-01T00:00:00` with no zone. A bare value
+ *  is assumed UTC and given one explicitly — `new Date('2026-10-01T00:00:00')` alone would parse it
+ *  as the *host's* local time (ECMA-262's rule for a zone-less date-time string), which would make
+ *  this adapter's output depend on the machine it runs on; OTLP timestamps are always UTC, so that
+ *  assumption is safe here. A value that already carries a zone is just reformatted. An unparsable
+ *  value is passed through unchanged and left for egress validation to reject (`schema_rejected`)
+ *  rather than dropped here. */
+function toOffsetIso(value: string): string {
+  const withZone = HAS_ZONE_DESIGNATOR.test(value) ? value : `${value}Z`;
+  const parsed = new Date(withZone);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
 function toCallsObservation(edge: ServiceEdge, windowSeconds: number): DependencyObservation {
   return {
     kind: 'dependency_observation',
@@ -36,8 +52,8 @@ function toCallsObservation(edge: ServiceEdge, windowSeconds: number): Dependenc
     layer: OTEL_LAYER,
     provenance: OTEL_PROVENANCE,
     observationCount: edge.spanCount,
-    firstObservedAt: edge.firstSeen,
-    lastObservedAt: edge.lastSeen,
+    firstObservedAt: toOffsetIso(edge.firstSeen),
+    lastObservedAt: toOffsetIso(edge.lastSeen),
     windowSeconds,
   };
 }
@@ -58,7 +74,7 @@ export function createOtelAdapter(
     provenance: OTEL_PROVENANCE,
     async collect(scope: DiscoveryScope): Promise<DiscoveryFacts> {
       scope.signal?.throwIfAborted();
-      const edges = await reader.serviceEdges(windowSeconds);
+      const edges = await reader.serviceEdges(windowSeconds, scope.signal);
       scope.signal?.throwIfAborted();
 
       return {

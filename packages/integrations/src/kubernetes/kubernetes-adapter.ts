@@ -17,7 +17,7 @@ export interface KubernetesWorkload {
 }
 
 export interface KubernetesReader {
-  listWorkloads(): Promise<readonly KubernetesWorkload[]>;
+  listWorkloads(signal?: AbortSignal): Promise<readonly KubernetesWorkload[]>;
 }
 
 const KUBERNETES_ADAPTER_KEY = 'kubernetes';
@@ -34,6 +34,22 @@ function imageTag(image: string): string {
   return afterSlash.slice(colon + 1) || 'unknown';
 }
 
+const HAS_ZONE_DESIGNATOR = /(Z|[+-]\d{2}:?\d{2})$/;
+
+/** The wire schema requires an offset-qualified ISO datetime (`z.string().datetime({ offset: true
+ *  })`); a real Kubernetes API can hand back a bare `2026-10-01T00:00:00` with no zone. A bare
+ *  value is assumed UTC and given one explicitly — `new Date('2026-10-01T00:00:00')` alone would
+ *  parse it as the *host's* local time (ECMA-262's rule for a zone-less date-time string), which
+ *  would make this adapter's output depend on the machine it runs on; Kubernetes always reports in
+ *  UTC, so that assumption is safe here. A value that already carries a zone is just reformatted.
+ *  An unparsable value is passed through unchanged and left for egress validation to reject
+ *  (`schema_rejected`, graph-contract.md §3's own documented outcome) rather than dropped here. */
+function toOffsetIso(value: string): string {
+  const withZone = HAS_ZONE_DESIGNATOR.test(value) ? value : `${value}Z`;
+  const parsed = new Date(withZone);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
 function toDeploymentUnitCandidate(workload: KubernetesWorkload): DeploymentUnitCandidate {
   const runtimeRef = `${workload.namespace}/${workload.kind}/${workload.name}`;
   const candidate: DeploymentUnitCandidate = {
@@ -45,7 +61,7 @@ function toDeploymentUnitCandidate(workload: KubernetesWorkload): DeploymentUnit
     currentVersion: imageTag(workload.image),
   };
   return workload.lastDeployedAt
-    ? { ...candidate, lastDeployedAt: workload.lastDeployedAt }
+    ? { ...candidate, lastDeployedAt: toOffsetIso(workload.lastDeployedAt) }
     : candidate;
 }
 
@@ -85,7 +101,7 @@ export function createKubernetesAdapter(reader: KubernetesReader) {
     provenance: KUBERNETES_PROVENANCE,
     async collect(scope: DiscoveryScope): Promise<DiscoveryFacts> {
       scope.signal?.throwIfAborted();
-      const workloads = await reader.listWorkloads();
+      const workloads = await reader.listWorkloads(scope.signal);
       scope.signal?.throwIfAborted();
 
       const observedAt = new Date().toISOString();
