@@ -18,6 +18,7 @@ import type {
   PolicyDecisionRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import type { GraphReadRepository } from '@healer/domain-architecture';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
 
@@ -79,6 +80,10 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented for contract generation')),
   findByName: () => Promise.resolve(null),
 };
+const noopGraphReads: GraphReadRepository = {
+  listNodes: () => Promise.reject(new Error('not implemented for contract generation')),
+  getNode: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 const noopAutonomyGrants: AutonomyGrantRepository = {
   findActive: () => Promise.resolve([]),
   findById: () => Promise.resolve(null),
@@ -137,6 +142,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopBudgets,
     noopBudgetLimits,
     noopApprovals,
+    noopGraphReads,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

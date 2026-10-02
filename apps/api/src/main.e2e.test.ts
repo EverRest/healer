@@ -18,6 +18,7 @@ import type {
   PolicyDecisionRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import type { GraphReadRepository } from '@healer/domain-architecture';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
 
@@ -71,6 +72,10 @@ const noopPolicyActions: PolicyActionRepository = {
 const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
+};
+const noopGraphReads: GraphReadRepository = {
+  listNodes: () => Promise.reject(new Error('not implemented in this test')),
+  getNode: () => Promise.reject(new Error('not implemented in this test')),
 };
 const noopAutonomyGrants: AutonomyGrantRepository = {
   findActive: () => Promise.resolve([]),
@@ -133,6 +138,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopBudgets,
       noopBudgetLimits,
       noopApprovals,
+      noopGraphReads,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

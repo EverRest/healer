@@ -95,6 +95,65 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.52.0 — 2026-10-03
+
+002 Phase 8 polish and the Phase-9 additions that needed nothing external.
+
+- `gate-ceiling` gains its FR-008a **diff half**: a change that raises a level in `ACTION_CEILING`
+  (or gives a level to a class that has none, `merge` being the one that matters) fails unless it
+  cites `// derivation[<class>]: <run-id>` resolving to a committed `docs/derivations/<run-id>.json`
+  whose digest matches its own content. Unresolvable means fail; a citation already present at the
+  base does not earn a second raise. Same gate, same harness — no second diffing mechanism.
+- `POST /autonomy/grants` for a `reversible_remediation` action returns `422 UNDO_NOT_ATTESTED`
+  rather than the generic `CEILING_EXCEEDED`; grant errors now carry `code` in the body.
+- `IssueStateChanged` consumer: unconsumed allows bound to a terminal `workflow_run` become
+  `invalidated_reason = 'run_terminal'`.
+- Measured against the plan: evaluation p95 0.03 ms (budget 20 ms); budget aggregate p95 18.7 ms at
+  10 000 agent runs (budget 50 ms). Policy coverage 98.55% lines / 95.95% functions against the 95%
+  floor.
+- Still open: Phase 5 (010's catalogue), T082, T084, T085, and the full quickstart run (T081).
+
+## 0.51.0 — 2026-10-03
+
+004 architecture-graph phases 4 and 5 (T036–T052): every edge says where it came from and how
+sure it is, and one model holds a monolith, microservices or serverless without a special case.
+Phase 3 (discovery and confirmation, T018–T035) is **not** part of this release — it is still on
+unmerged branches, so nothing here is called by a discovery run yet.
+
+- **Provenance merge (T036–T038).** The same edge from traces and from AST is one `graph_edge` with
+  both `edge_provenance` rows kept; strength and confidence are the maximum, read from the stored
+  ordinal, never derived at read time. The merge locks the edge row (`FOR UPDATE`) — the race is
+  proved with a held-open transaction polled through `pg_stat_activity`, and removing the lock fails
+  it on every trial. Human provenance classes cannot be passed to the merge (type-level).
+- **Derived confidence (T039).** From provenance class, the edge's aggregate observation volume and
+  recency against an explicit observation window, per-tenant configuration in the new
+  `confidence_config` table (migration `20261003070000`). A single observation is capped; an invalid
+  override throws instead of falling back.
+- **Continuous checks (T040).** `check:graph-provenance` and `check:edge-strength-max` (strength,
+  confidence, observation count, last-observed and class against the provenance rows), plus
+  `check:graph-structure` (illegal edge endpoints, `natural_key` collisions, dangling edges).
+- **Node reads (T041).** `GET /graph/nodes` and `/graph/nodes/{nodeId}` with class, strength,
+  confidence, the observation or named actor and the producing run; one RepeatableRead snapshot per
+  read; another tenant's node is a 404. `createApiModule` gained a trailing `graphReads` parameter.
+- **One model for any architecture (T042–T049, T051–T052).** Structural separations are edges
+  (`deploys`, `built_from`, `contains`, `implements`, `exposes`) validated by a fail-closed rule
+  table; the component vocabulary is declared once and pinned to the Prisma enums; no column or
+  result field can describe an architecture style. `GetSystemContext` returns components,
+  deployment units, repositories, characteristics and edges, identical in shape across the three
+  fixtures. An unmatched deployment unit becomes an `external` component; a `natural_key` shared
+  across repositories is surfaced as a collision, never merged.
+- **`gate-architecture-agnostic` (T050)** now fails on any architecture-style term outside
+  `packages/integrations/**` (path pattern), after review showed the first, branch-line version
+  missed wrapped conditions, aliases and lookup-table dispatch. It is textual: a style built by
+  concatenation or held in config is invisible to it.
+
+Found by review before merge: a lost update when the founding insert preceded the row lock (caught
+only by mutating the lock out); confidence that never rose with accumulated observations; a
+`validateEdge` that accepted unknown edge types; a gate that passed on code it could not see.
+
+Not built: Phases 6–9 (blast radius, drift, product graph, polish). Open decisions for Pavlo are
+items 3–6 under "Decisions waiting on Pavlo — 004" in `QUESTIONS.md`.
+
 ## 0.50.0 — 2026-10-03
 
 **002 phases 6–7 — budgets and approvals** (T056–T076, T088). Built by two parallel implementers,
@@ -1697,22 +1756,3 @@ Specification: agent-driven development (012 US10). No code.
 Verified: `typecheck`, `lint`, `format-check` and 48 unit tests green. Not verified: the compose
 stack and the migration were never applied — the Docker daemon was not running — so `test-e2e` has
 not been executed. Recorded in 012's tasks.md rather than left implicit.
-
-## 0.51.0 — 2026-10-02
-
-002 Phase 8 polish and the Phase-9 additions that needed nothing external.
-
-- `gate-ceiling` gains its FR-008a **diff half**: a change that raises a level in `ACTION_CEILING`
-  (or gives a level to a class that has none, `merge` being the one that matters) fails unless it
-  cites `// derivation[<class>]: <run-id>` resolving to a committed `docs/derivations/<run-id>.json`
-  whose digest matches its own content. Unresolvable means fail; a citation already present at the
-  base does not earn a second raise. Same gate, same harness — no second diffing mechanism.
-- `POST /autonomy/grants` for a `reversible_remediation` action returns `422 UNDO_NOT_ATTESTED`
-  rather than the generic `CEILING_EXCEEDED`; grant errors now carry `code` in the body.
-- `IssueStateChanged` consumer: unconsumed allows bound to a terminal `workflow_run` become
-  `invalidated_reason = 'run_terminal'`.
-- Measured against the plan: evaluation p95 0.03 ms (budget 20 ms); budget aggregate p95 18.7 ms at
-  10 000 agent runs (budget 50 ms). Policy coverage 98.55% lines / 95.95% functions against the 95%
-  floor.
-- Still open: Phase 5 (010's catalogue), T082, T084, T085, and the full quickstart run (T081).
-

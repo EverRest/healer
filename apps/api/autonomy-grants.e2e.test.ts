@@ -22,6 +22,7 @@ import {
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
 } from '@healer/domain-policy';
+import { PrismaGraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import {
   assertTenantIsolated,
@@ -88,6 +89,7 @@ describe('/autonomy/grants (002 T046)', () => {
       new PrismaBudgetRepository(prisma),
       new PrismaBudgetLimitRepository(prisma),
       new PrismaApprovalLifecycleRepository(prisma),
+      new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -2365,6 +2365,30 @@ rather than reading the code alone. Results:
    `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
    found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
    instead of duplicating, since the dependency already runs that direction). No longer open.
+3. **`graph_fact` evidence has no home for a discovery run that is not about an issue.**
+   `evidence.issue_id` is `NOT NULL` (001), while FR-027/`PersistGraphFacts` (T035) writes one
+   `graph_fact` row per discovery shape and discovery runs are tenant-scoped, not issue-scoped.
+   `check:graph-provenance` (T040) now requires `observation_ref` to resolve to an `evidence` row of
+   the same tenant, so whoever builds T035 must either relax `issue_id` for `graph_fact` or pick a
+   per-tenant holder issue — a schema decision, not mine to take from T036-T041. Not blocking T036-T041
+   (the merge path takes already-formed observations).
+4. **Direction resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87 (R-04a is right; `edge_provenance` gains `actor_ref`/`observation_ref` and a `valid_from`/`valid_to` range in the first phase that needs a human-authored edge). The interim rule below stays until then, then is replaced by an exact version filter.** Pinned graph reads and `edge_provenance` — the R-04a vs data-model.md disagreement, decided
+   interim. R-04a says `edge_provenance` carries a validity range; data-model.md and the
+   migrations say it does not, so a provenance row has no version of its own. Interim rule (do not
+   treat as settled): a read pinned to `graphVersion` v returns only `edge_provenance` rows with
+   `recorded_at <=` that version's minted time (`graph_version.created_at`), and shows class,
+   strength, confidence and observation of the strongest of those rows (a max of stored values,
+   never a recompute from configuration). Cost: the pin follows wall-clock minting time rather
+   than a stored version number, so a row backfilled with an old `recorded_at` would appear in a
+   past version. Owner of the decision: whoever settles R-04a (a `valid_from_version` on
+   `edge_provenance` would make this exact). Unpinned reads show all rows.
+5. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
+   `component | deployment_unit -> endpoint`; confirm or narrow it. Not blocking — one table entry in
+   `structural-edges.ts`. See "004 T036-T052 — judgment calls", Split B.
+6. **Where may architecture-specific logic live: "adapters and discovery" (FR-020) or only
+   `packages/integrations/**` (T050, graph-contract §3)?** The gate follows T050 and additionally
+   exempts directories named `adapters/`/`discovery/`. Pick one and amend the other text. Not
+   blocking. See "004 T036-T052 — judgment calls", T049-T050.
 
 ## 004 T012–T015 — judgment calls
 
@@ -3026,7 +3050,189 @@ changed in this batch (the only lockfile diff is master's own 0.49.0 `@healer/do
 It passed in run 3 and fails when run alone; the cause is not established — treat as a pre-existing
 012 T050 environmental failure, not caused by 002 phases 6–7.
 
-## 002 Phase 8 polish + T083/T086/T087 (0.51.0)
+## 004 T036-T052 — judgment calls
+
+### Split B (T042-T048, T051, T052 — Phase 5 / US3)
+
+- **No migration.** `component_attr`, `deployment_unit_attr`, `repository_attr`, `endpoint_attr` and
+  their enums already exist from T002, and `characteristics` is `text[]`. T044/T045 are domain
+  types + validators + a repository; T046 is endpoint-kind rules over existing edges.
+- **One authority for the closed lists = `packages/domain/architecture/src/domain/graph-vocabulary.ts`.**
+  The Prisma enums are the database mirror; `graph-vocabulary.test.ts` parses `prisma/schema.prisma`
+  and fails when they differ (that test is the reader). `boundary-contract` keeps these as plain
+  strings (zero workspace deps, ADR 0001) — unchanged.
+- **Characteristics vocabulary is a value, not an env var or table.** `parseCharacteristicVocabulary(raw)`
+  validates a config-supplied list (snake_case, unique, non-empty; throws at start-up);
+  `DEFAULT_CHARACTERISTICS` is data-model's six plus `event_driven`. Nothing wires per-tenant or
+  env-driven extension yet — that composition-root wiring belongs with the API/discovery work (no
+  `shared/config` or `apps/api` edit here, both off-limits to this split).
+- **T004's fixtures used `user-facing`/`event-driven`, not in data-model's `user_facing` list.**
+  T048's all-fixtures-validate test was red on exactly that; fixtures now use `user_facing` /
+  `event_driven`. T047 itself was already satisfied by T004's loader (three fixtures); no
+  `external`-component fixture was added because T004's e2e asserts every component is `built_from`
+  a repository, which an `external` component (T051) deliberately is not.
+- **`exposes` endpoint rule is not specified anywhere.** Chose `component | deployment_unit ->
+  endpoint` (a unit or component that serves an endpoint). `implements` is `endpoint -> component`
+  (data-model). `calls`, `depends_on`, `serves_feature` are left unconstrained by this task.
+- **Readers (which guarantee has a production consumer).**
+  - *Wired:* `check:graph-structure` (`scripts/checks/graph-structure.mjs`, `pnpm run
+    check:graph-structure`, own file, own package.json line — not in Split A's check files) calls
+    `listEdgeEndpointViolations` and `listNaturalKeyCollisions` for every tenant and fails on any
+    result. Covers T046's endpoint-kind rules and T052's collisions.
+  - *Pending Phase 3 (no write path exists on master):* the confirmation write path calling
+    `validateEdge` and `validateComponentAttr` before writing; the discovery/draft step calling
+    `placeDeploymentUnit` (T051 has no production caller today) and `detectNaturalKeyCollisions`
+    for the human disambiguation; the composition root calling `parseCharacteristicVocabulary`
+    (T044). Not a DB trigger: T046 is "no migration".
+- **"External component" = `graph_node.node_kind = 'component'` with `component_type = 'external'`**
+  (plus characteristic `third_party`), not `node_kind = 'external'` (which is a separate kind in the
+  schema, meant for external systems). `placeDeploymentUnit` reuses the unit's natural key for the
+  component; its `deploys` edge endpoints are `{ kind, naturalKey }` pairs (`component` ->
+  `deployment_unit`), so from/to are distinguishable and `validateEdge` is asserted on the
+  placement's own output rather than hard-coded kinds (review M5). It throws on an empty unit key
+  or name or an empty matched key (pass `null` for "no match").
+- **Collision definition (T052, tightened after review):** two or more DISTINCT component ids
+  sharing a canonical key (`trim().toLowerCase()`; candidates keep the key as written). Scope tag
+  `cross_repository` (2+ repositories across the group), `same_repository`, or `unrepositoried`
+  (some member has no repository and the group spans at most one). Entries are merged by
+  `componentId` first, so one component listed once per repository never collides with itself.
+  Output is candidates only; there is no merge function. The repository only considers open,
+  non-rejected components and edges.
+- **Kind-attribute validation:** optional text fields accept `undefined | null | non-blank string`
+  (trimmed); any other type is a validation error, never silently null; whitespace-only required
+  text is rejected. `validateEdge` is a total, fail-closed table over `EdgeType` (`calls`,
+  `depends_on`, `serves_feature` are explicitly `'unconstrained'`); unknown types are refused.
+- **Attribute writes require a live node:** `assertNode` demands the node be open
+  (`valid_to_version = 2147483647`) and not `rejected`, else not-found. Reads are not so filtered.
+- **Fixtures gained one `endpoint` each** (`api-route`, `orders-route`, `checkout-route`), with an
+  `implements` and an `exposes` edge, so every structural edge type is exercised by the query set;
+  T004's invariants (every component built_from and deployed) are unaffected because endpoints are
+  not components.
+### T049-T050
+
+- **`GetSystemContext` and `GET /graph/nodes` share one unpinned version scope**
+  (`infrastructure/graph-version-scope.ts`: current version, validity window, the `OPEN_VERSION`
+  sentinel). The context is unpinned only (the envelope states the version); a pin is YAGNI until
+  006/008 ask. `PrismaGraphReadRepository.resolve` was touched only to call the helper.
+- **Rejected elements are left out of `SystemContext`**, unlike `GET /graph/nodes`, which shows
+  every state: an agent handed context should not reason about a component a human rejected.
+  `proposed`/`stale` stay, with `state` shown (FR-016); the state type cannot hold `rejected`.
+  Edges appear only when both endpoints are among the three node lists.
+- **Coverage is context-scoped**, not graph-wide, so it can differ from `GET /graph/nodes`.
+  `excludedEdges` counts the open, non-rejected edges dropped for an endpoint that is rejected,
+  closed or of another kind (edges to `endpoint` nodes make it nonzero in every fixture).
+  `check:graph-structure` fails on an open edge whose endpoint is rejected or closed — that
+  case is a defect, the endpoint-kind case is not.
+- **The architecture-agnostic rule is "no style term outside `packages/integrations/**`", not
+  "no style branch".** A branch-line heuristic was bypassed by aliases, object dispatch,
+  `.includes()` and multi-line conditions, so the gate flags any banned term in comment-stripped,
+  identifier-split code (camelCase, acronyms, `_`/`-`, plurals) across every JS/TS source file in
+  `packages/**` and `apps/**`, minus declarations and tests. Strings are scanned (comments are
+  not). Residual weakness: it is textual — a style spelled by concatenation or held in config data
+  is invisible to it — and the term list is a vocabulary, not a proof. It fails closed if a scan
+  root yields no files and reports the scanned count. No real file outside the integrations
+  adapters names a style today; breaking the exemption makes the real tree fail.
+- **Open spec mismatch (for Pavlo, item 6 below):** FR-020 allows architecture-specific logic in
+  "adapters and discovery"; T050 and `graph-contract.md` exempt only `packages/integrations/**`.
+  The gate follows T050, except that a directory literally named `adapters/` or `discovery/`
+  stays exempt for style terms (the original 012 T032 behaviour, kept so its tests stay green);
+  `infrastructure/` is exempt for our own stack only.
+
+### Split A (T036-T041, US2: provenance merge, derived confidence, checks, node reads)
+
+- **Human provenance does not enter the merge path (R-04a vs data-model.md).** Followed
+  `data-model.md` and migrations T002/T011: `edge_provenance` has no validity range and no
+  `actor_ref`; humans author `graph_node`/`graph_edge` directly. Enforced by type:
+  `EdgeObservation.provenance` is `MachineProvenanceClass` (the closed list minus the two human
+  classes, derived by `Exclude`, so there is still one authority), proven by a `@ts-expect-error`
+  test. `check:graph-provenance` reports a human-class *edge* as a violation because nothing can
+  name its actor (item 1 of the decisions list stays open).
+- **The max-maintenance trigger is lossy under a race, so the merge locks the edge row.** Measured
+  in a scratch container: a held-open writer inserts a strength-50 `edge_provenance` row; a second
+  writer's 40 row, computed from a statement snapshot that cannot see the first, overwrites the
+  edge back to 40 with no error. The merge does `SELECT ... FOR UPDATE` on the open edge row
+  before any insert (READ COMMITTED, no SERIALIZABLE needed). Proven by
+  `graph-edge-merge-race.e2e.test.ts` (holder transaction polled via `pg_stat_activity`, 10
+  trials) and mutation-checked: with the lock removed the same test fails every trial (10 of 10) with
+  "expected 40 to be 50". A first draft that founded the edge with `INSERT ... ON CONFLICT` BEFORE
+  locking passed the race test with the lock removed, because the conflict check itself waits on
+  the other writer's row - so the lock now comes first and the founding insert only when absent.
+- **`ON CONFLICT ... WHERE valid_to_version = <bind param>` fails with 42P10 after five
+  executions** (Postgres switches to a generic plan and cannot infer the partial unique index from
+  a parameter). The `2147483647` sentinel is a literal in that SQL. Noted in the repository.
+- **Replay key: unique `(tenant_id, edge_id, observation_ref)` on `edge_provenance`.** Jobs may run
+  twice; without it a replay double-counts `observation_count`. Added to the one T038/T039
+  migration (`20261003070000_graph_confidence_config`, prefix free on this tree's master), with
+  the T039 per-tenant config table `architecture.confidence_config` (`tenant_id` PK, `config`
+  jsonb of overridden knobs). `data-model.md` updated in the same commit.
+- **Confidence volume term uses `observationCount`, not R-15's "distinct observation days".** The
+  dependency observation carries a count and a window, not a day set. Integer-only: the
+  `log2` is `floor(log2(1+n))` by bit length (no `Math.log2`, so it is byte-reproducible),
+  times a per-tenant scale, capped. A volume of 1 is capped at `singleObservationCap` (default
+  40). `base` covers the five machine classes only (R-15's human rows are not reachable here).
+  An invalid tenant override throws rather than falling back to the default.
+- **Edge `provenance` follows the strongest `edge_provenance` row** (class and ordinal agree), and
+  `observation_count`/`last_observed_at` are accumulated by the merge in the same transaction;
+  `strength`/`confidence` stay the trigger's job (one authority, no duplicate app-side max).
+- **`check:edge-strength-max` only checks open edge rows** (`valid_to_version = 2147483647`): the
+  trigger deliberately never touches a closed row, so a closed edge legitimately stops tracking
+  later provenance. An edge with no provenance rows is `check:graph-provenance`'s finding.
+- **`GET /graph/nodes` returns the open rows unless `graphVersion` is given**, and states
+  `graphVersion` (max minted version, or 0 before any). `attributes` (Split B's attribute tables)
+  is not in the node response. `discoveryRunId` was added to the contract's `Node` schema
+  (FR-006 asks for "the producing run"; the contract had no field for it). Edge detail is returned
+  inline on `GET /graph/nodes/{nodeId}` with every contributing source.
+- **Filters validate against the schema's own Prisma enums** (`GraphNodeKind`, `GraphLayer`,
+  `GraphElementState`) in the repository, not a hand-kept list at the HTTP edge; a bad value is 400.
+- **`apps/api/ingest.e2e.test.ts`'s second `createApiModule` call already omitted
+  `autonomyGrants`** on master (tests outside `src/` are not type-checked); both missing slots are
+  now filled with no-op repositories.
+- **Environment:** Docker Desktop was not running at start; it was started (`open -a Docker`) to run
+  the e2e suites. No docker prune was run.
+
+#### Split A, review round (fixes to the above)
+
+- **Confidence is derived from the edge's aggregate after the lock** (`edge.observation_count +
+  this observation`, latest `lastObservedAt`), not one row's own count. Fifty single observations
+  of one edge now clear `singleObservationCap`. Each `edge_provenance` row stores the confidence
+  it was derived with; the edge keeps the MAX of them.
+- **The reference instant is input, not wall clock** (`EdgeObservation.observedUntil`, the end of
+  the run's observation window). No default; a retried job stores the same confidence. Validation:
+  `observationCount` a safe integer >= 1, both instants valid Dates, `lastObservedAt` no later than
+  `observedUntil` plus a named 5-minute skew (`MAX_CLOCK_SKEW_MS`). The check is against the
+  window, not `Date.now()`, so it is deterministic on retry.
+- **Replay with a different payload throws `ObservationReplayMismatchError`** (provenance, adapter
+  key/version, run id compared; confidence and counts deliberately not, because confidence is
+  derived). **L2, recorded:** the replay key is per `edge_id`, so it relies on an upstream re-run
+  reusing the same `graph_fact` evidence id for the same observation; a re-run that mints new
+  evidence ids would be recorded as new observations and double-count volume.
+- **M6, recorded for confirmation:** the edge keeps the MAX of the confidences written at each
+  observation, so staleness never lowers an edge's stored confidence; a stale edge is surfaced
+  through `last_observed_at` / `lifecycle_state` (data-model.md "never recomputed on a schedule").
+  This reads R-15 as "staleness is evaluated at write time against the window", which is what the
+  spec says; if R-15 meant a stale edge should lose confidence on a later quiet run, that needs a
+  new write (a fresh observation row) rather than a recompute.
+- **`edge_provenance` stores `observation_count` and `last_observed_at`** (amended migration
+  `20261003070000_graph_confidence_config` in place: it was unpushed and mine; `down.sql` and
+  data-model.md amended with it). `check:edge-strength-max` now also compares SUM(count),
+  MAX(last_observed_at) and the strongest row's class.
+- **Pinned reads (interim, see decisions item 4).** Version resolution: unpinned reads use the
+  tenant's current version; **current version 0 with nodes present** (nothing minted yet) reads the
+  open rows (`valid_to_version = 2147483647`) and states `graphVersion: 0`. An explicit
+  `graphVersion` must be a minted version: 0, a future version, an unminted gap or an int32
+  overflow is a 400 (the caller's mistake), not an empty graph. `minStrength` outside 0-32767 is
+  a 400. Each read is one RepeatableRead transaction.
+- **Edge view:** class, strength, confidence and observation shown come from ONE row, the
+  strongest (ties: earliest recorded, then id; one shared compare function and the same order in
+  SQL). Consequence: the displayed confidence can be lower than the edge's stored confidence
+  (the MAX over rows, which traversal uses) when a weaker-class row had higher volume; both are
+  inspectable through `contributingSources`. An edge with no visible provenance row carries
+  `provenanceUnresolved: true` (added to the contract's `Edge`).
+- **Config errors name the tenant**; `base` must be a plain object. `check:graph-provenance` also
+  flags human-class and observation-less `edge_provenance` rows. Both checks print how many rows
+  they checked.
+
+## 002 Phase 8 polish + T083/T086/T087 (0.52.0)
 
 Judgment calls made without asking:
 

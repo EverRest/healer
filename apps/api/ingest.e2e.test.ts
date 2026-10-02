@@ -37,6 +37,7 @@ import {
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import {
@@ -48,7 +49,10 @@ import {
 import type { RunnerRegistrationRepository } from './src/runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
-
+const noopGraphReads: GraphReadRepository = {
+  listNodes: () => Promise.reject(new Error('not implemented in this test')),
+  getNode: () => Promise.reject(new Error('not implemented in this test')),
+};
 const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
@@ -120,6 +124,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaBudgetRepository(prisma),
       new PrismaBudgetLimitRepository(prisma),
       new PrismaApprovalLifecycleRepository(prisma),
+      new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -446,6 +451,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopBudgets,
       noopBudgetLimits,
       noopApprovals,
+      noopGraphReads,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

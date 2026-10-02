@@ -15,6 +15,7 @@ import {
   type SignalQueue,
   type TimelineRepository,
 } from '@healer/domain-issues';
+import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import {
   PrismaEvidenceGraphRepository,
   PrismaEvidenceRepository,
@@ -64,6 +65,7 @@ import {
   POLICY_ACTION_REPOSITORY,
   PolicyEvaluationController,
 } from './policy/policy-evaluation.controller.js';
+import { GRAPH_READ_REPOSITORY, GraphNodesController } from './graph/graph-nodes.controller.js';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
@@ -131,6 +133,7 @@ export function createApiModule(
   budgets: BudgetRepository,
   budgetLimits: BudgetLimitRepository,
   approvals: ApprovalLifecycleRepository,
+  graphReads: GraphReadRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -144,6 +147,7 @@ export function createApiModule(
       AutonomyGrantsController,
       BudgetsController,
       ApprovalsController,
+      GraphNodesController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -162,6 +166,7 @@ export function createApiModule(
       { provide: BUDGET_REPOSITORY, useValue: budgets },
       { provide: BUDGET_LIMIT_REPOSITORY, useValue: budgetLimits },
       { provide: APPROVAL_LIFECYCLE_REPOSITORY, useValue: approvals },
+      { provide: GRAPH_READ_REPOSITORY, useValue: graphReads },
     ],
   })
   class ApiModule {}
@@ -196,6 +201,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaBudgetRepository(prisma, { log: logger }),
     new PrismaBudgetLimitRepository(prisma),
     new PrismaApprovalLifecycleRepository(prisma),
+    new PrismaGraphReadRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);
