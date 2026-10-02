@@ -2376,6 +2376,9 @@ rather than reading the code alone. Results:
    `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
    found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
    instead of duplicating, since the dependency already runs that direction). No longer open.
+3. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
+   `component | deployment_unit -> endpoint`; confirm or narrow it. Not blocking — one table entry in
+   `structural-edges.ts`. See "004 T036-T052 — judgment calls", Split B.
 
 ## 004 T012–T015 — judgment calls
 
@@ -2658,3 +2661,62 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
   for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
   marker in).
+
+## 004 T036-T052 — judgment calls
+
+### Split B (T042-T048, T051, T052 — Phase 5 / US3)
+
+- **No migration.** `component_attr`, `deployment_unit_attr`, `repository_attr`, `endpoint_attr` and
+  their enums already exist from T002, and `characteristics` is `text[]`. T044/T045 are domain
+  types + validators + a repository; T046 is endpoint-kind rules over existing edges.
+- **One authority for the closed lists = `packages/domain/architecture/src/domain/graph-vocabulary.ts`.**
+  The Prisma enums are the database mirror; `graph-vocabulary.test.ts` parses `prisma/schema.prisma`
+  and fails when they differ (that test is the reader). `boundary-contract` keeps these as plain
+  strings (zero workspace deps, ADR 0001) — unchanged.
+- **Characteristics vocabulary is a value, not an env var or table.** `parseCharacteristicVocabulary(raw)`
+  validates a config-supplied list (snake_case, unique, non-empty; throws at start-up);
+  `DEFAULT_CHARACTERISTICS` is data-model's six plus `event_driven`. Nothing wires per-tenant or
+  env-driven extension yet — that composition-root wiring belongs with the API/discovery work (no
+  `shared/config` or `apps/api` edit here, both off-limits to this split).
+- **T004's fixtures used `user-facing`/`event-driven`, not in data-model's `user_facing` list.**
+  T048's all-fixtures-validate test was red on exactly that; fixtures now use `user_facing` /
+  `event_driven`. T047 itself was already satisfied by T004's loader (three fixtures); no
+  `external`-component fixture was added because T004's e2e asserts every component is `built_from`
+  a repository, which an `external` component (T051) deliberately is not.
+- **`exposes` endpoint rule is not specified anywhere.** Chose `component | deployment_unit ->
+  endpoint` (a unit or component that serves an endpoint). `implements` is `endpoint -> component`
+  (data-model). `calls`, `depends_on`, `serves_feature` are left unconstrained by this task.
+- **Readers (which guarantee has a production consumer).**
+  - *Wired:* `check:graph-structure` (`scripts/checks/graph-structure.mjs`, `pnpm run
+    check:graph-structure`, own file, own package.json line — not in Split A's check files) calls
+    `listEdgeEndpointViolations` and `listNaturalKeyCollisions` for every tenant and fails on any
+    result. Covers T046's endpoint-kind rules and T052's collisions.
+  - *Pending Phase 3 (no write path exists on master):* the confirmation write path calling
+    `validateEdge` and `validateComponentAttr` before writing; the discovery/draft step calling
+    `placeDeploymentUnit` (T051 has no production caller today) and `detectNaturalKeyCollisions`
+    for the human disambiguation; the composition root calling `parseCharacteristicVocabulary`
+    (T044). Not a DB trigger: T046 is "no migration".
+- **"External component" = `graph_node.node_kind = 'component'` with `component_type = 'external'`**
+  (plus characteristic `third_party`), not `node_kind = 'external'` (which is a separate kind in the
+  schema, meant for external systems). `placeDeploymentUnit` reuses the unit's natural key for the
+  component; its `deploys` edge endpoints are `{ kind, naturalKey }` pairs (`component` ->
+  `deployment_unit`), so from/to are distinguishable and `validateEdge` is asserted on the
+  placement's own output rather than hard-coded kinds (review M5). It throws on an empty unit key
+  or name or an empty matched key (pass `null` for "no match").
+- **Collision definition (T052, tightened after review):** two or more DISTINCT component ids
+  sharing a canonical key (`trim().toLowerCase()`; candidates keep the key as written). Scope tag
+  `cross_repository` (2+ repositories across the group), `same_repository`, or `unrepositoried`
+  (some member has no repository and the group spans at most one). Entries are merged by
+  `componentId` first, so one component listed once per repository never collides with itself.
+  Output is candidates only; there is no merge function. The repository only considers open,
+  non-rejected components and edges.
+- **Kind-attribute validation:** optional text fields accept `undefined | null | non-blank string`
+  (trimmed); any other type is a validation error, never silently null; whitespace-only required
+  text is rejected. `validateEdge` is a total, fail-closed table over `EdgeType` (`calls`,
+  `depends_on`, `serves_feature` are explicitly `'unconstrained'`); unknown types are refused.
+- **Attribute writes require a live node:** `assertNode` demands the node be open
+  (`valid_to_version = 2147483647`) and not `rejected`, else not-found. Reads are not so filtered.
+- **Fixtures gained one `endpoint` each** (`api-route`, `orders-route`, `checkout-route`), with an
+  `implements` and an `exposes` edge, so every structural edge type is exercised by the query set;
+  T004's invariants (every component built_from and deployed) are unaffected because endpoints are
+  not components.
