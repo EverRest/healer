@@ -3025,3 +3025,30 @@ machine (docker `inspect` returns an empty exit code): nothing under `apps/runne
 changed in this batch (the only lockfile diff is master's own 0.49.0 `@healer/domain-policy` entry).
 It passed in run 3 and fails when run alone; the cause is not established — treat as a pre-existing
 012 T050 environmental failure, not caused by 002 phases 6–7.
+
+## 002 Phase 8 polish + T083/T086/T087 (0.51.0)
+
+Judgment calls made without asking:
+
+1. **Citation form and digest** for FR-008a are mine: `// derivation[<class>]: <run-id>` in `ceiling.ts`,
+   resolved to `docs/derivations/<run-id>.json`; digest = sha256 of key-sorted JSON without the
+   `artifactDigest` field. 011 owns the exporter and has not built it — it must use the same
+   function (`artifactDigestOf`, `scripts/gates/ceiling.mjs`) or move the definition. The gate checks
+   the file is complete, names the cited run and matches its own digest; it does **not** re-check the
+   run facts (split scope, completion, denominator ≥ 20) — the row's constraints and 011's
+   reconciliation own those. Is that the right split?
+2. `run_terminal` is a new member of the closed `invalidated_reason` list (plain text column, no
+   migration). `onIssueStateChanged` ignores the event payload's `toState` and asks `workflow_run`
+   whether the run is terminal — structural, so redelivery is a no-op. Nothing dispatches events to it
+   yet (same gap as the sweeps).
+3. T083's check is generic: "no level only because the undo is unattested" — so it also fires for any
+   future class gated the same way, not just `reversible_remediation`.
+4. T081 not ticked. Phase 6/7 scenarios 13–19 and 24–29 map to `approval-lifecycle`,
+   `apps/api/approvals`, `autonomy-grant-resolution`, `budget-enforcement/-degradation/-flood/-hardening`
+   and `apps/api/budgets` e2e files (144 of 145 passed in one parallel run; the failure,
+   `apps/api/approvals` "resolves with the human…" 404, passed 2/2 alone — load-dependent, not
+   diagnosed). Scenario 29 (cooldown) needs `action_limit`, which is Phase 5 (T085): only the pure
+   evaluator side is covered.
+5. This batch was built on top of the unmerged `worktree-002-phase6-7-budgets-approvals` branch
+   (0.50.0), because phases 6–7 already existed there — see the hand-off note.
+

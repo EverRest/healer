@@ -10,6 +10,9 @@ export const INVALIDATED_REASONS = [
   // 002 T060: an allowed AI step whose run never landed, released by `releaseAbandonedCharges` so
   // its open charge stops counting against the budget.
   'charge_abandoned',
+  // 002 T077: an unconsumed allow whose bound `workflow_run` has reached a terminal state — nothing
+  // will ever execute against it, so it must not stay usable (or keep holding a charge).
+  'run_terminal',
 ] as const;
 
 export type InvalidatedReason = (typeof INVALIDATED_REASONS)[number];

@@ -1697,3 +1697,22 @@ Specification: agent-driven development (012 US10). No code.
 Verified: `typecheck`, `lint`, `format-check` and 48 unit tests green. Not verified: the compose
 stack and the migration were never applied — the Docker daemon was not running — so `test-e2e` has
 not been executed. Recorded in 012's tasks.md rather than left implicit.
+
+## 0.51.0 — 2026-10-02
+
+002 Phase 8 polish and the Phase-9 additions that needed nothing external.
+
+- `gate-ceiling` gains its FR-008a **diff half**: a change that raises a level in `ACTION_CEILING`
+  (or gives a level to a class that has none, `merge` being the one that matters) fails unless it
+  cites `// derivation[<class>]: <run-id>` resolving to a committed `docs/derivations/<run-id>.json`
+  whose digest matches its own content. Unresolvable means fail; a citation already present at the
+  base does not earn a second raise. Same gate, same harness — no second diffing mechanism.
+- `POST /autonomy/grants` for a `reversible_remediation` action returns `422 UNDO_NOT_ATTESTED`
+  rather than the generic `CEILING_EXCEEDED`; grant errors now carry `code` in the body.
+- `IssueStateChanged` consumer: unconsumed allows bound to a terminal `workflow_run` become
+  `invalidated_reason = 'run_terminal'`.
+- Measured against the plan: evaluation p95 0.03 ms (budget 20 ms); budget aggregate p95 18.7 ms at
+  10 000 agent runs (budget 50 ms). Policy coverage 98.55% lines / 95.95% functions against the 95%
+  floor.
+- Still open: Phase 5 (010's catalogue), T082, T084, T085, and the full quickstart run (T081).
+

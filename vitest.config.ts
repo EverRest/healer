@@ -61,6 +61,8 @@ const HEAVY_E2E = [
   // the shared group's load the queue behind the charge lock stretches with scheduling latency, the
   // same way the 12 000-signal replay does, so it gets its own group rather than a longer timeout.
   'budget-flood.e2e.test.ts',
+  // 002 T080: p95 latency assertions against the plan's budgets; only meaningful on a quiet box.
+  'policy-performance.e2e.test.ts',
 ];
 
 function e2eProject(name: string, include: string[], exclude: string[], groupOrder: number) {

@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import {
   CeilingExceededError,
+  UndoNotAttestedError,
   GrantAlreadyRevokedError,
   grantAutonomy,
   revokeAutonomy,
@@ -105,8 +106,18 @@ export class AutonomyGrantsController {
       );
       return serializeGrant(granted);
     } catch (error) {
-      if (error instanceof CeilingExceededError || error instanceof UnregisteredActionError) {
-        throw new UnprocessableEntityException(error.message);
+      if (
+        error instanceof CeilingExceededError ||
+        error instanceof UndoNotAttestedError ||
+        error instanceof UnregisteredActionError
+      ) {
+        // `code` is what tells UNDO_NOT_ATTESTED apart from CEILING_EXCEEDED (both 422).
+        throw new UnprocessableEntityException({
+          statusCode: 422,
+          error: 'Unprocessable Entity',
+          message: error.message,
+          code: error.code,
+        });
       }
       throw error;
     }

@@ -231,6 +231,19 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
     });
   }
 
+  /** T077: unconsumed allows for the issue whose `workflow_run` is terminal. Only
+   *  `invalidated_reason` changes, which the append-only trigger permits from null. */
+  async invalidateForTerminalRuns(where: TenantScoped<{ issueId: string }>): Promise<number> {
+    return this.prisma.$executeRaw`
+      UPDATE "policy"."policy_decision" pd
+      SET invalidated_reason = 'run_terminal'
+      WHERE pd.tenant_id = ${where.tenantId}::uuid AND pd.issue_id = ${where.issueId}::uuid
+        AND pd.outcome = 'allow' AND pd.consumed_at IS NULL AND pd.invalidated_reason IS NULL
+        AND EXISTS (SELECT 1 FROM "workflow"."workflow_run" wr
+                    WHERE wr.tenant_id = pd.tenant_id AND wr.id = pd.workflow_run_id
+                      AND wr.terminal_state IS NOT NULL)`;
+  }
+
   async findById(where: TenantScoped<{ id: string }>): Promise<StoredDecision | null> {
     try {
       const row = await this.prisma.policyDecision.findUnique({

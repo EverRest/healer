@@ -121,7 +121,7 @@ write that makes revocation immediate.
 | request_key | text? | a *charged* step's idempotency key: the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step returns the decision it already minted instead of charging twice (T060) |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
-| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `charge_abandoned` — **not** digest_mismatch (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays issued and retriable with the correct digest, never invalidated |
+| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `charge_abandoned` · `run_terminal` — **not** digest_mismatch (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays issued and retriable with the correct digest, never invalidated |
 
 `UPDATE` is rejected except for `consumed_at` and `invalidated_reason` transitioning from null.
 

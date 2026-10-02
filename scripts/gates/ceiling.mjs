@@ -13,14 +13,23 @@
 // fact — comparing them would fail this gate for a difference that is correct by design, not a
 // drift (see the migration's own comment).
 //
-// This is the SC-004/C-18 *data* half of `gate-ceiling` (002 make-targets.md). The FR-008a
-// *diff* half — no change raising a ceiling level lands without a resolvable threshold-derivation
-// citation — is Phase 9's addition (T086/T087), out of scope for this batch; extend this same
-// gate, don't duplicate it, when that lands (the `gate-undo` precedent for a gate that grows a
-// second check once its dependency exists).
-import { readFileSync } from 'node:fs';
+// The FR-008a *diff* half (T086/T087, SC-009, R-15) lives in the same gate: a change that raises
+// any level in `ACTION_CEILING` — or gives a level to a class that has none — must cite a
+// `threshold_derivation` artifact the gate can resolve from the working tree. The ceiling is a
+// literal in code, so no data check sees an edit to it; this reads the *edit* (base revision vs.
+// working tree), never the database (ADR 0009). Citation form, one line per raised class,
+// anywhere in `ceiling.ts`:
+//
+//   // derivation[<action_class>]: <run-id>      → docs/derivations/<run-id>.json
+//
+// A citation already present at the base does not earn a further raise.
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { resolveBaseRef } from '../lib/changed-files.mjs';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
+import { stripComments } from '../lib/strip-comments.mjs';
 
 const CEILING_TS = fileURLToPath(
   new URL('../../packages/domain/policy/src/domain/ceiling.ts', import.meta.url),
@@ -31,6 +40,9 @@ const MIGRATION_SQL = fileURLToPath(
     import.meta.url,
   ),
 );
+
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const CEILING_TS_REPO_PATH = 'packages/domain/policy/src/domain/ceiling.ts';
 
 const TS_CONST_NAME = {
   read_only: 'READ_ONLY_CEILING',
@@ -78,6 +90,128 @@ export function findCeilingDrift(tsSource, migrationSource) {
     );
 }
 
+const NONE = -1;
+const ARTIFACT_FIELDS = [
+  'thresholdKey',
+  'value',
+  'runId',
+  'datasetVersionId',
+  'metric',
+  'realDenominator',
+  'runSyntheticScoredCount',
+  'runCompletionState',
+  'runReproducibility',
+  'runSplitScope',
+  'artifactDigest',
+];
+
+/** Key-sorted JSON, so the digest does not depend on how an exporter ordered its fields. */
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** sha256 over the artifact without its own `artifactDigest` field (the digest 011's exporter
+ *  must record on `threshold_derivation.artifact_digest`). */
+export function artifactDigestOf(artifact) {
+  const { artifactDigest: _own, ...rest } = artifact;
+  return createHash('sha256').update(canonical(rest)).digest('hex');
+}
+
+/**
+ * The level each action class can reach (`-1` = none) as `ceiling.ts` declares it — for
+ * `reversible_remediation` the level once its undo is attested. Fails closed on anything it
+ * cannot read, so an unparseable edit is a failure and not "no raise".
+ * @param {string} source
+ * @returns {Record<string, number>}
+ */
+export function ceilingTable(source) {
+  const code = stripComments(source);
+  /** @type {Record<string, number>} */
+  const consts = {};
+  for (const m of code.matchAll(/const (\w+)\s*:\s*AutonomyLevel\s*=\s*(\d+)/g)) {
+    consts[m[1]] = Number(m[2]);
+  }
+  const fn = code.match(/function ACTION_CEILING[\s\S]*/)?.[0];
+  if (!fn) throw new Error('ceiling.ts: could not find function ACTION_CEILING');
+  /** @type {Record<string, number>} */
+  const table = {};
+  for (const group of fn.matchAll(/((?:case '\w+':\s*)+)([\s\S]*?)(?=case '|$)/g)) {
+    const level = group[2].match(/level:\s*(\w+)/)?.[1];
+    let value;
+    if (level === undefined) {
+      if (!/\bNO_LEVEL\b/.test(group[2])) {
+        throw new Error(`ceiling.ts: cannot read the level for ${group[1].trim()}`);
+      }
+      value = NONE;
+    } else {
+      value = /^\d+$/.test(level) ? Number(level) : consts[level];
+      if (value === undefined) throw new Error(`ceiling.ts: unknown level constant ${level}`);
+    }
+    for (const c of group[1].matchAll(/case '(\w+)'/g)) table[c[1]] = value;
+  }
+  if (Object.keys(table).length === 0) throw new Error('ceiling.ts: ACTION_CEILING has no cases');
+  return table;
+}
+
+/** @param {string} source @returns {Record<string, string>} action class → cited run id */
+function citations(source) {
+  /** @type {Record<string, string>} */
+  const result = {};
+  for (const m of source.matchAll(/^\s*\/\/\s*derivation\[(\w+)\]:\s*([\w.-]+)\s*$/gm)) {
+    result[m[1]] = m[2];
+  }
+  return result;
+}
+
+/**
+ * FR-008a: one message per raised class whose raise is not earned by a resolvable derivation.
+ * @param {string} baseSource `ceiling.ts` at the base revision ('' when it did not exist)
+ * @param {string} newSource `ceiling.ts` in the working tree
+ * @param {(runId: string) => string | undefined} readArtifact the committed artifact's text
+ * @returns {string[]}
+ */
+export function findUnearnedRaises(baseSource, newSource, readArtifact) {
+  const before = baseSource === '' ? {} : ceilingTable(baseSource);
+  const after = ceilingTable(newSource);
+  const baseCited = citations(baseSource);
+  const cited = citations(newSource);
+  const problems = [];
+  for (const [actionClass, level] of Object.entries(after)) {
+    if (level <= (before[actionClass] ?? NONE)) continue;
+    const runId = cited[actionClass];
+    if (runId === undefined || runId === baseCited[actionClass]) {
+      problems.push(
+        `${actionClass}: ceiling raised to ${level} but the change cites no derivation`,
+      );
+      continue;
+    }
+    const text = readArtifact(runId);
+    let artifact;
+    try {
+      artifact = text === undefined ? undefined : JSON.parse(text);
+    } catch {
+      artifact = undefined;
+    }
+    if (artifact === undefined || ARTIFACT_FIELDS.some((f) => artifact[f] === undefined)) {
+      problems.push(
+        `${actionClass}: derivation ${runId} cannot be resolved to a complete artifact`,
+      );
+    } else if (artifact.runId !== runId) {
+      problems.push(`${actionClass}: cites ${runId} but the artifact is for ${artifact.runId}`);
+    } else if (artifact.artifactDigest !== artifactDigestOf(artifact)) {
+      problems.push(`${actionClass}: derivation ${runId} digest does not match its content`);
+    }
+  }
+  return problems;
+}
+
 /* v8 ignore start -- CLI wiring; the parsing/comparison above is unit tested */
 if (isMainModule(import.meta.url)) {
   const result = await runGate('gate-ceiling', () => {
@@ -86,6 +220,24 @@ if (isMainModule(import.meta.url)) {
       readFileSync(MIGRATION_SQL, 'utf8'),
     );
     if (drift.length > 0) throw new Error(drift.join('; '));
+    const baseRef = resolveBaseRef(REPO_ROOT);
+    if (!baseRef)
+      throw new Error('no base ref resolved — refusing to treat this as "no raise" (R-10)');
+    let baseSource = '';
+    try {
+      baseSource = execFileSync('git', ['show', `${baseRef}:${CEILING_TS_REPO_PATH}`], {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        stdio: 'pipe',
+      });
+    } catch {
+      // absent at the base: every level is a raise
+    }
+    const raises = findUnearnedRaises(baseSource, readFileSync(CEILING_TS, 'utf8'), (runId) => {
+      const path = `${REPO_ROOT}docs/derivations/${runId}.json`;
+      return existsSync(path) ? readFileSync(path, 'utf8') : undefined;
+    });
+    if (raises.length > 0) throw new Error(raises.join('; '));
   });
   reportAndExit(result);
 }

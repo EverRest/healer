@@ -12,7 +12,10 @@ import type {
   PolicyActionRepository,
 } from '../../domain/policy-action-repository.js';
 import { UnregisteredActionError } from '../resolve-ruleset-and-evaluate.js';
-import { CeilingExceededError } from '../../domain/autonomy-grant-repository.js';
+import {
+  CeilingExceededError,
+  UndoNotAttestedError,
+} from '../../domain/autonomy-grant-repository.js';
 import { grantAutonomy } from './grant-autonomy.js';
 
 const CONTEXT = TenantContext.forTrustedInternalUse('00000000-0000-0000-8000-0000000000e1');
@@ -101,14 +104,16 @@ describe('grantAutonomy (T034, T037, T039)', () => {
   // Quickstart 39 / C-18: reversible_remediation has no level at all while the undo is
   // unattested — and no attestation source exists in this repository yet (010 not built), so
   // every reversible_remediation grant is refused today, at any level including 0.
+  // T083: the refusal is UNDO_NOT_ATTESTED, not the generic CEILING_EXCEEDED — the cause is the
+  // missing attestation, not an over-ceiling request.
   it('refuses any level for a reversible_remediation action while no undo attestation source exists', async () => {
-    await expect(
-      grantAutonomy({ grants: new FakeGrantRepo(), actions: new FakeActionRepo() }, CONTEXT, {
-        actionKey: 'deployment.rollback',
-        level: 0,
-        grantedBy: 'pavlo',
-      }),
-    ).rejects.toThrow(CeilingExceededError);
+    const attempt = grantAutonomy(
+      { grants: new FakeGrantRepo(), actions: new FakeActionRepo() },
+      CONTEXT,
+      { actionKey: 'deployment.rollback', level: 0, grantedBy: 'pavlo' },
+    );
+    await expect(attempt).rejects.toThrow(UndoNotAttestedError);
+    await expect(attempt).rejects.toMatchObject({ code: 'UNDO_NOT_ATTESTED' });
   });
 
   it('refuses an unregistered action key', async () => {

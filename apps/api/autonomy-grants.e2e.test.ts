@@ -115,6 +115,19 @@ describe('/autonomy/grants (002 T046)', () => {
     expect(response.body).toMatchObject({ actionKey: 'change.open_pull_request', level: 2 });
   });
 
+  // Quickstart 39 / T083: a reversible_remediation grant is refused with UNDO_NOT_ATTESTED (not
+  // CEILING_EXCEEDED) while no undo attestation source exists.
+  it('refuses a reversible_remediation grant with 422 UNDO_NOT_ATTESTED', async () => {
+    const response = await request(app.getHttpServer())
+      .post(path('/autonomy/grants'))
+      .set('X-Tenant-Id', randomUUID())
+      .set('X-Actor-Id', 'pavlo')
+      .set('Idempotency-Key', randomUUID())
+      .send(grantBody({ actionKey: 'deployment.rollback', level: 1 }))
+      .expect(422);
+    expect(response.body.code).toBe('UNDO_NOT_ATTESTED');
+  });
+
   // Quickstart 7: grant L3 for change.open_pull_request (ceiling L2) → 422 CEILING_EXCEEDED.
   it('refuses a level above the ceiling with 422', async () => {
     await request(app.getHttpServer())

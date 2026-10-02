@@ -3,6 +3,7 @@ import { scope, type TenantContext } from '@healer/shared';
 import { ACTION_CEILING } from '../../domain/ceiling.js';
 import {
   CeilingExceededError,
+  UndoNotAttestedError,
   type AutonomyGrant,
   type AutonomyGrantRepository,
 } from '../../domain/autonomy-grant-repository.js';
@@ -27,7 +28,8 @@ export interface GrantAutonomyInput {
 /**
  * `GrantAutonomy` (T034, T037, T039, FR-007, FR-008, SC-004). Rejects a level the action's
  * class — or, for `reversible_remediation`, the absence of a tested undo — can never carry,
- * **before** the row is ever written (`CeilingExceededError`, `422 CEILING_EXCEEDED`).
+ * **before** the row is ever written (`CeilingExceededError`, `422 CEILING_EXCEEDED`; `UndoNotAttestedError`, `422
+ * UNDO_NOT_ATTESTED` for a `reversible_remediation` action while its undo is unattested).
  *
  * `hasTestedUndo` is passed as `false` unconditionally: 010's remediation catalogue, the only
  * source of an attestation, does not exist in this repository yet (same honest-`false` reading
@@ -49,6 +51,11 @@ export async function grantAutonomy(
   if (action === null) throw new UnregisteredActionError(input.actionKey);
 
   const ceiling = ACTION_CEILING(action.actionClass, false);
+  // T083: "none" only because the undo is unattested (it would carry a level if attested) is
+  // UNDO_NOT_ATTESTED; a class that never carries a level stays CEILING_EXCEEDED.
+  if (ceiling.kind === 'none' && ACTION_CEILING(action.actionClass, true).kind === 'level') {
+    throw new UndoNotAttestedError(input.actionKey);
+  }
   if (ceiling.kind === 'none' || input.level > ceiling.level) {
     throw new CeilingExceededError(input.actionKey, input.level, ceiling);
   }

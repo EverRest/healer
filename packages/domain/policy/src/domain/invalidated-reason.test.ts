@@ -18,15 +18,15 @@ describe('INVALIDATED_REASONS', () => {
   });
 
   it('openapi.yaml enumerates exactly the members (plus null)', () => {
-    const line = read('specs/002-policy-and-autonomy/contracts/openapi.yaml')
-      .split('\n')
-      .find((l) => l.includes('enum: [epoch_bump'));
-    expect(line).toBeDefined();
-    const listed = (line ?? '')
-      .replace(/.*enum: \[/, '')
-      .replace(/\].*/, '')
+    // Prettier wraps a long flow sequence over several lines, so match on the whole text.
+    const match = read('specs/002-policy-and-autonomy/contracts/openapi.yaml').match(
+      /enum:\s*\[(\s*epoch_bump[^\]]*)\]/,
+    );
+    expect(match).not.toBeNull();
+    const listed = (match?.[1] ?? '')
       .split(',')
-      .map((s) => s.trim());
+      .map((s) => s.trim())
+      .filter(Boolean);
     expect(listed).toEqual([...INVALIDATED_REASONS, 'null']);
   });
 });

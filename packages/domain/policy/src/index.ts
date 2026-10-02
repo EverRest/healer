@@ -30,6 +30,7 @@ export type { AuditActorType, NewAuditEntry } from './domain/audit-entry.js';
 export {
   CeilingExceededError,
   GrantAlreadyRevokedError,
+  UndoNotAttestedError,
   type AutonomyGrant,
   type AutonomyGrantRepository,
   type NewAutonomyGrant,
@@ -207,6 +208,11 @@ export {
   releaseAbandonedCharges,
   type ReleaseAbandonedChargesCommand,
 } from './application/commands/release-abandoned-charges.js';
+export {
+  onIssueStateChanged,
+  type IssueStateChangedEvent,
+  type TerminalRunDecisionInvalidator,
+} from './application/commands/invalidate-terminal-run-decisions.js';
 export { markDegradation } from './application/commands/mark-degradation.js';
 export {
   getBudgetState,

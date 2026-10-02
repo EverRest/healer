@@ -59,6 +59,19 @@ export class CeilingExceededError extends HealerError {
   }
 }
 
+/** A `reversible_remediation` grant refused because the action's undo has no passing test (T083,
+ *  C-18, FR-009) — distinct from `CeilingExceededError` so a caller can tell "this class would
+ *  carry the level if its undo were attested" from "this level is over the ceiling". */
+export class UndoNotAttestedError extends HealerError {
+  constructor(readonly actionKey: string) {
+    super(
+      'UNDO_NOT_ATTESTED',
+      `action "${actionKey}" has no grantable autonomy level until its undo has a passing test`,
+    );
+    this.name = 'UndoNotAttestedError';
+  }
+}
+
 /** `revoke()` on a grant that is already revoked (data-model.md: "terminal; a revoked grant is
  *  never reactivated"). */
 export class GrantAlreadyRevokedError extends HealerError {
