@@ -2376,6 +2376,13 @@ rather than reading the code alone. Results:
    `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
    found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
    instead of duplicating, since the dependency already runs that direction). No longer open.
+3. **`graph_fact` evidence has no home for a discovery run that is not about an issue.**
+   `evidence.issue_id` is `NOT NULL` (001), while FR-027/`PersistGraphFacts` (T035) writes one
+   `graph_fact` row per discovery shape and discovery runs are tenant-scoped, not issue-scoped.
+   `check:graph-provenance` (T040) now requires `observation_ref` to resolve to an `evidence` row of
+   the same tenant, so whoever builds T035 must either relax `issue_id` for `graph_fact` or pick a
+   per-tenant holder issue — a schema decision, not mine to take from T036-T041. Not blocking T036-T041
+   (the merge path takes already-formed observations).
 
 ## 004 T012–T015 — judgment calls
 
@@ -2658,3 +2665,57 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
   for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
   marker in).
+
+## 004 T036-T052 — judgment calls
+
+### Split A (T036-T041, US2: provenance merge, derived confidence, checks, node reads)
+
+- **Human provenance does not enter the merge path (R-04a vs data-model.md).** Followed
+  `data-model.md` and migrations T002/T011: `edge_provenance` has no validity range and no
+  `actor_ref`; humans author `graph_node`/`graph_edge` directly. Enforced by type:
+  `EdgeObservation.provenance` is `MachineProvenanceClass` (the closed list minus the two human
+  classes, derived by `Exclude`, so there is still one authority), proven by a `@ts-expect-error`
+  test. `check:graph-provenance` reports a human-class *edge* as a violation because nothing can
+  name its actor (item 1 of the decisions list stays open).
+- **The max-maintenance trigger is lossy under a race, so the merge locks the edge row.** Measured
+  in a scratch container: a held-open writer inserts a strength-50 `edge_provenance` row; a second
+  writer's 40 row, computed from a statement snapshot that cannot see the first, overwrites the
+  edge back to 40 with no error. The merge does `SELECT ... FOR UPDATE` on the open edge row
+  before any insert (READ COMMITTED, no SERIALIZABLE needed). Proven by
+  `graph-edge-merge-race.e2e.test.ts` (holder transaction polled via `pg_stat_activity`, 10
+  trials) and mutation-checked: with the lock removed the same test fails every trial (10 of 10) with
+  "expected 40 to be 50". A first draft that founded the edge with `INSERT ... ON CONFLICT` BEFORE
+  locking passed the race test with the lock removed, because the conflict check itself waits on
+  the other writer's row - so the lock now comes first and the founding insert only when absent.
+- **`ON CONFLICT ... WHERE valid_to_version = <bind param>` fails with 42P10 after five
+  executions** (Postgres switches to a generic plan and cannot infer the partial unique index from
+  a parameter). The `2147483647` sentinel is a literal in that SQL. Noted in the repository.
+- **Replay key: unique `(tenant_id, edge_id, observation_ref)` on `edge_provenance`.** Jobs may run
+  twice; without it a replay double-counts `observation_count`. Added to the one T038/T039
+  migration (`20261003070000_graph_confidence_config`, prefix free on this tree's master), with
+  the T039 per-tenant config table `architecture.confidence_config` (`tenant_id` PK, `config`
+  jsonb of overridden knobs). `data-model.md` updated in the same commit.
+- **Confidence volume term uses `observationCount`, not R-15's "distinct observation days".** The
+  dependency observation carries a count and a window, not a day set. Integer-only: the
+  `log2` is `floor(log2(1+n))` by bit length (no `Math.log2`, so it is byte-reproducible),
+  times a per-tenant scale, capped. A volume of 1 is capped at `singleObservationCap` (default
+  40). `base` covers the five machine classes only (R-15's human rows are not reachable here).
+  An invalid tenant override throws rather than falling back to the default.
+- **Edge `provenance` follows the strongest `edge_provenance` row** (class and ordinal agree), and
+  `observation_count`/`last_observed_at` are accumulated by the merge in the same transaction;
+  `strength`/`confidence` stay the trigger's job (one authority, no duplicate app-side max).
+- **`check:edge-strength-max` only checks open edge rows** (`valid_to_version = 2147483647`): the
+  trigger deliberately never touches a closed row, so a closed edge legitimately stops tracking
+  later provenance. An edge with no provenance rows is `check:graph-provenance`'s finding.
+- **`GET /graph/nodes` returns the open rows unless `graphVersion` is given**, and states
+  `graphVersion` (max minted version, or 0 before any). `attributes` (Split B's attribute tables)
+  is not in the node response. `discoveryRunId` was added to the contract's `Node` schema
+  (FR-006 asks for "the producing run"; the contract had no field for it). Edge detail is returned
+  inline on `GET /graph/nodes/{nodeId}` with every contributing source.
+- **Filters validate against the schema's own Prisma enums** (`GraphNodeKind`, `GraphLayer`,
+  `GraphElementState`) in the repository, not a hand-kept list at the HTTP edge; a bad value is 400.
+- **`apps/api/ingest.e2e.test.ts`'s second `createApiModule` call already omitted
+  `autonomyGrants`** on master (tests outside `src/` are not type-checked); both missing slots are
+  now filled with no-op repositories.
+- **Environment:** Docker Desktop was not running at start; it was started (`open -a Docker`) to run
+  the e2e suites. No docker prune was run.
