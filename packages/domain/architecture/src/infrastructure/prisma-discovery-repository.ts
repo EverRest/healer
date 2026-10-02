@@ -12,9 +12,13 @@ import { discoveryDraftProposedEvent } from '../domain/events.js';
 import type {
   DiscoveryRepository,
   DiscoveryRun,
+  DiscoveryRunSummary,
+  DraftItemRow,
+  DraftWithItems,
   IngestBatchWriteInput,
   IngestedDraft,
   NewDiscoveryRun,
+  SourceOutcomeRow,
 } from '../domain/discovery-repository.js';
 import type { DiscoveryNodeKind, NodeAttributes } from '../domain/proposed-payload.js';
 import type { GraphEdgeType } from '../domain/closed-vocabularies.js';
@@ -355,5 +359,67 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
 
       return { draftId, state: 'open', proposalsCount: where.items.length, itemIds };
     });
+  }
+
+  async listRuns(where: TenantScoped<object>): Promise<readonly DiscoveryRunSummary[]> {
+    const rows = await this.prisma.discoveryRun.findMany({
+      where: { tenantId: where.tenantId },
+      include: { sourceOutcomes: true },
+      orderBy: { startedAt: 'desc' },
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      trigger: row.trigger as NewDiscoveryRun['trigger'],
+      runnerId: row.runnerId,
+      baseVersion: row.baseVersion,
+      startedAt: row.startedAt,
+      finishedAt: row.finishedAt,
+      outcome: row.outcome as DiscoveryRunSummary['outcome'],
+      sourceOutcomes: row.sourceOutcomes.map((o): SourceOutcomeRow => ({
+        sourceKey: o.sourceKey,
+        status: o.status as SourceOutcomeRow['status'],
+        reasonCode: o.reasonCode as SourceOutcomeRow['reasonCode'],
+        itemCount: o.itemCount,
+        durationMs: o.durationMs ?? 0,
+      })),
+    }));
+  }
+
+  async getDraft(
+    where: TenantScoped<{ readonly draftId: string; readonly op?: string }>,
+  ): Promise<DraftWithItems | null> {
+    const draft = await this.prisma.discoveryDraft.findUnique({
+      where: { id_tenantId: { id: where.draftId, tenantId: where.tenantId } },
+    });
+    if (draft === null) return null;
+
+    const items = await this.prisma.draftItem.findMany({
+      where: {
+        draftId: where.draftId,
+        tenantId: where.tenantId,
+        ...(where.op !== undefined ? { op: where.op as DraftItemOp } : {}),
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    return {
+      draftId: draft.id,
+      baseVersion: draft.baseVersion,
+      state: draft.state,
+      items: items.map((item): DraftItemRow => ({
+        id: item.id,
+        op: item.op,
+        targetNodeId: item.targetNodeId,
+        targetEdgeId: item.targetEdgeId,
+        proposed: item.proposed as Readonly<Record<string, unknown>>,
+        current: item.current as Readonly<Record<string, unknown>> | null,
+        proposalDigest: item.proposalDigest,
+        state: item.state,
+        provenance: item.provenance,
+        strength: item.strength,
+        confidence: item.confidence,
+        observationRef: item.observationRef,
+      })),
+    };
   }
 }
