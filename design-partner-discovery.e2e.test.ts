@@ -396,6 +396,55 @@ describe('design-partner discovery over the real GitLab/Kubernetes/OTel adapters
     });
   });
 
+  // ──────────────── T021/quickstart 44 (bounded, real-shaped): a non-cooperating reader ────────────────
+
+  describe("T021/quickstart 44: a reader that ignores the abort signal entirely (review finding, not this sub-batch's to fix)", () => {
+    const TENANT_ID = '00000000-0000-0000-8000-0000000e0005';
+
+    // KNOWN GAP (confirmed by review on the A1+A2 merge, both reviews independently; A1 is fixing
+    // the orchestrator-level race, A2 is fixing the three real adapters to honour the signal
+    // internally — neither fix is this sub-batch's to make): `collectOne` (collect-discovery.ts)
+    // only calls `timeoutController.abort()` when `perSourceTimeoutMs` elapses — it never races
+    // `adapter.collect(...)` itself against that timeout. The existing timeout tests (this file's
+    // T021 group in `discovery-run.e2e.test.ts`) only pass because the *fake* adapters used there
+    // cooperate by listening for `scope.signal`'s `abort` event and rejecting. A reader that is not
+    // wired to listen for it at all — which, per the review, is all three real
+    // GitLab/Kubernetes/OTel readers today — hangs the source, and therefore the whole run,
+    // forever. Proven here by racing the real call against a short real-time bound from *outside*
+    // `collectDiscovery`, since the call itself never settles to assert on directly; once A1's
+    // orchestrator-level race lands this test should be flipped to a plain `it` that awaits
+    // `collectDiscovery` directly and asserts `status: 'timed_out'` within `perSourceTimeoutMs`.
+    it('KNOWN GAP: a never-resolving, non-cooperating reader is not actually bounded by perSourceTimeoutMs', async () => {
+      const neverCooperates: DiscoveryAdapter = Object.freeze({
+        key: 'hung-reader',
+        version: '1.0.0',
+        layer: 'code',
+        provenance: 'derived_from_code',
+        // Deliberately never reads `scope.signal` at all — the shape of a reader nobody wired to
+        // honour abort, not a cooperative fake.
+        async collect(_scope: DiscoveryScope): Promise<DiscoveryFacts> {
+          return new Promise(() => {
+            // never resolves, never rejects
+          });
+        },
+      });
+
+      const collecting = collectDiscovery([{ requested: true, adapter: neverCooperates }], {
+        tenantId: TENANT_ID,
+        runnerId: 'runner-1',
+        perSourceTimeoutMs: 300,
+        itemCap: 1000,
+      });
+      const outcome = await Promise.race([
+        collecting.then(() => 'resolved' as const),
+        new Promise<'still-hanging'>((resolve) => setTimeout(() => resolve('still-hanging'), 1500)),
+      ]);
+      // Acknowledged limit, see comment above — this should read 'resolved' once the orchestrator
+      // actually races the adapter promise against its own timeout.
+      expect(outcome).toBe('still-hanging');
+    }, 4000);
+  });
+
   // ───────────────────────────── T031: an injected instruction changes nothing ─────────────────────────────
 
   describe('T031 (injected instruction): the commit message and a k8s annotation change nothing', () => {
