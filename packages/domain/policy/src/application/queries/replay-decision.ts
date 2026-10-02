@@ -36,6 +36,10 @@ export async function replayDecision(
     readonly rulesetVersion: number;
     readonly outcome: Decision['outcome'];
     readonly matchedRuleKeys: readonly string[];
+    /** The decision's persisted `budget_state`: its `escalationAttemptCap` is the one bound the
+     *  binder resolved from `budget_limit` rather than from the rule set, so a replay that did not
+     *  re-apply it would call every cap-denied decision an incident (FR-002, FR-013). */
+    readonly budgetState?: { readonly escalationAttemptCap?: number };
   },
 ): Promise<{ readonly identical: boolean; readonly replayed: Decision }> {
   const ruleset = await repos.rulesets.findByVersion(
@@ -50,7 +54,15 @@ export async function replayDecision(
     reasonCode: r.reasonCode,
   }));
 
-  const { decision } = evaluate({ version: ruleset.version, rules }, stored.decisionInput);
+  const cap = stored.budgetState?.escalationAttemptCap;
+  const { decision } = evaluate(
+    {
+      version: ruleset.version,
+      rules,
+      ...(cap !== undefined ? { escalationAttemptCap: cap } : {}),
+    },
+    stored.decisionInput,
+  );
   // data-model.md's Invariants: "`evaluate(ruleset_version, decision_input) = (outcome,
   // matched_rule_keys)` replays identically" — both halves of that pair, not only `outcome`
   // (batch 9 C2, review finding: comparing outcome alone would call two decisions identical even

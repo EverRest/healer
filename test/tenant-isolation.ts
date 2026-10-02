@@ -44,6 +44,10 @@ export async function assertTenantIsolated(
      *  the tenant. */
     readonly requestHeaders?: Record<string, string>;
     readonly body?: unknown;
+    /** Query string for a route that names its resource there rather than in the path
+     *  (002 T067: `GET /budgets/state?scopeType=issue&scopeId=…`). Sent identically for both
+     *  tenants. */
+    queryFor?(realId: string): Record<string, string>;
   },
 ): Promise<void> {
   const httpMethod = method.toLowerCase() as 'get' | 'post' | 'patch' | 'put' | 'delete';
@@ -52,6 +56,7 @@ export async function assertTenantIsolated(
   const send = (tenant: string) => {
     const pending = request(app.getHttpServer())
       [httpMethod](realPath)
+      .query(config.queryFor?.(realId) ?? {})
       .set({ ...config.requestHeaders, [config.tenantHeader]: tenant });
     return config.body === undefined ? pending : pending.send(config.body as object);
   };

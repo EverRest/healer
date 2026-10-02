@@ -35,9 +35,9 @@ attempt to pass model-reported confidence: **the field does not exist** (FR-003,
 | impact | `classification`, `touchesPublicContract`, `touchesMigration`, `touchesAuthPath`, `touchesMoneyPath`, `closure` | 008 FR-003, 004 — consumed, never computed here |
 | reversibility | `reversible`, `hasTestedUndo` | derived from 010's catalogue (010 FR-002, FR-003) |
 | autonomy | resolved grant level for the scope | this feature |
-| budget | consumed, limit, `declaredMaxCost`, degradation step | aggregated from 012 FR-036 |
+| budget | consumed, limit, `declaredMaxCost`, degradation step | **resolved, not supplied**: aggregated from 012 FR-036 for the issue and run the evaluation is bound to. The caller's `consumed`, `limit` and `degradationStep` are ignored and replaced; only `declaredMaxCost` is the step's own. Dry run and enforcing evaluation resolve the same figures when given the same binding |
 | cooldown | `recentAllowCount`, `windowSeconds`, `attemptCount` — counted over `policy_decision` history for `(actionKey, targetRef, fingerprint)` | this feature (R-13, C-11) |
-| escalation | `attemptCount` | **012's `workflow_run`** — counted from that run's escalation transitions, not stored as a counter here (FR-013) |
+| escalation | `attemptCount`, `escalating?` | `attemptCount` is **resolved from 012's `workflow_run`** — counted from that run's transitions into `escalating`, not stored as a counter here (FR-013); the caller's value is ignored. **Nothing produces that state yet** (006/008/012 own the escalation flow), so the count is 0 today. `escalating` is the calling feature's structural statement that *this proposal is an escalation*; absent means false |
 | time | `evaluatedAt` | the caller — the evaluator reads no clock, so a decision replays |
 
 `targetRef`, `fingerprint` and every string field is an identifier or an enumerated value. **No field
@@ -86,6 +86,10 @@ free-text field. Each of those is a route for collected content to reach a decis
 6. cooldown               rate, cooldown and attempt-cap counts over the window for
                           (actionKey, targetRef, fingerprint) → DENY(RATE_LIMITED ·
                           COOLDOWN · ATTEMPT_CAP_REACHED)                         (FR-014)
+7. escalation cap         an *escalating* proposal whose escalation.attemptCount has reached
+                          budget_limit.escalation_attempt_cap → DENY(ESCALATION_CAP_REACHED);
+                          other proposals are never refused here, so a cap of 0 stops
+                          escalation and nothing else                             (FR-013)
 ```
 
 There is **no autonomy step**. A rule that requires a level says so itself, with
@@ -96,7 +100,7 @@ reviewable where the rest of the rule set is, and nothing else ever defined it.
 `reversible_remediation` has no level at all when the undo is unattested, so the one class with a
 live L5 cannot reach it on an undo nobody has executed.
 
-Steps 3 through 6 only ever make the outcome more restrictive. Nothing after step 2 can turn a
+Steps 3 through 7 only ever make the outcome more restrictive. Nothing after step 2 can turn a
 `DENY` into an `ALLOW`, which is the property that makes the ceiling un-exceedable regardless of
 what any rule says.
 
@@ -172,5 +176,5 @@ substrate rather than a copy of it.
 or wrong value type) · `CEILING_EXCEEDED` · `UNDO_NOT_ATTESTED` · `DECISION_ALREADY_CONSUMED` ·
 `DECISION_NOT_ALLOWED` · `DIGEST_MISMATCH` · `STALE_AUTONOMY_EPOCH` · `APPROVAL_NOT_PENDING` ·
 `BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` ·
-`NO_MATCHING_RULE` (the reason code accompanying the default `DENY`, so that "no rule matched" is a
+`ESCALATION_CAP_REACHED` · `NO_MATCHING_RULE` (the reason code accompanying the default `DENY`, so that "no rule matched" is a
 recorded fact rather than an absence).

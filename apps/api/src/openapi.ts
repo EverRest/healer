@@ -10,7 +10,10 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
   AutonomyGrantRepository,
+  BudgetLimitRepository,
+  BudgetRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
   PolicyRulesetRepository,
@@ -89,6 +92,26 @@ const noopAutonomyGrants: AutonomyGrantRepository = {
   revoke: () => Promise.reject(new Error('not implemented for contract generation')),
 };
 
+const noopBudgets: BudgetRepository = {
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+  bindCharged: () => Promise.reject(new Error('not implemented for contract generation')),
+  markDegradation: () => Promise.reject(new Error('not implemented for contract generation')),
+  releaseAbandonedCharges: () =>
+    Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopBudgetLimits: BudgetLimitRepository = {
+  list: () => Promise.resolve([]),
+  put: () => Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented for contract generation')),
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+  expire: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
+
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
  * module declaration — two module definitions is two places the route set can drift apart. It
@@ -116,6 +139,9 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopPolicyActions,
     noopRunnerRegistrations,
     noopAutonomyGrants,
+    noopBudgets,
+    noopBudgetLimits,
+    noopApprovals,
     noopGraphReads,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });

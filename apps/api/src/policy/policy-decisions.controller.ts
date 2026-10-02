@@ -140,6 +140,7 @@ export class PolicyDecisionsController {
       rulesetVersion: decision.rulesetVersion,
       outcome: decision.outcome,
       matchedRuleKeys: decision.matchedRuleKeys,
+      budgetState: decision.budgetState,
     });
 
     return {

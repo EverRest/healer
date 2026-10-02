@@ -17,7 +17,10 @@ import {
   evaluateAndBind,
   publishRuleset,
   PrismaAutonomyEpochRepository,
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -33,6 +36,8 @@ import {
   assertTenantScopedEnqueue,
 } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
+import { seedAgentRun, seedBase, seedIssue } from '../../test/budget-fixtures.js';
+import { seedPendingApproval } from '../../test/approval-fixture.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 
@@ -122,6 +127,7 @@ describe('/policy (002 T027-T030, T032)', () => {
   let autonomyEpochs: PrismaAutonomyEpochRepository;
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
+  let budgets: PrismaBudgetRepository;
 
   const path = (p: string) => `/api/v1${p}`;
 
@@ -130,6 +136,7 @@ describe('/policy (002 T027-T030, T032)', () => {
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await seedBase(pg);
     // `policy_action` is global, seeded once for the whole database (mirrors `db-seed.mjs`'s own
     // copy of `SEED_POLICY_ACTIONS` — see that file's comment for why it is duplicated, not
     // imported, there; this test imports the real package since it runs under vitest, not plain
@@ -149,6 +156,7 @@ describe('/policy (002 T027-T030, T032)', () => {
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
 
     const ApiModule = createApiModule(
       { service: 'healer-api', version: 'test', build: 'test', runnerProtocolVersion: 1 },
@@ -164,6 +172,9 @@ describe('/policy (002 T027-T030, T032)', () => {
       actions,
       new PrismaRunnerRegistrationRepository(prisma),
       autonomyGrants,
+      budgets,
+      new PrismaBudgetLimitRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
       new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
@@ -190,7 +201,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       const tenant = TenantContext.forTrustedInternalUse(tenantId);
       await publishUnder(tenantId);
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         tenant,
         {
           decisionInput: buildDecisionInput(overrides),
@@ -482,7 +493,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       ]);
       const decision = await withCorrelation(newCorrelationId(), async () => {
         const { decision } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           TenantContext.forTrustedInternalUse(tenantId),
           {
             decisionInput: buildDecisionInput(),
@@ -516,6 +527,50 @@ describe('/policy (002 T027-T030, T032)', () => {
 
       const after = await prisma.policyDecision.count({ where: { tenantId } });
       expect(after).toBe(before);
+    });
+
+    it("with an issue named, resolves that issue's budget as the enforcing path does: over budget is deny (R-08, quickstart 31)", async () => {
+      const tenantId = randomUUID();
+      await publishUnder(tenantId);
+      const issueId = await seedIssue(pg, tenantId);
+      await query(
+        pg,
+        `insert into "policy"."budget_limit"
+           (id, tenant_id, scope_type, scope_id, period, spend_limit, time_limit_ms, soft_threshold_pcts,
+            escalation_attempt_cap, updated_at, updated_by)
+         values ('${randomUUID()}', '${tenantId}', 'issue', null, 'issue', 1, 1000, '{50}', 1, now(), 'sql')`,
+      );
+      await seedAgentRun(pg, { tenantId, issueId, cost: 1 });
+      const before = await prisma.policyDecision.count({ where: { tenantId } });
+
+      const named = await request(app.getHttpServer())
+        .post(path(`/policy/dry-run?issueId=${issueId}`))
+        .set('X-Tenant-Id', tenantId)
+        .send(dryRunBody())
+        .expect(200);
+      expect(named.body.outcome).toBe('deny');
+      expect(named.body.reasonCodes).toContain('BUDGET_EXHAUSTED');
+      // the same input with no issue named sees only the tenant budgets
+      const unnamed = await request(app.getHttpServer())
+        .post(path('/policy/dry-run'))
+        .set('X-Tenant-Id', tenantId)
+        .send(dryRunBody())
+        .expect(200);
+      expect(unnamed.body.outcome).toBe('allow');
+      expect(await prisma.policyDecision.count({ where: { tenantId } })).toBe(before);
+    });
+
+    it('an unknown or other-tenant issue or run is 404, a malformed one 422', async () => {
+      const tenantId = randomUUID();
+      await publishUnder(tenantId);
+      const post = (q: string) =>
+        request(app.getHttpServer())
+          .post(path(`/policy/dry-run?${q}`))
+          .set('X-Tenant-Id', tenantId)
+          .send(dryRunBody());
+      await post(`issueId=${randomUUID()}`).expect(404);
+      await post(`workflowRunId=${randomUUID()}`).expect(404);
+      await post('issueId=nope').expect(422);
     });
 
     it('422s an unknown key, including a smuggled confidence field (quickstart 3, over HTTP)', async () => {
@@ -604,6 +659,52 @@ describe('/policy (002 T027-T030, T032)', () => {
         tenantB: randomUUID(),
         tenantHeader: 'X-Tenant-Id',
         createUnderA: async () => decision.id,
+        responseContainsMarker: (body, marker) =>
+          (body as { items: { id: string }[] }).items.some((item) => item.id === marker),
+      });
+    });
+  });
+
+  // T032 extended for Phase 7 (approval reads and the resolve mutation): its own note said
+  // "extend, don't rewrite, when those land". Behaviour of the endpoints is `approvals.e2e.test.ts`.
+  describe('approvals are tenant-scoped (T032, T075, FR-018, SC-008)', () => {
+    it("GET /approvals/{approvalId}: another tenant's approval id returns 404, never 403", async () =>
+      assertTenantIsolated(app, 'GET', '/api/v1/approvals/:approvalId', {
+        tenantA: randomUUID(),
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        createUnderTenant: async (tenantId) =>
+          (await seedPendingApproval(prisma, tenantId)).approval.id,
+      }));
+
+    it('POST /approvals/{approvalId}/resolve: another tenant cannot resolve it — 404, and it stays pending', async () => {
+      let approvalId = '';
+      const tenantA = randomUUID();
+      await assertTenantIsolated(app, 'POST', '/api/v1/approvals/:approvalId/resolve', {
+        tenantA,
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        requestHeaders: { 'X-Actor-Id': 'alice', 'Idempotency-Key': randomUUID() },
+        body: { resolution: 'approved' },
+        createUnderTenant: async (tenantId) => {
+          approvalId = (await seedPendingApproval(prisma, tenantId)).approval.id;
+          return approvalId;
+        },
+      });
+      // The foreign request ran after tenant A's own; had tenant B's succeeded first it would have
+      // resolved A's request as B. A's resolution (by `alice`) is what is on record.
+      const row = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approvalId } });
+      expect(row).toMatchObject({ state: 'approved', resolvedBy: 'alice', tenantId: tenantA });
+    });
+
+    it("GET /approvals: a list never contains another tenant's approvals", async () => {
+      const tenantId = randomUUID();
+      const { approval } = await seedPendingApproval(prisma, tenantId);
+      await assertTenantIsolatedList(app, 'GET', '/api/v1/approvals', {
+        tenantA: tenantId,
+        tenantB: randomUUID(),
+        tenantHeader: 'X-Tenant-Id',
+        createUnderA: async () => approval.id,
         responseContainsMarker: (body, marker) =>
           (body as { items: { id: string }[] }).items.some((item) => item.id === marker),
       });

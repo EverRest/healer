@@ -21,6 +21,10 @@ export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
  *  circular import between the two controller files. */
 export const AUTONOMY_GRANT_REPOSITORY = Symbol('AUTONOMY_GRANT_REPOSITORY');
 
+/** Same placement, same reason: `PolicyEvaluationController` (dry-run resolves the real budget
+ *  figures) and `BudgetsController` both inject it. */
+export const BUDGET_REPOSITORY = Symbol('BUDGET_REPOSITORY');
+
 export const MAX_ACTOR_LENGTH = 128;
 
 /** `X-Actor-Id` — same caller-asserted stub convention as `IssuesController.close` (001 T057). */

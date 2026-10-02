@@ -68,6 +68,38 @@ export const SEED_POLICY_ACTIONS: readonly Omit<PolicyAction, 'introducedAt'>[] 
     mutating: false,
     owningSpec: '002',
   },
+  // `PUT /budgets` audits as `policy.update_budget` (T057, FR-020) — an admin/config change like
+  // grant/revoke above, so `mutating: false` and never gated by `evaluate()`.
+  {
+    actionKey: 'policy.update_budget',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.request_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.resolve_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.expire_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
+  {
+    actionKey: 'policy.revoke_approval',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '002',
+  },
 ];
 
 /**

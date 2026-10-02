@@ -2672,6 +2672,384 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
   marker in).
 
+## 002 Phase 6 (T056–T069) — judgment calls (budgets)
+
+Implemented on `worktree-agent-a78aab9e73c3f9d7c` (commits `c0ca8b9`…`f43166d` plus the docs commit),
+migration prefix `20261003090000_budget_limit_bounds`. `budget_limit`, `budget_degradation_mark` and
+the `budget_degradation` evidence type already existed from T002/001, so the migration adds only the
+T088 bounds, the scope/period CHECK and a unique key. No question blocks; the calls below are
+decided, recorded here so a reviewer can overrule them.
+
+**Not built, and why** — both are consumers this release has no code for, and both were ticked in
+`tasks.md` with the gap named in the note:
+
+- **T058's "the workflow suspends resumably".** Policy refuses: the AI step's decision is a `DENY(BUDGET_EXHAUSTED)`
+  (a recorded decision, not an exception), the issue gets an evidence record naming what completed,
+  and the same step proceeds once the limit is raised or the window rolls (tested). What moves the
+  *run* to a suspended state is the guarded-step handler that reads that decision, which belongs to
+  012's workflow definitions (006/008) and does not exist. The reader of the refusal is
+  `consumeDecision`, which already refuses a non-allow decision (R-14) — so an AI step cannot run
+  past it — but nothing turns the refusal into `needs_human`/suspended yet.
+- **T066's hand-off to a human with evidence, hypotheses and reasons for rejection.** The evaluator
+  denies with `ATTEMPT_CAP_REACHED` at the cap; assembling the hand-off package is the escalating
+  workflow's job (006/009), not policy's.
+
+**Judgment calls**
+
+1. **`agent_run.cost` cannot be shown to be measured today** — it has no provenance column and
+   nothing writes `agent_run` yet (012 T059's write path and T061/T094, "measured, never estimated",
+   are deferred). `check:budget-reconcile` therefore cannot *prove* measurement; it refuses the
+   forms of estimate it can see (a finished run with tokens and no cost, a negative cost, a run
+   that cost more than its own step declared) and its header says so. Adding the real reconciliation
+   against provider usage belongs with 012 T094, in the same check.
+2. **R-11 was wrong about not needing a lock.** "The ex-ante check is what makes it safe" fails under
+   READ COMMITTED (two concurrent steps both read 90 and both pass `90 + 10 <= 100`; reproduced —
+   without the lock 17 of 20 charges against a limit of 10 were allowed). `research.md` R-11 now says so. The
+   charge is the **declared maximum of an allowed step, carried by its persisted `policy_decision`**
+   (`budget_state.reservedSpend`), an *open charge* replaced by the actual cost once a *finished*
+   `agent_run` references the decision. No reservation table, no counter; resolve-and-persist run
+   under one lock.
+3. **An advisory lock (`pg_advisory_xact_lock`), not `FOR UPDATE`.** There is no row guaranteed to
+   exist to lock: a tenant that never configured a budget runs on the fail-closed defaults and has no
+   `budget_limit` row, and policy tables carry no FK to `tenant.tenant`. Per-tenant, held for the
+   resolve-and-persist transaction only, **bounded** (`lock_timeout` 5 s, then a retryable
+   `BudgetContentionError`/429; ADR 0015 reconciles it with 008 R-16 and ADR 0003); a step that
+   declares no cost takes no lock (tested).
+4. **A leaked charge, and its release.** A decision whose step never runs (worker died, step
+   cancelled) stays charged at its declared maximum — fail-closed, an over-count. Review: that must
+   not lock an issue out forever. `releaseAbandonedCharges` invalidates allowed, never-consumed,
+   never-run decisions older than `ABANDONED_CHARGE_TTL_MS` (2 h) with the new
+   `invalidated_reason = 'charge_abandoned'` — a closed list now declared once (`INVALIDATED_REASONS`,
+   with a test that data-model.md and openapi.yaml agree). **No production caller schedules it**
+   (no scheduler exists; the same gap as the approval sweep). **Limit**: a *consumed* decision cannot
+   be invalidated (the terminal XOR CHECK), so a step that started and never finished keeps its
+   charge until the run writer finalises the `agent_run`.
+5. **The declared maximum is the caller's.** An AI step declaring 0 charges nothing (and takes no
+   lock), so an under-declaring caller delays the refusal by one step. The actual cost still lands
+   in `agent_run` and the next evaluation reads it; `check:budget-reconcile` reports any run that
+   cost more than its declaration, which is the reader of this guarantee.
+6. **The evaluator takes one `(consumed, limit)` pair, but a step must fit every budget** (per-issue
+   and tenant day and month, spend and time). The pair handed to it is the most constrained one
+   (`bindingBudget`, ties broken per-issue, day, month, spend before time) and the binding scope is
+   persisted in `budget_state.binding`. When time binds, the declared maximum handed to the predicate
+   is 0 (no one declares a time forecast); the declared *spend* is still reserved
+   (`reservedSpend`).
+7. **Units and a reading of "elapsed".** 012's `tenant_budget.time_limit` states no unit; it is read
+   as milliseconds (matching `budget_limit.time_limit_ms`). `workflow_run` elapsed is to `updated_at`
+   when terminal and to the evaluation instant while live, **minus the time the run was parked**
+   (review H1: one slow approver must not exhaust an issue's time budget). Parked = from a
+   transition into a state named `awaiting_*` (or `needs_human`) until the next transition, derived
+   from `workflow_transition`. 012 has not named its waiting states, so the prefix is policy's one
+   declaration of the convention; a workflow that names them otherwise is charged for waiting
+   (conservative). Nothing produces such states yet either. The time bounds fit an `INTEGER`: 4 h / 24 h /
+   20 days. Every bound and default (T088) is a starting value pending the stage-0 benchmark.
+8. **The pinned period key is `LEAST(own start, workflow start)`.** Pinning to the workflow's start
+   alone (the first version) dropped the spend of an agent run that *predates* its workflow
+   (classified at ingest, say) from both windows when it crossed a day boundary: the scan pruned it
+   on its own `started_at` while pinning moved it to the later window. `check:budget-reconcile`
+   found this on its first run against a plant I had written to be realistic — the independent
+   recomputation doing its job. Agent runs join workflow runs on `correlation_id`, which 012 does
+   not make unique per run; the earliest start among runs sharing it is used.
+9. **Exhaustion is step `n + 1`**, recorded like any other step (entry `ai_steps_refused`), and a
+   refusal records it for the scope that refused even when consumed is still below the limit (nine
+   of ten spent, a step declaring two: nothing more can run, so the budget is exhausted for every
+   purpose that matters). A refusal before any threshold was crossed records only exhaustion;
+   steps nothing reached are not claimed. `BudgetExhausted` is therefore published once per scope and
+   period, `BudgetDegraded` once per step.
+10. **Degradation marks lag by one evaluation, and need an issue.** The standing a mark records is
+    the budget as resolved *before* the evaluation's own charge, so the evaluation that crosses a
+    threshold is marked by the next one. Evidence is per issue (001), so a tenant-scope step is
+    attached to the first issue whose evaluation sees it; an evaluation with no issue records
+    nothing rather than inventing one. Both are self-healing: the step is derived, so the next
+    evaluation records whatever is missing (tested by the jump-over-steps case).
+11. **Policy writes the evidence row directly** (in the mark's transaction, like `recordAuditEntry`
+    writes `audit_entry`) rather than through 001's repository — no domain package depends on
+    another, and a separate repository transaction could not be atomic with the mark. The evidence
+    id is a deterministic function of the mark's key, and `EvidenceRecorded` is mirrored locally so
+    the timeline's feed still hears of the record. `expires_at` is a 400-day placeholder.
+12. **The escalation attempt count is `workflow_transition` rows into `escalating` — and nothing
+    produces that state.** The cap predicate is built and tested against a quantity no workflow
+    increments yet (T066b, not built; un-ticked). Review: the cap applies to an *escalating*
+    proposal only (new optional `escalation.escalating` on the closed `DecisionInput`, a structural
+    statement by the calling feature; nothing sets it yet), so a cap of 0 stops escalation and
+    nothing else, and it has its own reason code `ESCALATION_CAP_REACHED` (distinct from the
+    per-action `ATTEMPT_CAP_REACHED`; a new value on the `policy_reason_code` enum, migration
+    `20261003110000`, whose down-script cannot remove it). 012/006 own
+    the state graph and have not named an escalation state; `ESCALATION_TO_STATE` is the one place
+    policy names it. A workflow that names it differently is simply not counted — change the
+    constant, not the callers. The cap is the tightest `budget_limit.escalation_attempt_cap` that
+    applies (012's `tenant_budget` has none), default 2 (fail closed), and is persisted in
+    `budget_state` so a replay re-applies it (`replayDecision` takes an optional `budgetState`).
+13. **`PUT /budgets` merges over the limit *in force*.** The contract makes only `scopeType` and
+    `period` required, so an omitted field keeps what is in force — the stored row, else 012's
+    `tenant_budget`, else the fail-closed default; never "unbounded", and never reverting an
+    inherited limit to a default (review #5). The merge happens inside the transaction that writes,
+    under a per-tenant configuration lock, so concurrent partial writes are both kept, and the
+    *merged* result is bounded. Soft thresholds outside 1–99, or more than 5, are 422 — never
+    silently dropped (`BUDGET_BOUNDS.maxSoftThresholds`, CHECK-agreed). A NULL threshold column is
+    reported as what is enforced (the default), not `[]`. 012 `tenant_budget` values that were
+    replaced by a fail-closed value (unknown degradation entry, out-of-range threshold) come back as
+    `warnings` on the resolved budget / `GET /budgets/state` and are logged. A refused write is not
+    audited (recorded, not built). `scope_id` NULL means "every issue" for the per-issue limit; an issue-specific
+    override row is honoured by resolution but has no API yet. `GET /budgets/state` gained optional
+    `period` (tenant day or month, default day) and `workflowRunId` (pins the period key); the
+    contract yaml says so.
+14. **Every evaluation now overwrites `budget.{consumed, limit, degradationStep}` and
+    `escalation.attemptCount`** from the aggregate, like `autonomy.level` and `actionClass` before
+    them (**the dry run now takes an optional `issueId`/`workflowRunId` query so it resolves the same
+    binding as the enforcing path**, review I4 — tested: an over-budget issue is deny in both; the
+    caller's budget figures are ignored and documented as such in evaluation.md) (same
+    required-dependency move: `budgets` on `EvaluateAndBindRepos` and
+    `ExplainDecisionRepos`). Two existing e2e tests changed their *input plumbing*, and one its
+    expectation: with nothing configured the per-issue default (2) binds, tighter than the 100 the
+    test's input claimed (`policy-decision-repository.e2e.test.ts`). The dry-run endpoint resolves
+    tenant-level figures only (it carries no issue).
+15. **Where `check:budget-reconcile` is wired into `make ci`:** every budget e2e scenario
+    (`budget-enforcement`, `budget-flood`) ends by running `findBudgetDiscrepancies` over what it
+    left behind, and `scripts/checks/budget-reconcile.e2e.test.ts` runs it over a deliberately
+    awkward tenant (midnight straddle, in-flight, landed, terminal and live runs) and proves a
+    disagreement, an unpriced run and an over-declared run are each reported — all under `make
+    test-e2e`. There is no separate Makefile target, matching `check:ceiling` and
+    `check:policy-coverage`, which are production monitors with their e2e tests as the CI reader.
+16. **Test plumbing.** The shared e2e harness lives in `test/infrastructure/` because
+    `@healer/prisma-client` is lint-restricted to `infrastructure/**` and the harness constructs the
+    client; `test/tenant-isolation.ts`'s `assertTenantIsolated` gained an optional `queryFor` so a
+    route that names its resource in the query string (`/budgets/state`) can use it. The flood test
+    is in `HEAVY_E2E` (≈9 s alone, serialized behind the charge lock).
+17. **`createApiModule` gained two trailing parameters** (`budgets`, `budgetLimits`); every call
+    site was updated by hand (ingest ×1 of 2 — the second, a 503 test, already passed fewer
+    arguments than the signature and still does, runners, load, issues, issue-close-and-views,
+    policy, autonomy-grants, `main.e2e`, `openapi.ts`, `main.ts`). The implementer of approvals
+    (T070–T076) will have appended parameters too: merge by keeping both, then regenerate
+    `apps/api/openapi.json` (`pnpm run generate:openapi`) rather than merging it by hand. Also appended
+    here: `policy.update_budget` in `SEED_POLICY_ACTIONS` and `scripts/db-seed.mjs`, and
+    `budget-flood.e2e.test.ts` in `HEAVY_E2E`.
+
+
+### Review round on the budgets work — outcomes and judgment calls
+
+Two independent reviews (code-reviewer, silent-failure-hunter), fixed in follow-up commits on the same
+branch; migration prefix `20261003110000_budget_hardening` (a reason-code enum value and
+`policy_decision.request_key` with a partial unique index). Items 1–15 above are amended in place where
+they changed.
+
+- **Idempotent charge.** A charged step carries `request_key` (the request with resolved fields and
+  the instant removed); under the lock a retry of the same `(tenant, run, state, request)` returns the
+  live allowed decision. Only a step bound to a run *and* a state can be deduplicated; a decision that
+  charged nothing is not (a retried deny is harmless). A deny is not deduplicated either, so a retry
+  after the budget was raised is evaluated afresh — deliberate.
+- **Failure after commit.** `markDegradation` failing is logged (`repos.log`, structured, tenant-tagged)
+  and swallowed: the next evaluation records the missing step (it is derived). The autonomy epoch is
+  read *before* anything is charged, so a revocation during the lock wait is not hidden and its failure
+  cannot strand a committed decision.
+- **Binding is validated inside the charge transaction.** An unknown, malformed or other-tenant issue
+  or workflow run is `NotFoundError` (404) before any charge commits — for evaluation, dry run and
+  `GET /budgets/state` alike. An *enforcing* evaluation also refuses an `evaluatedAt` more than 5 min
+  from the database clock (`EvaluationInstantError`, 422); a read is not bound, because a dry run
+  replays history. The bound is a repository option (`maxEvaluationSkewMs`, `Infinity` disables); the
+  e2e tests that evaluate at fixed historical instants pass `Infinity`, production wiring takes the
+  default, and a dedicated test proves the default refuses.
+- **Existing e2e tests changed** because bindings are now validated: they seed the issue and workflow
+  run they bind (`policy-decision-repository`, `autonomy-grant-resolution`).
+- **Issue deletion** now deletes the issue-scope marks, issue-scope limit overrides and the marks
+  whose evidence went with the issue (001's `prisma-issue-deletion.ts`, one statement pair). A
+  tenant-scope step whose evidence was the deleted issue's is recorded afresh by the next evaluation,
+  attached to an issue that exists.
+- **`completedAgentRuns`** is capped at 50 and says `completedAgentRunsTruncated: true` past it.
+- **`check:budget-reconcile`**: recomputes parked-aware time; flags a run whose `policy_decision_id`
+  names no decision, another tenant's decision, or a non-allow; takes `tenantIds` so a shared test
+  database's deliberate plants do not fail an unrelated assertion.
+- **ESCALATION state / T058b / T066b** un-ticked and split; T060 and T069 notes corrected (no
+  scheduled production caller for the release command or the reconcile).
+- **Not done, recorded.** (a) Exhaustion evidence can become false later (a limit raised after the
+  record): the record is a statement *at that step*, with the figures and period key it carries. (b)
+  An evaluation with no issue binds records no degradation step (evidence is per issue); the next one
+  with an issue does. (c) The finished-cost pin (by `correlation_id`) and the open-charge pin (by
+  `workflow_run_id`) can disagree when a decision's agent run lands under a different workflow run;
+  the reconcile compares each side against the same JS definition, so it would show the drift, but they
+  are not unified. (d) `check:budget-reconcile` does not iterate keys present only on the SQL side
+  (it walks the keys the raw rows imply). (e) A refused `PUT /budgets` is not audited. (f) A
+  `require_approval` decision reserves no charge: when approvals redeems it nothing is charged
+  ex ante — Phase 7 must either charge at redemption or declare approvals cost-free; approvals did
+  not add a charge. (g) `bindingBudget` breaks an exact spend/time ratio tie by a fixed order, not by
+  which dimension is closer to refusing in absolute terms.
+- **ADR 0015** records the lock decision and indexes it in docs/README.md; research R-11 is rewritten
+  as one consolidated decision rather than a decision plus an appended correction.
+
+## 002 Phase 7 (T070–T076) — judgment calls (approvals)
+
+Decided, not asked. Branch `worktree-002-phase6-7-budgets-approvals` (implementer B).
+
+- **No migration.** `approval_request` (unique `decision_id`, index `(tenant_id, state, expires_at)`)
+  already existed from T002 and already fits. `data-model.md` gained implementation notes only.
+- **"Redeem" is `ResolveApproval`.** There is no executor to redeem against yet, so the human's
+  click is the redemption point and `checkAutonomyEpoch` runs there, inside the transaction, under
+  the row lock (`assertRedeemable`: not pending / lapsed → `APPROVAL_NOT_PENDING`, then stale epoch
+  → `STALE_AUTONOMY_EPOCH`). An approval granted and *then* revoked is covered by R-07 mechanism 1
+  (the executor re-evaluates; nothing is carried across the wait), not by a second "redeem"
+  command. **Open, spec-silent:** how an `approved` request turns the executor's re-evaluation into
+  an `ALLOW` — `REQUIRE_APPROVAL` decisions are (correctly) unconsumable and nothing in 002 mints
+  an `ALLOW` from an approval. That belongs to whoever builds the first executor (008/010); not
+  invented here.
+- **The summary is built, never supplied.** `RequestApproval` takes a decision id and evidence ids,
+  nothing else; `buildApprovalSummary` reads the stored decision and every free-string slot must fit
+  the identifier alphabet (no whitespace). Consequence worth knowing: a decision whose `targetRef`
+  (etc.) holds a sentence is *refused* (`ApprovalSummaryNotStructuralError`), loudly, instead of
+  rendered. The rule `note` (data-model says "shown in the approval summary") is **not** included:
+  T070's list does not name it and it is tenant-authored free text; add it through the same closed
+  schema if wanted.
+- **"Against which rule set version"** = the decision's own immutable `ruleset_version`, written
+  into the resolve `audit_entry` reason and returned as `rulesetVersion`. Not "the version published
+  at click time" — the approver saw, and approved, what that version decided.
+- **Projection pulls the run's deadline earlier.** `expires_at = min(requested, run.deadline_at)`
+  and `workflow_run.deadline_at` is set to it, so the tick that fires the expiry exists by
+  construction. No expiry requested and no run deadline → refused (nothing would fire it).
+- **Run effects are direct writes to 012's tables.** 012's machine has no persisted stepper and no
+  `awaiting_approval`/`needs_human` definition in this repo, so parking (`awaiting`, `deadline_at`,
+  a `workflow_callback` row of kind `approval`, token generated and discarded — a human resolves
+  through the authenticated API) and the lapse (`state = needs_human`, `terminal_state`, a
+  `workflow_transition` with cause `timeout`) are written in the same transaction by
+  `approval-run-effects.ts`. Callback delivery for resolve/expire is in-transaction (consume the
+  row, repeats count). (A port for the T045 sweep was added here and later removed — see the review follow-up below.)
+- **A lapse is a recorded `DENY`, not an evaluation.** `deny` + `APPROVAL_EXPIRED`, no matched
+  rules, the original decision's input/digest/ruleset version; the original is invalidated with
+  `approval_expired`. It cannot replay (no input maps to a rule-less deny), so `check:decision-replay`
+  skips decisions of exactly that shape (`reason_codes ∋ APPROVAL_EXPIRED` and no matched rule keys).
+  `POST /policy/decisions/{id}/replay` on a lapse decision will therefore report non-identical;
+  left alone (an explicit read of an explicit fact).
+- **Sweep `revoke()` now takes the row lock** (T045 code, `FOR UPDATE` via the shared
+  `lockApproval`). Without it the sweep's read-then-write could overwrite an approval a human
+  committed an instant earlier — same bug class as resolve vs expire. One-line semantic change.
+- **Tick body, not a scheduler.** `expireDueApprovals` is the per-tenant body of the
+  `deadline_at` tick; no scheduler exists anywhere in this repository to call it (the same gap as
+  001's staleness sweep and T045's sweep). It is idempotent and one failing request does not block
+  the rest.
+- **`check:stale-approvals` wiring (T076).** `npm run check:stale-approvals` runs against the live
+  DB like its four siblings (not in `make ci`: CI has no production database). What `make ci`
+  *does* run is `approval-lifecycle.e2e.test.ts` (inside `make test-e2e`), which seeds each
+  violation shape — overdue, unfireable (no/short run deadline), orphaned (terminal run) — and
+  asserts the query reports it, and seeds healthy/expired requests and asserts it does not;
+  mutation-checked. Honest gap: nothing schedules the live run yet.
+- **Races proven, not slept.** Resolve vs expire: a held `FOR UPDATE` on the approval row, both
+  contenders polled into `pg_stat_activity` lock waits, then released; exactly one wins (5 repeats).
+  Removing `FOR UPDATE` makes both win. Residual: `autonomy_epoch` is read `FOR SHARE`, which only
+  serialises against a revocation when the row exists; a tenant's *first-ever* revocation inserts it
+  and cannot be blocked. The window is the length of one resolve transaction and the outcome is the
+  same as a revocation landing a millisecond later.
+- **Error codes.** `APPROVAL_NOT_PENDING` is a contract-level name; `@healer/shared`'s closed
+  `ErrorCode` has no such member and `ApprovalNotPendingError` (T045) carries `PRECONDITION_FAILED`.
+  The HTTP controller maps it and `STALE_AUTONOMY_EPOCH` to `409`; the shared list was not touched.
+  `APPROVAL_EXPIRED` and `STALE_AUTONOMY_EPOCH` are referenced from their one authority
+  (`REASON_CODES`, `ERROR_CODES`), not redeclared.
+- **Registry.** Three audit actions (`policy.request_approval`, `policy.resolve_approval`,
+  `policy.expire_approval`, `mutating: false`, same reasoning as publish/grant/revoke) added to
+  `SEED_POLICY_ACTIONS` **and** the hand-synced `scripts/db-seed.mjs` copy, or
+  `check:policy-coverage` would flag every approval audit entry as unregistered.
+- **`createApiModule` gained a 14th parameter (`approvals`).** All ten call sites were edited by
+  hand. One of them (`ingest.e2e.test.ts`, the 503 test) had been missing the 13th (`autonomyGrants`)
+  since Phase 4 — e2e tests are outside `tsc`'s `include`, so nothing flagged it; both are passed now.
+- **Duplication kept small on purpose:** the lapse decision's `INSERT` repeats `record()`'s column
+  list instead of refactoring `PrismaPolicyDecisionRepository` (another implementer is in this
+  package); fold the two together once Phase 6 lands.
+- **T032 extended** in `apps/api/policy.e2e.test.ts`: approval read, list and resolve are 404
+  cross-tenant (mutation-checked: dropping `tenantId` from `findById` fails it; resolve is also
+  protected independently by the tenant-scoped row lock). Endpoint behaviour is
+  `apps/api/approvals.e2e.test.ts`.
+
+### 002 Phase 7 — review follow-up (two independent reviews of the branch)
+
+Fixed (item numbers are the coordinator's):
+
+1. **One approval per run, callback bound to its approval.** *Refuse*, not return-existing, when the
+   locked run already has a pending request or awaits something other than an approval
+   (`ApprovalAlreadyPendingError`); a repeat for the **same decision** still returns the existing
+   request (idempotency). A run whose marker belongs to a *resolved* approval may be re-parked
+   (resolve clears `awaiting`). Binding needed a **migration
+   `20261003100000_approval_callback_binding`** (with `down.sql`): nullable unique
+   `workflow.workflow_callback.approval_id`, no FK so 012 does not depend on 002. It adds a column to
+   012's table from 002's branch — flag for 012's owner. Delivery is by that key in resolve, expire
+   and revoke.
+2. `request()` idempotency read is `findFirst({decisionId, tenantId})`. Not separately
+   mutation-testable (the run lock already 404s a foreign run first); a one-line correctness fix.
+3. `RequestApproval` takes `evaluateAndBind`'s `autonomyEpoch`, records it, and refuses
+   `STALE_AUTONOMY_EPOCH` if no longer current; refuses a consumed/invalidated decision; refuses
+   `evidenceIds: []` (the approver "sees the evidence").
+4. `ResolveApproval` locks the run (after the approval, same order as expire) and refuses a terminal
+   run with `ApprovalRunTerminalError` (409). **`rejected` means:** the original decision is
+   invalidated with the new reason `approval_rejected` (data-model + openapi.yaml enum extended;
+   `invalidated_reason` is free text in the DB, so no migration for that), the callback is
+   delivered, and the run goes to terminal `needs_human` with a `human`-cause transition.
+   **Approve** delivers the callback and clears `awaiting`; the run's state is left for its stepper.
+5. `deliverApprovalCallback` throws `NotFoundError` when nothing matches; the surrounding
+   transaction rolls back.
+6. `expireDueApprovals` and `sweepRevokedApprovals` skip only `ApprovalNotPendingError`.
+7. Sweep `revoke()` now delivers the callback, moves the run to `needs_human` (cause `policy`) and
+   audits (`policy.revoke_approval`, registered in both seed lists) in the revoke's transaction. The
+   `ApprovalCallbackPort` and its Prisma implementation were **deleted** (nothing uses an
+   out-of-transaction port any more); `sweepRevokedApprovals` lost its `callback` parameter. **Not
+   done:** no outbox event on revoke — the contract's event table has no `ApprovalRevoked`, and
+   inventing one is a spec change.
+8. `check:stale-approvals` also reports: a run `awaiting` an approval with no pending request; a
+   pending request with no unconsumed `approval` callback; a request whose run does not exist
+   (explicit message). Seeded-violation tests for each.
+9. `check:decision-replay` exempts a lapse only if `deny` + exactly `['APPROVAL_EXPIRED']` + no
+   matched rules **and** an `expired` request on the same run **and** an original decision with
+   `approval_expired` and the same digest. A forged lapse-shaped row is flagged (tested).
+10. `findDue` returns `{id, expiresAt}` only. `list()` parses per row and omits a malformed row with
+    a structured error log (id + failing paths, never content); `findById` still raises for that
+    row. Judgment: an *omitted* row is invisible to the caller except in logs — the alternative (an
+    error entry in the list response) changes the contract shape. Revisit if the approver UI needs
+    it.
+11. Typed `PRECONDITION_FAILED` from `buildApprovalSummary`. **Clock:** resolve/expire still take
+    `now` from the caller rather than DB `now()` under the lock — deliberate: the injected instant
+    is what makes the lapse/race tests deterministic, and a DB clock would not remove skew between
+    the tick host and the human's request anyway.
+
+Recorded, not coded (coordinator's calls):
+
+- **C1: nothing schedules `expireDueApprovals`, `sweepRevokedApprovals` or
+  `check:stale-approvals`.** The mechanisms are built and tested; no production caller runs them, so
+  an approval that lapses today stays `pending` until something calls the tick. T072, T073 and T076
+  are ticked on the strength of the tested mechanism — **that tick should be reconsidered**;
+  tasks.md carries the note. No scheduler was invented.
+- **M4:** the decision-invalidating `updateMany` can match zero rows (already consumed or
+  invalidated); silent by design (same posture as `consume()`); no warning added.
+- **M5:** `Idempotency-Key` is validated for shape but not stored (the repo-wide known gap, 001
+  T057); retries are safe only because each mutation is itself idempotent or guarded.
+- **M6:** `check:policy-coverage` keys on `policy_action.mutating`
+  (`pa.mutating = true AND pd.id IS NULL`). The approval audit actions are `mutating:false`
+  deliberately: they are admin/control writes, not guarded actions; flipping them to `true` would
+  make the check flag every approval audit entry (each links a non-`allow`, non-consumed decision)
+  as a missing consumed ALLOW. Left as is.
+
+## Decisions waiting on Pavlo — 002 phases 6–7 (index; detail in "002 Phase 6 (T056–T069)" and "002 Phase 7 (T070–T076)" above)
+
+1. Nothing in 002 turns an `approved` request into an `ALLOW`, and a `require_approval` decision
+   reserves no budget charge — so an approved step that runs without re-evaluation could overshoot
+   a budget. Which spec owns the redemption path (008/010), and does redemption re-charge?
+2. Nothing schedules `expireDueApprovals`, the revocation sweep, `releaseAbandonedCharges`,
+   `check:stale-approvals` or `check:budget-reconcile` in production — T072/T073/T076 are ticked as
+   mechanisms with that gap named. Fold into C-90 (tenant enumerator + repeatable schedule), or
+   un-tick until it lands?
+3. T058b and T066b are un-ticked: who owns the workflow suspension on `BUDGET_EXHAUSTED`, the
+   producer of the `escalating` state and the hand-off package (006/008/012)?
+4. Approval migration `20261003100000` adds a column to 012's `workflow_callback` table — does 012's
+   owner accept that, or should the binding move?
+5. `agent_run.cost` has no provenance column and nothing writes `agent_run` yet, so
+   `check:budget-reconcile` cannot prove a cost was measured, only refuse visible estimates.
+
+## 002 Phase 6–7 — `make ci` result on this machine (coordinator)
+
+`make ci` was run three times on the merged tree. Run 1 found a real defect (the data-model drift test
+tripping on backticks in C-84's note); run 2 found a real merge defect (A's evaluation-skew bound vs
+B's fixed-instant fixtures) — both fixed. Run 3 failed `apps/api/runners.e2e.test.ts` on a 120 s timeout
+under load and it passed alone (11/11). `apps/runner/runner-image.e2e.test.ts` "genuinely drains an
+in-flight heartbeat" is **red intermittently and also on an unmodified master checkout** on this
+machine (docker `inspect` returns an empty exit code): nothing under `apps/runner` or its dependencies
+changed in this batch (the only lockfile diff is master's own 0.49.0 `@healer/domain-policy` entry).
+It passed in run 3 and fails when run alone; the cause is not established — treat as a pre-existing
+012 T050 environmental failure, not caused by 002 phases 6–7.
+
 ## 004 T036-T052 — judgment calls
 
 ### Split B (T042-T048, T051, T052 — Phase 5 / US3)

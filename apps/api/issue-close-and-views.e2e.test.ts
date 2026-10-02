@@ -19,7 +19,10 @@ import {
   type NewEvidence,
 } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -102,6 +105,9 @@ describe('close, timeline and evidence graph (001 T057/T048)', () => {
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
       new PrismaAutonomyGrantRepository(prisma),
+      new PrismaBudgetRepository(prisma),
+      new PrismaBudgetLimitRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
       new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });

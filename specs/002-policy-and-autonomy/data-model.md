@@ -37,7 +37,7 @@ addressable, that entry *is* the diff (FR-020).
 | rule_key | text | stable across versions, so a rule can be followed through history |
 | predicates | jsonb | conjunction of `(field, operator, value)` from the closed vocabulary (R-02) |
 | outcome | enum | `allow` · `require_approval` · `deny` |
-| reason_code | enum | carried into the decision; never free text. Closed set: `NO_MATCHING_RULE` · `CEILING_EXCEEDED` · `NO_AUTONOMY_GRANT` · `GRANT_REVOKED` · `ENVIRONMENT_RESTRICTED` · `COMPONENT_RESTRICTED` · `ISSUE_KIND_RESTRICTED` · `IMPACT_CLASS_RESTRICTED` · `EVIDENCE_INCOMPLETE` · `NO_ADOPTED_EXPECTATION` · `UNDO_NOT_ATTESTED` · `BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` · `APPROVAL_REQUIRED` · `APPROVAL_EXPIRED` · `TARGET_BLOCKED` · `CATEGORY_NOT_ALLOWLISTED` · `TOPIC_BLOCKED`. Adding one is a spec change, so a decision can never carry a reason nobody planned for |
+| reason_code | enum | carried into the decision; never free text. Closed set: `NO_MATCHING_RULE` · `CEILING_EXCEEDED` · `NO_AUTONOMY_GRANT` · `GRANT_REVOKED` · `ENVIRONMENT_RESTRICTED` · `COMPONENT_RESTRICTED` · `ISSUE_KIND_RESTRICTED` · `IMPACT_CLASS_RESTRICTED` · `EVIDENCE_INCOMPLETE` · `NO_ADOPTED_EXPECTATION` · `UNDO_NOT_ATTESTED` · `BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` · `ESCALATION_CAP_REACHED` · `APPROVAL_REQUIRED` · `APPROVAL_EXPIRED` · `TARGET_BLOCKED` · `CATEGORY_NOT_ALLOWLISTED` · `TOPIC_BLOCKED`. Adding one is a spec change, so a decision can never carry a reason nobody planned for |
 | note | text | tenant-facing explanation, shown in the approval summary |
 
 Unique `(ruleset_id, rule_key)`. `predicates` is schema-validated on publish: an unknown field, an
@@ -118,9 +118,10 @@ write that makes revocation immediate.
 | reason_codes | text[] | |
 | ceiling_applied | bool | true when the clamp changed the outcome (R-05) |
 | budget_state | jsonb | consumed, limit, declared max of the next step, degradation step |
+| request_key | text? | a *charged* step's idempotency key: the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step returns the decision it already minted instead of charging twice (T060) |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
-| invalidated_reason | text? | `epoch_bump` · `approval_expired` — **not** `digest_mismatch` (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays `issued` and retriable with the correct digest, never invalidated |
+| invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `charge_abandoned` — **not** digest_mismatch (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays issued and retriable with the correct digest, never invalidated |
 
 `UPDATE` is rejected except for `consumed_at` and `invalidated_reason` transitioning from null.
 
@@ -135,7 +136,7 @@ cooldown and attempt-cap predicates read (R-13, C-11). Index `(workflow_run_id)`
 | tenant_id | uuid | |
 | decision_id | uuid | the `require_approval` decision |
 | workflow_run_id | uuid | 012 |
-| summary | jsonb | proposed action, reason, evidence ids, impact summary, rollback plan (FR-015) |
+| summary | jsonb | proposed action, reason codes, ruleset version, target identifiers, impact summary, rollback plan (FR-015) — a **closed shape** built from the stored decision, never from caller input (`approvalSummarySchema`, T070/T071) |
 | evidence_ids | uuid[] | 001 — the approver sees the evidence, not a narrative |
 | autonomy_epoch | bigint | recorded at issue; re-checked at redemption (R-07) |
 | expires_at | timestamptz | projected onto `workflow_run.deadline_at` |
@@ -149,6 +150,55 @@ Unique `(decision_id)`. Index `(tenant_id, state, expires_at)`.
 approval screen that renders attacker-influenced prose is a phishing surface aimed at the one human
 whose click authorises a mutation.
 
+> Implementation notes (T070–T076). **No migration**: the table, its `(decision_id)` uniqueness and
+> the `(tenant_id, state, expires_at)` index already existed from T002.
+>
+> - *Unrepresentable, not checked.* `RequestApproval` accepts no summary from its caller. It builds
+>   one from the stored `policy_decision` (closed enums, booleans, counts) and every free-string
+>   slot must match the identifier alphabet (no whitespace), so a sentence of collected text has no
+>   slot to occupy — it fails the parse instead of being rendered. Evidence appears only as
+>   `evidence_ids`, never as an excerpt.
+> - *The ruleset version a human decided under* is the immutable `policy_decision.ruleset_version`
+>   of the decision the request is `decision_id` for; it is read through that join and written into
+>   the resolution's `audit_entry`, so there is no second column to drift from it.
+> - *Projection (R-09).* `expires_at = min(requested, run.deadline_at)` and the run's `deadline_at`
+>   is set to that value in the same transaction that creates the request, under `FOR UPDATE` on the
+>   run. With neither an expiry nor a run deadline the request is refused: nothing would fire it.
+> - *Races.* `ResolveApproval`, `ExpireApproval` and the revocation sweep all lock the request row
+>   `FOR UPDATE` and re-check `state = pending` under it; `ResolveApproval` additionally reads the
+>   tenant's `autonomy_epoch` `FOR SHARE` in the same transaction. Exactly one of resolve and
+>   expire wins; a request past `expires_at` is refused for resolution even before its tick fires.
+> - *A lapse is recorded, not evaluated.* `ExpireApproval` writes a `policy_decision` with outcome
+>   `deny`, reason `APPROVAL_EXPIRED`, **no matched rule keys**, and the original decision's input,
+>   digest and ruleset version; it also sets the original decision's
+>   `invalidated_reason = 'approval_expired'`. `check:decision-replay` skips exactly that shape
+>   (no input replays to a rule-less deny).
+> - *`check:stale-approvals`* reports a `pending` request past `expires_at` (plus a grace window), one
+>   whose run has no deadline at or after `expires_at`, one whose run is terminal or does not exist,
+>   one whose own `approval` callback is absent or already consumed, and — the other direction — a
+>   live run `awaiting` an approval that no pending request backs.
+>
+> Review follow-up (one migration, `20261003100000_approval_callback_binding`):
+>
+> - *`workflow_callback.approval_id`* (012's table, nullable, unique, no FK so 012 does not depend on
+>   002). An `approval` callback is bound to exactly one request and every delivery — resolve, expire,
+>   revoke — finds it by that key, never by run. A delivery that matches no row is an error and rolls
+>   the surrounding transaction back.
+> - *One outstanding approval per run.* `RequestApproval` refuses (`ApprovalAlreadyPendingError`,
+>   409/CONFLICT) when the locked run already has a `pending` request or is `awaiting` something other
+>   than an approval; a run whose marker is a *resolved* approval's may be re-parked. Resolving
+>   clears `awaiting`.
+> - *Decision-time epoch.* `RequestApproval` takes the epoch `evaluateAndBind` returned, records it,
+>   and refuses (`STALE_AUTONOMY_EPOCH`) if it is no longer current; it also refuses a consumed or
+>   invalidated decision, and an empty `evidence_ids`.
+> - *`rejected`* invalidates the original decision (`invalidated_reason = 'approval_rejected'`),
+>   delivers the callback and moves the run to `needs_human` (cause `human`). `ResolveApproval` locks
+>   the run and refuses (`ApprovalRunTerminalError`) when it is already terminal.
+> - *The revocation sweep* revokes, invalidates the decision, delivers the callback, moves the run to
+>   `needs_human` (cause `policy`) and writes a `policy.revoke_approval` audit entry in one transaction.
+> - *`check:decision-replay`* exempts a lapse only when an `expired` request on the same run, an
+>   original decision with `invalidated_reason = 'approval_expired'` and the same digest all exist.
+
 ## policy.budget_limit
 
 Per-issue limits, and the per-tenant-period limits inherited from 012's `tenant_budget`.
@@ -160,6 +210,51 @@ Per-issue limits, and the per-tenant-period limits inherited from 012's `tenant_
 `soft_threshold_pcts` is an array because degradation has ordered steps (R-12); 012's
 `tenant_budget.soft_threshold_pcts` is the same shape, which is what makes the per-tenant-period
 limits inheritable rather than convertible.
+
+Scope and period pair as `issue`/`issue` (the per-issue limit, with `scope_id` NULL meaning "every
+issue of the tenant" and an issue id meaning an override for that one) or `tenant`/`day|month`
+(`scope_id` NULL). Unique on `(tenant_id, scope_type, coalesce(scope_id, nil-uuid), period)`; the PUT
+is an upsert on that key. **Which limit applies** (T057, pure, `budget-limits.ts`): for the issue, its
+own row, then the per-issue default row, then the product default; for a tenant period, a
+`budget_limit` row, then 012's `tenant_budget` row (inherited as it stands; its `time_limit` is read
+as milliseconds), then the product default. There is no path to "unbounded".
+
+**Product bounds (T088, FR-021).** Literal maxima as CHECK constraints in migration
+`20261003090000_budget_limit_bounds`, the same values as constants in
+`packages/domain/policy/src/domain/budget-bounds.ts`, with `budget-bounds.test.ts` failing if the two
+disagree: `escalation_attempt_cap` 0–5; `spend_limit` 50 (issue) / 500 (day) / 5000 (month);
+`time_limit_ms` 4 h / 24 h / 20 days; `soft_threshold_pcts` at most 5 entries, each within 1–99. The
+fail-closed defaults for every unset value sit in the same file (`BUDGET_DEFAULTS`): spend 2 / 20 /
+200, time 1 h / 8 h / 80 h, thresholds 50·75·90, escalation cap 2.
+
+**Binding is validated, not assumed.** A named issue or workflow run that does not exist for the
+tenant (or is another tenant's) is a not-found error before anything is read or charged — never a
+fresh window or a zero count. An *enforcing* evaluation also refuses an `evaluated_at` more than
+`MAX_EVALUATION_SKEW_MS` (5 min) from the database clock, because the instant selects the window
+and a backdated one would be a fresh budget; a dry run replays history and is not so bound.
+
+**Time counts active run time only.** `workflow_run` elapsed excludes the intervals a run was
+*parked*: from a transition into a state named `awaiting_*` (or `needs_human`) until its next
+transition, derived from `workflow_transition`. 012's workflow definitions have not named their
+waiting states, so the prefix is policy's one declaration of the convention.
+
+**Abandoned charges.** An allowed, never-consumed decision with no `agent_run` older than
+`ABANDONED_CHARGE_TTL_MS` (2 h) is released by `releaseAbandonedCharges`
+(`invalidated_reason = 'charge_abandoned'`), which stops its open charge counting. No production
+caller schedules it. A *consumed* decision cannot be invalidated (the terminal XOR), so a step that
+started and never finished keeps its charge until its run is finalised.
+
+**Consumption** is derived on every call, never stored:
+spend = Σ `agent_run.cost` + the declared maximum of every allow `policy_decision` that has not yet
+been matched by a *finished* `agent_run` (its open charge, `budget_state.reservedSpend`, R-11);
+time = Σ `workflow_run` elapsed (to `updated_at` when terminal, to the evaluation instant while
+live). A tenant period is keyed by the **workflow run's start** (`workflow_run.started_at`, found
+for an agent run through `correlation_id`, for a decision through `workflow_run_id`), so a run that
+straddles midnight stays in the window in force when it was requested (T062). An agent run or
+decision that happened *before* its workflow was started (classified at ingest, say) is keyed by its
+own earlier instant — `LEAST` of the two — which is also what makes pruning the scan on
+`started_at >= window.start` sound. `check:budget-reconcile` recomputes all of the above in JS from
+the raw rows and compares it with the SQL aggregate; it found the pruning gap that `LEAST` closes.
 
 ## policy.action_limit
 
@@ -185,6 +280,16 @@ R-10). Default values are placeholders until the stage-0 benchmark exists.
 
 The idempotency key for "this degradation step has already been recorded as evidence" (R-12).
 Carries no state of its own; the state is the evidence record.
+
+`scope_id` is the issue id for `scope_type = issue` and the tenant id for `scope_type = tenant`
+(the column is NOT NULL). `step` runs 1..n for the n soft thresholds and **n + 1 is exhaustion**
+(entry `ai_steps_refused`), recorded like any other step. The mark is inserted with
+`ON CONFLICT DO NOTHING` in the same transaction as the evidence record: a concurrent writer of the
+same key blocks on the primary key until the first commits, then skips, so exactly one transaction
+writes the evidence. The evidence id is a deterministic function of the key, so even a retry after a
+crash names the same row. The record's `produced_by_step` is `policy.mark_degradation`; its payload
+carries the scope, period key, step, entry applied, dimension (`spend`/`time`) and consumed and
+limit figures — and, on a per-issue exhaustion, the agent runs completed so far.
 
 ## State transitions
 

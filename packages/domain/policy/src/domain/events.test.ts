@@ -128,14 +128,16 @@ describe('policy outbox event builders (T016, contracts/evaluation.md)', () => {
         scope: { scopeType: 'issue', scopeId: 'issue-1' },
         periodKey: '2026-02',
         step: 1,
-        entryApplied: true,
+        entryApplied: 'cheaper_tier',
         evidenceId: 'evidence-1',
       });
+      // Exactly these keys: a consumer that wants the reasoning reads the evidence record, so the
+      // payload has no field in which a copy of it could travel (T068, FR-012).
       expect(event.payload).toEqual({
         scopeType: 'issue',
         periodKey: '2026-02',
         step: 1,
-        entryApplied: true,
+        entryApplied: 'cheaper_tier',
         evidenceId: 'evidence-1',
       });
     }));

@@ -95,7 +95,7 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
-## 0.50.0 — 2026-10-02
+## 0.51.0 — 2026-10-03
 
 004 architecture-graph phases 4 and 5 (T036–T052): every edge says where it came from and how
 sure it is, and one model holds a monolith, microservices or serverless without a special case.
@@ -135,6 +135,41 @@ only by mutating the lock out); confidence that never rose with accumulated obse
 
 Not built: Phases 6–9 (blast radius, drift, product graph, polish). Open decisions for Pavlo are
 items 3–6 under "Decisions waiting on Pavlo — 004" in `QUESTIONS.md`.
+
+## 0.50.0 — 2026-10-03
+
+**002 phases 6–7 — budgets and approvals** (T056–T076, T088). Built by two parallel implementers,
+each reviewed twice (code review and silent-failure hunt) and fixed before merge.
+
+- **Budgets (US4).** Consumption is derived from `agent_run.cost` and `workflow_run` elapsed time —
+  no stored counter, so the number policy enforces and the number support reports cannot disagree.
+  The ex-ante predicate `consumed + declaredMax <= limit` runs in the pure evaluator with the period
+  key, degradation step and escalation count as inputs. **Research R-11 was wrong**: the predicate
+  alone is unsafe under READ COMMITTED (17 of 20 concurrent charges passed a limit of 10 in the
+  proving test), so a charge is taken under a per-tenant advisory lock with a bounded wait (ADR 0015),
+  and an allowed step stays charged through its persisted `policy_decision` until a finished
+  `agent_run` references it or `releaseAbandonedCharges` invalidates it. Retried evaluations are
+  idempotent on a request key. Parked (awaiting) time does not count against the time budget.
+  `MarkDegradation` writes one `budget_degradation` evidence record per first advance;
+  `budget_degradation_mark` is only its idempotency key. `GET/PUT /budgets`, `GET /budgets/state`,
+  `check:budget-reconcile`. Migrations `20261003090000_budget_limit_bounds` (product bounds, T088)
+  and `20261003110000_budget_hardening`.
+- **Approvals (US5).** `RequestApproval` builds the summary from the stored decision only — every
+  free-string slot must match an identifier alphabet, so no customer text reaches the approver
+  (T071, tested with a real injection payload). `ExpireApproval`, `ResolveApproval` (calls
+  `checkAutonomyEpoch` at redemption, so approve-after-revoke is `STALE_AUTONOMY_EPOCH`, with the
+  sweep disabled too), one pending approval per run with the callback bound to the approval
+  (`20261003100000_approval_callback_binding`), resolve-versus-expire has exactly one winner under a
+  row lock. `GET /approvals`, `GET /approvals/{id}`, `POST /approvals/{id}/resolve`,
+  `check:stale-approvals`.
+- **Not built, un-ticked rather than overstated.** T058b (suspending the workflow on a budget
+  refusal) and T066b (the producer of the `escalating` state and the human hand-off) need consumers
+  owned by 006/008/012. Nothing in production schedules `expireDueApprovals`, the revocation sweep,
+  `releaseAbandonedCharges` or the live checks — the tenant-enumerator gap already tracked as C-90.
+  No production caller of `evaluateAndBind` exists yet, so every enforcement path here is reached
+  only from tests until 008/010 land.
+- `createApiModule` is now 15 parameters; `invalidated_reason` is one closed list
+  (`epoch_bump`, `approval_expired`, `approval_rejected`, `charge_abandoned`) per C-84.
 
 ## 0.49.0 — 2026-10-02
 

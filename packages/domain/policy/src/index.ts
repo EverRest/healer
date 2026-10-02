@@ -1,12 +1,31 @@
 // @healer/domain-policy — entry surface. Nothing is exported until it exists (012 FR-001).
 
 export { ACTION_CLASSES, type ActionClass } from './domain/action-class.js';
-export type { ApprovalCallbackPort } from './domain/approval-callback-port.js';
 export {
+  ApprovalAlreadyPendingError,
   ApprovalNotPendingError,
+  type ApprovalLifecycleRepository,
+  type DueApproval,
+  type ApprovalListFilter,
+  type ApprovalRequest,
   type ApprovalRequestRepository,
   type ApprovalRequestSummary,
 } from './domain/approval-request-repository.js';
+export {
+  ApprovalNotDueError,
+  ApprovalWithoutDeadlineError,
+  assertDue,
+  assertRedeemable,
+  assertRequestable,
+  buildLapseDecision,
+  projectExpiry,
+} from './domain/approval-lifecycle.js';
+export {
+  approvalSummarySchema,
+  ApprovalSummaryNotStructuralError,
+  buildApprovalSummary,
+  type ApprovalSummary,
+} from './domain/approval-summary.js';
 export type { AuditActorType, NewAuditEntry } from './domain/audit-entry.js';
 export {
   CeilingExceededError,
@@ -80,6 +99,7 @@ export {
 } from './domain/policy-decision-repository.js';
 export { publishRuleset } from './application/commands/publish-ruleset.js';
 export { evaluateAndBind } from './application/commands/evaluate-and-bind.js';
+export type { EvaluateAndBindRepos } from './application/commands/evaluate-and-bind.js';
 export {
   grantAutonomy,
   GRANT_AUTONOMY_AUDIT_ACTION,
@@ -92,12 +112,29 @@ export {
 } from './application/commands/revoke-autonomy.js';
 export {
   sweepRevokedApprovals,
+  REVOKE_APPROVAL_AUDIT_ACTION,
   type SweepRevokedApprovalsResult,
 } from './application/commands/sweep-revoked-approvals.js';
 export {
   NoPublishedRulesetError,
   UnregisteredActionError,
 } from './application/resolve-ruleset-and-evaluate.js';
+export {
+  expireApproval,
+  expireDueApprovals,
+  EXPIRE_APPROVAL_AUDIT_ACTION,
+  type ExpireDueApprovalsResult,
+} from './application/commands/expire-approval.js';
+export {
+  requestApproval,
+  REQUEST_APPROVAL_AUDIT_ACTION,
+  type RequestApprovalInput,
+} from './application/commands/request-approval.js';
+export {
+  resolveApproval,
+  RESOLVE_APPROVAL_AUDIT_ACTION,
+  type ResolveApprovalInput,
+} from './application/commands/resolve-approval.js';
 export { consumeDecision } from './application/commands/consume-decision.js';
 export {
   explainDecision,
@@ -114,4 +151,80 @@ export { PrismaPolicyDecisionRepository } from './infrastructure/prisma-policy-d
 export { PrismaAutonomyEpochRepository } from './infrastructure/prisma-autonomy-epoch-repository.js';
 export { PrismaAutonomyGrantRepository } from './infrastructure/prisma-autonomy-grant-repository.js';
 export { PrismaApprovalRequestRepository } from './infrastructure/prisma-approval-request-repository.js';
+export { PrismaApprovalLifecycleRepository } from './infrastructure/prisma-approval-lifecycle-repository.js';
+export { ApprovalRunTerminalError } from './infrastructure/approval-run-effects.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
+
+// 002 Phase 6 (US4) — budgets and degradation.
+export {
+  ABANDONED_CHARGE_TTL_MS,
+  assertWithinBudgetBounds,
+  BUDGET_BOUNDS,
+  BUDGET_DEFAULTS,
+  BUDGET_LOCK_WAIT_MS,
+  BudgetBoundExceededError,
+  BudgetThresholdsInvalidError,
+  MAX_EVALUATION_SKEW_MS,
+  type BudgetLimitWrite,
+  type BudgetPeriod,
+} from './domain/budget-bounds.js';
+export { bindingBudget, scopeStanding, type ScopeFigures } from './domain/budget-figures.js';
+export { periodKeyFor, periodWindow } from './domain/budget-period.js';
+export {
+  DEGRADATION_ORDER,
+  EXHAUSTED_ENTRY,
+  degradationStepOf,
+  entryForStep,
+  stepsToMark,
+  type DegradationEntry,
+} from './domain/degradation.js';
+export {
+  BudgetContentionError,
+  ESCALATION_TO_STATE,
+  EvaluationInstantError,
+  PARKED_STATE_PREFIX,
+  PARKED_STATES,
+  type BudgetLimit,
+  type BudgetLimitRepository,
+  type BudgetQuery,
+  type BudgetRepository,
+  type MarkDegradationInput,
+  type MarkDegradationResult,
+  type PutBudgetLimit,
+  type ReadOnlyBudgetRepository,
+  type ResolvedBudget,
+} from './domain/budget-repository.js';
+export {
+  BudgetScopePeriodError,
+  PUT_BUDGET_AUDIT_ACTION,
+  putBudgetLimit,
+  type PutBudgetLimitCommand,
+} from './application/commands/put-budget-limit.js';
+export { INVALIDATED_REASONS, type InvalidatedReason } from './domain/invalidated-reason.js';
+export { computeRequestKey } from './domain/request-key.js';
+export { budgetConfigWarnings } from './domain/budget-limits.js';
+export {
+  releaseAbandonedCharges,
+  type ReleaseAbandonedChargesCommand,
+} from './application/commands/release-abandoned-charges.js';
+export { markDegradation } from './application/commands/mark-degradation.js';
+export {
+  getBudgetState,
+  type BudgetState as BudgetStateView,
+  type BudgetStateQuery,
+} from './application/queries/get-budget-state.js';
+export {
+  budgetLockKey,
+  degradationEvidenceId,
+  MARK_DEGRADATION_STEP,
+  PrismaBudgetRepository,
+  type PrismaBudgetRepositoryOptions,
+} from './infrastructure/prisma-budget-repository.js';
+export { PrismaBudgetLimitRepository } from './infrastructure/prisma-budget-limit-repository.js';
+// The two aggregates behind `resolve`, exported so `check:budget-reconcile` (T069) can compare
+// them against an independent recomputation from the raw rows.
+export {
+  issueConsumption as deriveIssueConsumption,
+  tenantConsumption as deriveTenantConsumption,
+  type Consumption as DerivedConsumption,
+} from './infrastructure/budget-aggregate.js';

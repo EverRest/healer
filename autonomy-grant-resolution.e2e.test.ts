@@ -14,14 +14,15 @@ import {
   PrismaApprovalRequestRepository,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
-  type ApprovalCallbackPort,
   type RuleBody,
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer/shared';
 import { buildDecisionInput } from './packages/domain/policy/src/domain/test-support/fixtures.js';
+import { seedBase, seedIssue, seedWorkflowRun } from './test/budget-fixtures.js';
 import { applySqlFile, startPostgres, type StartedPostgres } from './test/containers.js';
 
 /**
@@ -87,6 +88,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
   let autonomyEpochs: PrismaAutonomyEpochRepository;
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
+  let budgets: PrismaBudgetRepository;
   let approvals: PrismaApprovalRequestRepository;
 
   beforeAll(async () => {
@@ -94,6 +96,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await seedBase(pg);
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     await prisma.policyAction.create({
       data: {
@@ -109,6 +112,7 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
     approvals = new PrismaApprovalRequestRepository(prisma);
   }, 180_000);
 
@@ -151,18 +155,26 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       );
 
       const forA = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
-          decisionInput: decisionInputFor(componentA),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor(componentA),
+          },
+        ),
       );
       expect(forA.decision.outcome).toBe('allow');
 
       // Quickstart 11: grant for component A, propose for component B → refused, reason naming
       // the missing grant.
       const forB = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
-          decisionInput: decisionInputFor(componentB),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor(componentB),
+          },
+        ),
       );
       expect(forB.decision.outcome).toBe('deny');
       expect(forB.decision.reasonCodes).toContain('NO_AUTONOMY_GRANT');
@@ -182,9 +194,13 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       );
 
       const before = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
-          decisionInput: decisionInputFor('component-a'),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor('component-a'),
+          },
+        ),
       );
       expect(before.decision.outcome).toBe('allow');
 
@@ -198,9 +214,13 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // Nothing "pushed" this evaluation anything — it is simply a fresh call, re-reading the
       // (now empty) grant table, exactly as T041/T042 require.
       const after = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
-          decisionInput: decisionInputFor('component-a'),
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor('component-a'),
+          },
+        ),
       );
       expect(after.decision.outcome).toBe('deny');
       expect(after.decision.reasonCodes).toContain('NO_AUTONOMY_GRANT');
@@ -249,22 +269,56 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
       // "Approve": a require_approval decision, parked as a pending approval_request recording
       // today's epoch — RequestApproval itself is Phase 7 (out of scope); this is the row shape
       // it will write, built directly since there is no command yet to call.
+      const run = await seedWorkflowRun(pg, {
+        tenantId: context.tenantId,
+        issueId: await seedIssue(pg, context.tenantId),
+        startedAt: new Date().toISOString(),
+      });
       const bound = await withCorrelation(newCorrelationId(), () =>
-        evaluateAndBind({ rulesets, decisions, autonomyEpochs, actions, autonomyGrants }, context, {
-          decisionInput: decisionInputFor('component-a'),
-          binding: { workflowRunId: randomUUID() },
-        }),
+        evaluateAndBind(
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
+          context,
+          {
+            decisionInput: decisionInputFor('component-a'),
+            binding: { workflowRunId: run.id },
+          },
+        ),
       );
       expect(bound.decision.outcome).toBe('require_approval');
       decisionId = bound.decision.id;
       recordedEpoch = bound.autonomyEpoch;
       approvalId = randomUUID();
+      // A real run parked on this approval's own callback (the sweep delivers it in-transaction).
+      const runId = randomUUID();
+      await prisma.workflowRun.create({
+        data: {
+          id: runId,
+          tenantId: context.tenantId,
+          issueId: randomUUID(),
+          definitionKey: 'remediation',
+          definitionVersion: 1,
+          state: 'awaiting_approval',
+          correlationId: randomUUID(),
+          deadlineAt: new Date('2099-01-01T00:00:00Z'),
+        },
+      });
+      await prisma.workflowCallback.create({
+        data: {
+          id: randomUUID(),
+          runId,
+          tenantId: context.tenantId,
+          kind: 'approval',
+          tokenHash: randomUUID(),
+          expiresAt: new Date('2099-01-01T00:00:00Z'),
+          approvalId,
+        },
+      });
       await prisma.approvalRequest.create({
         data: {
           id: approvalId,
           tenantId: context.tenantId,
           decisionId,
-          workflowRunId: randomUUID(),
+          workflowRunId: runId,
           summary: {},
           evidenceIds: [],
           autonomyEpoch: recordedEpoch,
@@ -297,15 +351,11 @@ describe('autonomy grant resolution, revocation and epoch staleness (T039-T045)'
     });
 
     it('quickstart 14: the sweep resolves the request to revoked and delivers the callback promptly', async () => {
-      const delivered: string[] = [];
-      const callback: ApprovalCallbackPort = {
-        deliver: async (input) => {
-          delivered.push(input.approvalId);
-        },
-      };
-      const result = await sweepRevokedApprovals({ approvals, autonomyEpochs }, callback, context);
+      const result = await sweepRevokedApprovals({ approvals, autonomyEpochs }, context);
       expect(result.revoked.map((r) => r.id)).toEqual([approvalId]);
-      expect(delivered).toEqual([approvalId]);
+      // Delivery is inside the revoke's own transaction now: the approval's callback is consumed.
+      const callback = await prisma.workflowCallback.findUniqueOrThrow({ where: { approvalId } });
+      expect(callback.consumedAt).not.toBeNull();
 
       const swept = await prisma.approvalRequest.findUniqueOrThrow({ where: { id: approvalId } });
       expect(swept.state).toBe('revoked');

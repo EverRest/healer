@@ -10,7 +10,10 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
   AutonomyGrantRepository,
+  BudgetLimitRepository,
+  BudgetRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
   PolicyRulesetRepository,
@@ -81,6 +84,25 @@ const noopAutonomyGrants: AutonomyGrantRepository = {
   create: () => Promise.reject(new Error('not implemented in this test')),
   revoke: () => Promise.reject(new Error('not implemented in this test')),
 };
+const noopBudgets: BudgetRepository = {
+  resolve: () => Promise.reject(new Error('not implemented in this test')),
+  bindCharged: () => Promise.reject(new Error('not implemented in this test')),
+  markDegradation: () => Promise.reject(new Error('not implemented in this test')),
+  releaseAbandonedCharges: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopBudgetLimits: BudgetLimitRepository = {
+  list: () => Promise.resolve([]),
+  put: () => Promise.reject(new Error('not implemented in this test')),
+};
+
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented in this test')),
+  resolve: () => Promise.reject(new Error('not implemented in this test')),
+  expire: () => Promise.reject(new Error('not implemented in this test')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -113,6 +135,9 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopPolicyActions,
       noopRunnerRegistrations,
       noopAutonomyGrants,
+      noopBudgets,
+      noopBudgetLimits,
+      noopApprovals,
       noopGraphReads,
     );
     app = await NestFactory.create(ApiModule, { logger: false });

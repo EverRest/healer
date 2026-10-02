@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -11,6 +10,7 @@ import {
   evaluateAndBind,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -21,6 +21,7 @@ import {
 } from '@healer/domain-policy';
 import { TenantContext, scope, withCorrelation } from '@healer/shared';
 import { applySqlFile, startPostgres, type StartedPostgres } from './test/containers.js';
+import { seedBase, seedIssue, seedWorkflowRun } from './test/budget-fixtures.js';
 
 /** A valid, fully-populated `DecisionInput` — mirrors `packages/domain/policy/src/domain/
  *  test-support/fixtures.ts`'s `buildDecisionInput`, kept local rather than imported: that file
@@ -93,6 +94,14 @@ function allowRule(overrides: Partial<RuleBody> = {}): RuleBody {
   };
 }
 
+/** A real issue and a real workflow run for a tenant: an evaluation bound to either now refuses an
+ *  id that does not exist (review #6), so a test that binds one seeds one. */
+async function seededRun(pg: StartedPostgres, tenantId: string) {
+  const issueId = await seedIssue(pg, tenantId);
+  const run = await seedWorkflowRun(pg, { tenantId, issueId, startedAt: new Date().toISOString() });
+  return { issueId, runId: run.id };
+}
+
 describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   let pg: StartedPostgres;
   let prisma: PrismaClient;
@@ -101,17 +110,20 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   let autonomyEpochs: PrismaAutonomyEpochRepository;
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
+  let budgets: PrismaBudgetRepository;
 
   beforeAll(async () => {
     pg = await startPostgres();
     for (const name of migrationNames()) {
       await applySqlFile(pg, `${MIGRATIONS_DIR}${name}/migration.sql`);
     }
+    await seedBase(pg);
     prisma = new PrismaClient({ datasourceUrl: pg.url });
     rulesets = new PrismaPolicyRulesetRepository(prisma);
     decisions = new PrismaPolicyDecisionRepository(prisma);
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
+    budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
     actions = new PrismaPolicyActionRepository(prisma);
 
     // `policy_action` is global, not tenant-scoped — seeded once for the whole database, same as
@@ -135,12 +147,13 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('records a decision bound to a workflow run/state and publishes PolicyDecisionRecorded', async () =>
     withCorrelation('corr-bind-1', async () => {
       const input = buildDecisionInput();
+      const { runId } = await seededRun(pg, TENANT_ID);
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: input,
-          binding: { workflowRunId: randomUUID(), workflowState: 'awaiting_execution' },
+          binding: { workflowRunId: runId, workflowState: 'awaiting_execution' },
         },
       );
 
@@ -164,7 +177,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('an unconsumed decision consumes cleanly once, setting consumed_at', async () =>
     withCorrelation('corr-consume-1', async () => {
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -183,7 +196,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('a second execution against the same decision is DECISION_ALREADY_CONSUMED (quickstart 35)', async () =>
     withCorrelation('corr-consume-2', async () => {
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -205,7 +218,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('altering the proposal after evaluation and presenting the new digest is DIGEST_MISMATCH (quickstart 36)', async () =>
     withCorrelation('corr-consume-3', async () => {
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -230,7 +243,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
       // this tenant's only rule (`allowRule()`, `action.actionClass equals code_change`) never
       // matches — NO_MATCHING_RULE folds to the default DENY.
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput({
@@ -256,7 +269,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('an invalidated decision refuses to consume even if its outcome was allow (batch 9 C1(a), review finding)', async () =>
     withCorrelation('corr-consume-invalidated', async () => {
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -290,7 +303,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('concurrent consumption of the same decision: exactly one attempt succeeds, the other sees ALREADY_CONSUMED', async () =>
     withCorrelation('corr-consume-4', async () => {
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -316,7 +329,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   it('a decision id under another tenant is not found, never leaking whether it exists', async () =>
     withCorrelation('corr-consume-5', async () => {
       const { decision } = await evaluateAndBind(
-        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+        { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
         CONTEXT,
         {
           decisionInput: buildDecisionInput(),
@@ -336,9 +349,9 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
   describe('findById / list (002 T028, FR-002, FR-017, FR-018)', () => {
     it('findById returns every stored field, including the recorded decisionInput and budgetState', async () =>
       withCorrelation('corr-read-1', async () => {
-        const issueId = randomUUID();
+        const { issueId } = await seededRun(pg, TENANT_ID);
         const { decision } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           CONTEXT,
           {
             decisionInput: buildDecisionInput(),
@@ -358,14 +371,20 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
         expect(found?.decisionInput).toMatchObject({
           action: { actionKey: 'change.open_pull_request' },
         });
-        expect(found?.budgetState).toMatchObject({ limit: 100 });
+        // The budget is *resolved*, never the caller's claim (T056): no limit is configured, so the
+        // per-issue fail-closed default (2) binds — tighter than the 100 the input claimed.
+        expect(found?.budgetState).toMatchObject({
+          limit: 2,
+          consumed: 0,
+          binding: { scopeType: 'issue', scopeId: issueId, period: 'issue' },
+        });
         expect(found?.consumedAt).toBeUndefined();
       }));
 
     it("findById returns null for another tenant's decision — not found, never a leak (FR-018)", async () =>
       withCorrelation('corr-read-2', async () => {
         const { decision } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           CONTEXT,
           {
             decisionInput: buildDecisionInput(),
@@ -385,7 +404,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
     it('findById on a row whose stored decision_input fails schema validation names the decision id in the error, rather than a generic ZodError (batch 9 follow-up review)', async () =>
       withCorrelation('corr-read-6', async () => {
         const { decision } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           CONTEXT,
           { decisionInput: buildDecisionInput() },
         );
@@ -408,7 +427,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
     it('the same error keeps the original ZodError as its cause, not only the flattened message (batch 9 follow-up review, round 3)', async () =>
       withCorrelation('corr-read-7', async () => {
         const { decision } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           CONTEXT,
           { decisionInput: buildDecisionInput() },
         );
@@ -437,9 +456,9 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
         await withCorrelation('corr-read-4-seed-ruleset', () =>
           publishRuleset(rulesets, tenant, { rules: [allowRule()], publishedBy: 'pavlo' }),
         );
-        const issueId = randomUUID();
+        const issueId = await seedIssue(pg, tenant.tenantId);
         const { decision: matching } = await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           tenant,
           {
             decisionInput: buildDecisionInput(),
@@ -447,7 +466,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
           },
         );
         await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           tenant,
           {
             decisionInput: buildDecisionInput({
@@ -459,7 +478,7 @@ describe('PrismaPolicyDecisionRepository (002 T021/T022/T023)', () => {
           publishRuleset(rulesets, other, { rules: [allowRule()], publishedBy: 'pavlo' }),
         );
         await evaluateAndBind(
-          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants },
+          { rulesets, decisions, autonomyEpochs, actions, autonomyGrants, budgets },
           other,
           {
             decisionInput: buildDecisionInput(),

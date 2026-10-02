@@ -192,7 +192,7 @@ needed combining by hand across every e2e test file that boots the real app, che
 call site this time rather than waiting for a full e2e run to find the one that got missed (012's
 own 0.47.0 entry already hit exactly that gap once).
 
-**004 architecture-graph phases 4–5 landed 2026-10-02** (VERSION 0.50.0): T036–T052. Every edge
+**004 architecture-graph phases 4–5 landed 2026-10-02** (VERSION 0.51.0): T036–T052. Every edge
 carries its provenance and a derived confidence (merge under a row lock, race proved through
 `pg_stat_activity`), `GET /graph/nodes`, three continuous checks, and one model for any architecture:
 structural separations as edges, a single-authority vocabulary, `GetSystemContext` with no style
@@ -201,8 +201,8 @@ Phase 3 (discovery and confirmation, T018–T035) is still on unmerged branches,
 have their readers in continuous checks, not yet in a write path. Open decisions: `QUESTIONS.md`,
 "Decisions waiting on Pavlo — 004", items 3–6.
 
-Next: **merge 004 phase 3** (discovery and confirmation, T018–T035 — built, on unmerged branches), then 004 phases 6–7 (blast radius, drift); and **002 phases 5–7** (reversible-action governance — blocked on 010's catalogue, budgets,
-approvals) and **a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR —
+Next: **merge 004 phase 3** (discovery and confirmation, T018–T035 — built, on unmerged branches), then 004 phases 6–7 (blast radius, drift); and **002 phase 5** (reversible-action governance — blocked on 010's catalogue; phases 6–7 landed
+in 0.50.0) and the consumers phases 6–7 left unbuilt (T058b, T066b, the sweep/tick scheduler of C-90) and **a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR —
 the first CI/CD pipeline this repo will have). 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
 (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub

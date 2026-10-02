@@ -1,6 +1,7 @@
 import type { TenantContext } from '@healer/shared';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
+import type { ReadOnlyBudgetRepository } from '../../domain/budget-repository.js';
 import type { Decision, EvaluationTrace } from '../../domain/evaluate.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
@@ -29,13 +30,27 @@ export interface ExplainDecisionRepos {
   readonly rulesets: ReadOnlyPolicyRulesetRepository;
   readonly actions: PolicyActionRepository;
   readonly autonomyGrants: ReadOnlyAutonomyGrantRepository;
+  /** Read side only (T056): a dry run resolves the tenant's real, current budget figures — the
+   *  same derived aggregate an enforcing evaluation reads — and charges nothing. */
+  readonly budgets: ReadOnlyBudgetRepository;
 }
 
 export async function explainDecision(
   repos: ExplainDecisionRepos,
   context: TenantContext,
-  input: { readonly decisionInput: DecisionInput },
+  input: {
+    readonly decisionInput: DecisionInput;
+    /** The issue and run the proposal would be bound to. Named, the dry run resolves the same
+     *  budget scopes and escalation count the enforcing evaluation does (R-08, quickstart 31) — an
+     *  over-budget issue is DENY in both. Absent, only the tenant's budgets apply. */
+    readonly binding?: { readonly issueId?: string; readonly workflowRunId?: string };
+  },
 ): Promise<{ readonly decision: Decision; readonly trace: EvaluationTrace }> {
-  const { decision, trace } = await resolveRulesetAndEvaluate(repos, context, input.decisionInput);
+  const { decision, trace } = await resolveRulesetAndEvaluate(
+    repos,
+    context,
+    input.decisionInput,
+    input.binding,
+  );
   return { decision, trace };
 }
