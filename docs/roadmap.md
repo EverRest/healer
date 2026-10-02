@@ -192,7 +192,7 @@ needed combining by hand across every e2e test file that boots the real app, che
 call site this time rather than waiting for a full e2e run to find the one that got missed (012's
 own 0.47.0 entry already hit exactly that gap once).
 
-**004 architecture-graph phases 4–5 landed 2026-10-02** (VERSION 0.49.0): T036–T052. Every edge
+**004 architecture-graph phases 4–5 landed 2026-10-02** (VERSION 0.50.0): T036–T052. Every edge
 carries its provenance and a derived confidence (merge under a row lock, race proved through
 `pg_stat_activity`), `GET /graph/nodes`, three continuous checks, and one model for any architecture:
 structural separations as edges, a single-authority vocabulary, `GetSystemContext` with no style

@@ -8,6 +8,7 @@ import {
   readOrdinalField,
   readQuantityField,
 } from './field-access.js';
+import { parseInstantLiteral } from './instant-literal.js';
 import type { Predicate, PredicateConjunction, QuantityValue } from './types.js';
 
 // Throws rather than falling through — matches `field-access.ts`'s `unreachable()` pattern. An
@@ -120,7 +121,7 @@ function matchesInstant(
   input: DecisionInput,
 ): boolean {
   const actual = readInstantField(predicate.field, input).getTime();
-  const literal = new Date(predicate.value).getTime();
+  const literal = parseInstantLiteral(predicate.value);
   switch (predicate.operator) {
     case 'before':
       return actual < literal;

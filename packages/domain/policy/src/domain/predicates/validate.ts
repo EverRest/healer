@@ -17,6 +17,7 @@ import {
   ORDINAL_FIELDS,
   QUANTITY_FIELDS,
 } from './fields.js';
+import { parseInstantLiteral } from './instant-literal.js';
 import type { Predicate } from './types.js';
 
 export type PredicateKind = Predicate['kind'];
@@ -116,8 +117,8 @@ function validateSetOrScalarValue(field: string, operator: string, value: unknow
 
 function validateInstantValue(field: string, operator: string, value: unknown): string | null {
   if (typeof value !== 'string') return wrongTypeMessage(field, operator);
-  return Number.isNaN(new Date(value).getTime())
-    ? `instant literal "${value}" for field "${field}" does not parse as a date`
+  return Number.isNaN(parseInstantLiteral(value))
+    ? `instant literal "${value}" for field "${field}" is not a full ISO-8601 datetime with an explicit UTC/offset suffix`
     : null;
 }
 

@@ -208,7 +208,19 @@ describe('validatePredicateShape (batch 9 I2, review finding)', () => {
       operator: 'before',
       value: 'definitely-not-a-date',
     };
-    expect(validatePredicateShape(predicate)).toMatch(/does not parse as a date/);
+    expect(validatePredicateShape(predicate)).toMatch(/not a full ISO-8601 datetime/);
+  });
+
+  // 002 batch 9 round 3, QUESTIONS.md: timezone-dependent parsing — an offset-less literal used
+  // to parse as local time, so the same rule evaluated differently depending on server timezone.
+  it('rejects an instant literal with no explicit UTC/offset suffix', () => {
+    const predicate: Predicate = {
+      kind: 'instant',
+      field: 'evaluatedAt',
+      operator: 'before',
+      value: '2026-01-01T00:00:00',
+    };
+    expect(validatePredicateShape(predicate)).toMatch(/not a full ISO-8601 datetime/);
   });
 
   it('fieldKindOf and OPERATORS_BY_KIND agree on every field this module knows about', () => {
