@@ -2658,3 +2658,127 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
   for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
   marker in).
+
+## 002 Phase 6 (T056–T069) — judgment calls (budgets)
+
+Implemented on `worktree-agent-a78aab9e73c3f9d7c` (commits `c0ca8b9`…`f43166d` plus the docs commit),
+migration prefix `20261003090000_budget_limit_bounds`. `budget_limit`, `budget_degradation_mark` and
+the `budget_degradation` evidence type already existed from T002/001, so the migration adds only the
+T088 bounds, the scope/period CHECK and a unique key. No question blocks; the calls below are
+decided, recorded here so a reviewer can overrule them.
+
+**Not built, and why** — both are consumers this release has no code for, and both were ticked in
+`tasks.md` with the gap named in the note:
+
+- **T058's "the workflow suspends resumably".** Policy refuses: the AI step's decision is a `DENY(BUDGET_EXHAUSTED)`
+  (a recorded decision, not an exception), the issue gets an evidence record naming what completed,
+  and the same step proceeds once the limit is raised or the window rolls (tested). What moves the
+  *run* to a suspended state is the guarded-step handler that reads that decision, which belongs to
+  012's workflow definitions (006/008) and does not exist. The reader of the refusal is
+  `consumeDecision`, which already refuses a non-allow decision (R-14) — so an AI step cannot run
+  past it — but nothing turns the refusal into `needs_human`/suspended yet.
+- **T066's hand-off to a human with evidence, hypotheses and reasons for rejection.** The evaluator
+  denies with `ATTEMPT_CAP_REACHED` at the cap; assembling the hand-off package is the escalating
+  workflow's job (006/009), not policy's.
+
+**Judgment calls**
+
+1. **`agent_run.cost` cannot be shown to be measured today** — it has no provenance column and
+   nothing writes `agent_run` yet (012 T059's write path and T061/T094, "measured, never estimated",
+   are deferred). `check:budget-reconcile` therefore cannot *prove* measurement; it refuses the
+   forms of estimate it can see (a finished run with tokens and no cost, a negative cost, a run
+   that cost more than its own step declared) and its header says so. Adding the real reconciliation
+   against provider usage belongs with 012 T094, in the same check.
+2. **R-11 was wrong about not needing a lock.** "The ex-ante check is what makes it safe" fails under
+   READ COMMITTED (two concurrent steps both read 90 and both pass `90 + 10 <= 100`; reproduced —
+   without the lock 17 of 20 charges against a limit of 10 were allowed). `research.md` R-11 now says so. The
+   charge is the **declared maximum of an allowed step, carried by its persisted `policy_decision`**
+   (`budget_state.reservedSpend`), an *open charge* replaced by the actual cost once a *finished*
+   `agent_run` references the decision. No reservation table, no counter; resolve-and-persist run
+   under one lock.
+3. **An advisory lock (`pg_advisory_xact_lock`), not `FOR UPDATE`.** There is no row guaranteed to
+   exist to lock: a tenant that never configured a budget runs on the fail-closed defaults and has no
+   `budget_limit` row, and policy tables carry no FK to `tenant.tenant`. Per-tenant, held for the
+   resolve-and-persist transaction only; a step that declares no cost takes no lock (tested).
+4. **A leaked charge.** A decision whose step never runs (worker died, step cancelled) stays charged
+   at its declared maximum — fail-closed, an over-count, never an under-count. Nothing releases it:
+   `policy_decision.invalidated_reason` has three reasons and none is "step abandoned", and adding
+   one is a spec change plus a sweeper. Open item for whoever builds the guarded-step handler.
+5. **The declared maximum is the caller's.** An AI step declaring 0 charges nothing (and takes no
+   lock), so an under-declaring caller delays the refusal by one step. The actual cost still lands
+   in `agent_run` and the next evaluation reads it; `check:budget-reconcile` reports any run that
+   cost more than its declaration, which is the reader of this guarantee.
+6. **The evaluator takes one `(consumed, limit)` pair, but a step must fit every budget** (per-issue
+   and tenant day and month, spend and time). The pair handed to it is the most constrained one
+   (`bindingBudget`, ties broken per-issue, day, month, spend before time) and the binding scope is
+   persisted in `budget_state.binding`. When time binds, the declared maximum handed to the predicate
+   is 0 (no one declares a time forecast); the declared *spend* is still reserved
+   (`reservedSpend`).
+7. **Units and a reading of "elapsed".** 012's `tenant_budget.time_limit` states no unit; it is read
+   as milliseconds (matching `budget_limit.time_limit_ms`). `workflow_run` elapsed is to `updated_at`
+   when terminal and to the evaluation instant while live — a run waiting on an approval counts,
+   the conservative reading of T056's "elapsed". The time bounds fit an `INTEGER`: 4 h / 24 h /
+   20 days. Every bound and default (T088) is a starting value pending the stage-0 benchmark.
+8. **The pinned period key is `LEAST(own start, workflow start)`.** Pinning to the workflow's start
+   alone (the first version) dropped the spend of an agent run that *predates* its workflow
+   (classified at ingest, say) from both windows when it crossed a day boundary: the scan pruned it
+   on its own `started_at` while pinning moved it to the later window. `check:budget-reconcile`
+   found this on its first run against a plant I had written to be realistic — the independent
+   recomputation doing its job. Agent runs join workflow runs on `correlation_id`, which 012 does
+   not make unique per run; the earliest start among runs sharing it is used.
+9. **Exhaustion is step `n + 1`**, recorded like any other step (entry `ai_steps_refused`), and a
+   refusal records it for the scope that refused even when consumed is still below the limit (nine
+   of ten spent, a step declaring two: nothing more can run, so the budget is exhausted for every
+   purpose that matters). A refusal before any threshold was crossed records only exhaustion;
+   steps nothing reached are not claimed. `BudgetExhausted` is therefore published once per scope and
+   period, `BudgetDegraded` once per step.
+10. **Degradation marks lag by one evaluation, and need an issue.** The standing a mark records is
+    the budget as resolved *before* the evaluation's own charge, so the evaluation that crosses a
+    threshold is marked by the next one. Evidence is per issue (001), so a tenant-scope step is
+    attached to the first issue whose evaluation sees it; an evaluation with no issue records
+    nothing rather than inventing one. Both are self-healing: the step is derived, so the next
+    evaluation records whatever is missing (tested by the jump-over-steps case).
+11. **Policy writes the evidence row directly** (in the mark's transaction, like `recordAuditEntry`
+    writes `audit_entry`) rather than through 001's repository — no domain package depends on
+    another, and a separate repository transaction could not be atomic with the mark. The evidence
+    id is a deterministic function of the mark's key, and `EvidenceRecorded` is mirrored locally so
+    the timeline's feed still hears of the record. `expires_at` is a 400-day placeholder.
+12. **The escalation attempt count is `workflow_transition` rows into `escalating`.** 012/006 own
+    the state graph and have not named an escalation state; `ESCALATION_TO_STATE` is the one place
+    policy names it. A workflow that names it differently is simply not counted — change the
+    constant, not the callers. The cap is the tightest `budget_limit.escalation_attempt_cap` that
+    applies (012's `tenant_budget` has none), default 2 (fail closed), and is persisted in
+    `budget_state` so a replay re-applies it (`replayDecision` takes an optional `budgetState`).
+13. **`PUT /budgets` merges.** The contract makes only `scopeType` and `period` required, so an
+    omitted field keeps what is configured and otherwise takes the fail-closed default — never
+    "unbounded". `scope_id` NULL means "every issue" for the per-issue limit; an issue-specific
+    override row is honoured by resolution but has no API yet. `GET /budgets/state` gained optional
+    `period` (tenant day or month, default day) and `workflowRunId` (pins the period key); the
+    contract yaml says so.
+14. **Every evaluation now overwrites `budget.{consumed, limit, degradationStep}` and
+    `escalation.attemptCount`** from the aggregate, like `autonomy.level` and `actionClass` before
+    them (same required-dependency move: `budgets` on `EvaluateAndBindRepos` and
+    `ExplainDecisionRepos`). Two existing e2e tests changed their *input plumbing*, and one its
+    expectation: with nothing configured the per-issue default (2) binds, tighter than the 100 the
+    test's input claimed (`policy-decision-repository.e2e.test.ts`). The dry-run endpoint resolves
+    tenant-level figures only (it carries no issue).
+15. **Where `check:budget-reconcile` is wired into `make ci`:** every budget e2e scenario
+    (`budget-enforcement`, `budget-flood`) ends by running `findBudgetDiscrepancies` over what it
+    left behind, and `scripts/checks/budget-reconcile.e2e.test.ts` runs it over a deliberately
+    awkward tenant (midnight straddle, in-flight, landed, terminal and live runs) and proves a
+    disagreement, an unpriced run and an over-declared run are each reported — all under `make
+    test-e2e`. There is no separate Makefile target, matching `check:ceiling` and
+    `check:policy-coverage`, which are production monitors with their e2e tests as the CI reader.
+16. **Test plumbing.** The shared e2e harness lives in `test/infrastructure/` because
+    `@healer/prisma-client` is lint-restricted to `infrastructure/**` and the harness constructs the
+    client; `test/tenant-isolation.ts`'s `assertTenantIsolated` gained an optional `queryFor` so a
+    route that names its resource in the query string (`/budgets/state`) can use it. The flood test
+    is in `HEAVY_E2E` (≈9 s alone, serialized behind the charge lock).
+17. **`createApiModule` gained two trailing parameters** (`budgets`, `budgetLimits`); every call
+    site was updated by hand (ingest ×1 of 2 — the second, a 503 test, already passed fewer
+    arguments than the signature and still does, runners, load, issues, issue-close-and-views,
+    policy, autonomy-grants, `main.e2e`, `openapi.ts`, `main.ts`). The implementer of approvals
+    (T070–T076) will have appended parameters too: merge by keeping both, then regenerate
+    `apps/api/openapi.json` (`pnpm run generate:openapi`) rather than merging it by hand. Also appended
+    here: `policy.update_budget` in `SEED_POLICY_ACTIONS` and `scripts/db-seed.mjs`, and
+    `budget-flood.e2e.test.ts` in `HEAVY_E2E`.

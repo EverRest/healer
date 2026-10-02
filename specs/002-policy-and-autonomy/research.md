@@ -226,9 +226,18 @@ next evaluation reads it.
 **Rationale**: SC-006 requires spend to stay *within* the period budget under a flood, and a check
 on consumption alone always permits one more step than the budget allows — the step that discovers
 the limit is the step that exceeds it. Charging the declared ceiling ex ante bounds the overshoot at
-zero without a reservation table, a lock or a two-phase commit. Per-issue concurrency is already
-one, because constitution VI serialises mutations; the tenant-period aggregate is the only path with
-real concurrency, and the ex-ante check is what makes it safe.
+zero without a reservation table or a two-phase commit.
+
+**Corrected during implementation (T060):** the first draft of this paragraph also said "or a
+lock", on the reasoning that the ex-ante check alone makes the tenant-period aggregate safe under
+concurrency. It does not: under READ COMMITTED two concurrent steps both read `consumed = 90`, both
+pass `90 + 10 <= 100`, and both commit. The charge has to be *visible to the next reader before it
+runs*, and the read-then-write has to be serialised. So the declared maximum of an allowed step is
+carried by its persisted `policy_decision` (`budget_state.reservedSpend`) — an *open charge*, derived
+like everything else and replaced by the actual cost the moment a finished `agent_run` references the
+decision — and resolve-and-persist run under a per-tenant advisory lock. Still no reservation table
+and no counter; the cost of the design is that a decision whose step never runs stays charged until
+something invalidates it (fail-closed, and recorded as an open item in QUESTIONS.md).
 
 **Alternatives**: a reservation row released on completion (a distributed lease, with the leak that
 every lease design has when a worker dies); checking consumption only (guaranteed to overshoot).
