@@ -748,6 +748,16 @@ model AuditEntry {
   agentRunId       String?        @map("agent_run_id") @db.Uuid
   policyDecisionId String?        @map("policy_decision_id") @db.Uuid
   outcome          String
+  /// 004 T026 (FR-025, data-model.md "Graph mutations write to audit.audit_entry ... the before
+  /// and after payloads ... and the minted graph_version"): nullable because most existing
+  /// callers (001 issue transitions, 002 policy/autonomy) have no graph version and record their
+  /// own before/after, if any, inside `reason`/`evidenceIds` — these three columns are additive,
+  /// architecture-package-specific, and optional for every other caller. Added via a new
+  /// migration per prisma-migrations.md (the table is 001's; 004 extends it, same precedent as
+  /// T018's `evidence.issue_id` change — recorded in both packages' data-model.md).
+  before           Json?
+  after            Json?
+  graphVersion     Int?           @map("graph_version")
   occurredAt       DateTime       @default(now()) @map("occurred_at") @db.Timestamptz(6)
 
   @@index([tenantId, occurredAt])

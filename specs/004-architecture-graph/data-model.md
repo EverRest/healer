@@ -218,6 +218,14 @@ Graph mutations write to `audit.audit_entry` (001 FR-012) with `target_type` of 
 `graph_edge`, `draft_item` or `drift_finding`, the before and after payloads, the reason and the
 minted `graph_version` (FR-025). This feature adds no second audit store.
 
+**T026 implementation note**: `audit.audit_entry` (001's table) had no column for "before and after
+payloads" or "the minted graph_version" — three nullable columns (`before`, `after` jsonb,
+`graph_version` int) added via migration `20261004010000_t026_audit_entry_before_after`, additive,
+documented in both this file and 001's `data-model.md` (same precedent as T018's `evidence.issue_id`
+change). `confirmDraftItems` writes one `audit_entry` row per applied item with `before` set to the
+draft item's own `current` snapshot and `after` to what was written; `rejectDraftItems` writes one
+per rejected item with `after: null` and no `graph_version` (rejection mints none).
+
 ### flow_attr
 
 Attributes for nodes of kind `flow` — a named user-facing path through the product, which is

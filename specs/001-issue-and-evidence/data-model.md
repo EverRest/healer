@@ -160,6 +160,14 @@ than the caller, and none exists to create links retrospectively.
 `target_type`, `target_id`, `reason`, `evidence_ids` uuid[], `agent_run_id?` (012), `policy_decision_id?`
 (002), `outcome`, `occurred_at`.
 
+**004 T026 adds three nullable columns**: `before`, `after` (jsonb) and `graph_version` (int) —
+migration `20261004010000_t026_audit_entry_before_after`, additive, every existing row and caller
+unaffected. 004's own FR-025 requires a graph mutation's audit entry to carry "the before and after
+payloads ... and the minted graph_version," and this table (001's) had no field for either. Same
+precedent as `evidence.issue_id`'s own change (T018): the table is 001's, 004 extends it, documented
+here and in 004's `data-model.md`. No other caller (001's issue transitions, 002's policy/autonomy)
+writes these columns; they stay null for every row but 004's own.
+
 `action` is **a registered `policy_action.action_key`** (002), never free text. That is what gives
 002's `check:policy-coverage` a join key and `policy_action.mutating` as its filter: a reconciliation
 of executed mutating actions against decisions cannot be written over a free-text column.
