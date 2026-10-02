@@ -1,10 +1,11 @@
-import { NotFoundError, type TenantScoped } from '@healer/shared';
+import type { TenantScoped } from '@healer/shared';
 import type { PrismaClient } from '@healer/prisma-client';
 import {
   ApprovalNotPendingError,
   type ApprovalRequestRepository,
   type ApprovalRequestSummary,
 } from '../domain/approval-request-repository.js';
+import { lockApproval } from './prisma-approval-lifecycle-repository.js';
 
 interface ApprovalRow {
   readonly id: string;
@@ -50,11 +51,10 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     where: TenantScoped<{ readonly id: string; readonly decisionId: string }>,
   ): Promise<ApprovalRequestSummary> {
     return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.approvalRequest.findFirst({
-        where: { id: where.id, tenantId: where.tenantId },
-      });
-      if (existing === null) throw new NotFoundError('approval_request');
-      if (existing.state !== 'pending') throw new ApprovalNotPendingError(where.id);
+      // Under the row lock `ResolveApproval` and `ExpireApproval` also take: without it this
+      // read-then-write could overwrite an approval a human committed an instant earlier.
+      const { locked } = await lockApproval(tx, where.tenantId, where.id);
+      if (locked.state !== 'pending') throw new ApprovalNotPendingError(where.id);
 
       const resolvedAt = new Date();
       const updated = await tx.approvalRequest.update({

@@ -36,6 +36,7 @@
     "check:decision-replay": "node --env-file=.env scripts/checks/decision-replay.mjs",
     "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs",
     "check:ceiling": "node --env-file=.env scripts/checks/ceiling.mjs",
+    "check:stale-approvals": "node --env-file=.env scripts/checks/stale-approvals.mjs",
     "runner-contract-test": "vitest run packages/boundary-contract/src/index.test.ts",
     "runner-compat-test": "vitest run packages/boundary-contract/src/handshake.test.ts",
     "runner-build": "node scripts/runner-build.mjs",

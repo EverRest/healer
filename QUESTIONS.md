@@ -2658,3 +2658,83 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
   for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
   marker in).
+
+## 002 Phase 7 (T070–T076) — judgment calls (approvals)
+
+Decided, not asked. Branch `worktree-002-phase6-7-budgets-approvals` (implementer B).
+
+- **No migration.** `approval_request` (unique `decision_id`, index `(tenant_id, state, expires_at)`)
+  already existed from T002 and already fits. `data-model.md` gained implementation notes only.
+- **"Redeem" is `ResolveApproval`.** There is no executor to redeem against yet, so the human's
+  click is the redemption point and `checkAutonomyEpoch` runs there, inside the transaction, under
+  the row lock (`assertRedeemable`: not pending / lapsed → `APPROVAL_NOT_PENDING`, then stale epoch
+  → `STALE_AUTONOMY_EPOCH`). An approval granted and *then* revoked is covered by R-07 mechanism 1
+  (the executor re-evaluates; nothing is carried across the wait), not by a second "redeem"
+  command. **Open, spec-silent:** how an `approved` request turns the executor's re-evaluation into
+  an `ALLOW` — `REQUIRE_APPROVAL` decisions are (correctly) unconsumable and nothing in 002 mints
+  an `ALLOW` from an approval. That belongs to whoever builds the first executor (008/010); not
+  invented here.
+- **The summary is built, never supplied.** `RequestApproval` takes a decision id and evidence ids,
+  nothing else; `buildApprovalSummary` reads the stored decision and every free-string slot must fit
+  the identifier alphabet (no whitespace). Consequence worth knowing: a decision whose `targetRef`
+  (etc.) holds a sentence is *refused* (`ApprovalSummaryNotStructuralError`), loudly, instead of
+  rendered. The rule `note` (data-model says "shown in the approval summary") is **not** included:
+  T070's list does not name it and it is tenant-authored free text; add it through the same closed
+  schema if wanted.
+- **"Against which rule set version"** = the decision's own immutable `ruleset_version`, written
+  into the resolve `audit_entry` reason and returned as `rulesetVersion`. Not "the version published
+  at click time" — the approver saw, and approved, what that version decided.
+- **Projection pulls the run's deadline earlier.** `expires_at = min(requested, run.deadline_at)`
+  and `workflow_run.deadline_at` is set to it, so the tick that fires the expiry exists by
+  construction. No expiry requested and no run deadline → refused (nothing would fire it).
+- **Run effects are direct writes to 012's tables.** 012's machine has no persisted stepper and no
+  `awaiting_approval`/`needs_human` definition in this repo, so parking (`awaiting`, `deadline_at`,
+  a `workflow_callback` row of kind `approval`, token generated and discarded — a human resolves
+  through the authenticated API) and the lapse (`state = needs_human`, `terminal_state`, a
+  `workflow_transition` with cause `timeout`) are written in the same transaction by
+  `approval-run-effects.ts`. Callback delivery for resolve/expire is in-transaction (consume the
+  row, repeats count). `PrismaApprovalCallbackPort` now exists for the T045 sweep.
+- **A lapse is a recorded `DENY`, not an evaluation.** `deny` + `APPROVAL_EXPIRED`, no matched
+  rules, the original decision's input/digest/ruleset version; the original is invalidated with
+  `approval_expired`. It cannot replay (no input maps to a rule-less deny), so `check:decision-replay`
+  skips decisions of exactly that shape (`reason_codes ∋ APPROVAL_EXPIRED` and no matched rule keys).
+  `POST /policy/decisions/{id}/replay` on a lapse decision will therefore report non-identical;
+  left alone (an explicit read of an explicit fact).
+- **Sweep `revoke()` now takes the row lock** (T045 code, `FOR UPDATE` via the shared
+  `lockApproval`). Without it the sweep's read-then-write could overwrite an approval a human
+  committed an instant earlier — same bug class as resolve vs expire. One-line semantic change.
+- **Tick body, not a scheduler.** `expireDueApprovals` is the per-tenant body of the
+  `deadline_at` tick; no scheduler exists anywhere in this repository to call it (the same gap as
+  001's staleness sweep and T045's sweep). It is idempotent and one failing request does not block
+  the rest.
+- **`check:stale-approvals` wiring (T076).** `npm run check:stale-approvals` runs against the live
+  DB like its four siblings (not in `make ci`: CI has no production database). What `make ci`
+  *does* run is `approval-lifecycle.e2e.test.ts` (inside `make test-e2e`), which seeds each
+  violation shape — overdue, unfireable (no/short run deadline), orphaned (terminal run) — and
+  asserts the query reports it, and seeds healthy/expired requests and asserts it does not;
+  mutation-checked. Honest gap: nothing schedules the live run yet.
+- **Races proven, not slept.** Resolve vs expire: a held `FOR UPDATE` on the approval row, both
+  contenders polled into `pg_stat_activity` lock waits, then released; exactly one wins (5 repeats).
+  Removing `FOR UPDATE` makes both win. Residual: `autonomy_epoch` is read `FOR SHARE`, which only
+  serialises against a revocation when the row exists; a tenant's *first-ever* revocation inserts it
+  and cannot be blocked. The window is the length of one resolve transaction and the outcome is the
+  same as a revocation landing a millisecond later.
+- **Error codes.** `APPROVAL_NOT_PENDING` is a contract-level name; `@healer/shared`'s closed
+  `ErrorCode` has no such member and `ApprovalNotPendingError` (T045) carries `PRECONDITION_FAILED`.
+  The HTTP controller maps it and `STALE_AUTONOMY_EPOCH` to `409`; the shared list was not touched.
+  `APPROVAL_EXPIRED` and `STALE_AUTONOMY_EPOCH` are referenced from their one authority
+  (`REASON_CODES`, `ERROR_CODES`), not redeclared.
+- **Registry.** Three audit actions (`policy.request_approval`, `policy.resolve_approval`,
+  `policy.expire_approval`, `mutating: false`, same reasoning as publish/grant/revoke) added to
+  `SEED_POLICY_ACTIONS` **and** the hand-synced `scripts/db-seed.mjs` copy, or
+  `check:policy-coverage` would flag every approval audit entry as unregistered.
+- **`createApiModule` gained a 14th parameter (`approvals`).** All ten call sites were edited by
+  hand. One of them (`ingest.e2e.test.ts`, the 503 test) had been missing the 13th (`autonomyGrants`)
+  since Phase 4 — e2e tests are outside `tsc`'s `include`, so nothing flagged it; both are passed now.
+- **Duplication kept small on purpose:** the lapse decision's `INSERT` repeats `record()`'s column
+  list instead of refactoring `PrismaPolicyDecisionRepository` (another implementer is in this
+  package); fold the two together once Phase 6 lands.
+- **T032 extended** in `apps/api/policy.e2e.test.ts`: approval read, list and resolve are 404
+  cross-tenant (mutation-checked: dropping `tenantId` from `findById` fails it; resolve is also
+  protected independently by the tenant-scoped row lock). Endpoint behaviour is
+  `apps/api/approvals.e2e.test.ts`.

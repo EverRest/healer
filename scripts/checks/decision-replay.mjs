@@ -84,6 +84,16 @@ export async function replayOne(rulesets, row) {
 export async function findReplayMismatches(prisma, sampleSize = DEFAULT_SAMPLE_SIZE) {
   const rulesets = new PrismaPolicyRulesetRepository(prisma);
   const rows = await prisma.policyDecision.findMany({
+    // A lapse (`ExpireApproval`, 002 T072) is *recorded*, not evaluated: it carries no matched
+    // rule and the one reason `APPROVAL_EXPIRED`, and no ruleset could reproduce it from its
+    // input (which is the require-approval decision's own). Excluded by that shape, not by reason
+    // code alone — a rule whose `reasonCode` is `APPROVAL_EXPIRED` matches a rule key and still
+    // replays.
+    where: {
+      NOT: {
+        AND: [{ reasonCodes: { has: 'APPROVAL_EXPIRED' } }, { matchedRuleKeys: { isEmpty: true } }],
+      },
+    },
     take: sampleSize,
     orderBy: { evaluatedAt: 'desc' },
     select: {

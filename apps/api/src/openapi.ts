@@ -10,6 +10,7 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
   AutonomyGrantRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
@@ -84,6 +85,15 @@ const noopAutonomyGrants: AutonomyGrantRepository = {
   revoke: () => Promise.reject(new Error('not implemented for contract generation')),
 };
 
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented for contract generation')),
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+  expire: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
+
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
  * module declaration — two module definitions is two places the route set can drift apart. It
@@ -111,6 +121,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopPolicyActions,
     noopRunnerRegistrations,
     noopAutonomyGrants,
+    noopApprovals,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

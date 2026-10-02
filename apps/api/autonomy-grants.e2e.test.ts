@@ -14,6 +14,7 @@ import {
 } from '@healer/domain-issues';
 import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
@@ -82,6 +83,7 @@ describe('/autonomy/grants (002 T046)', () => {
       actions,
       new PrismaRunnerRegistrationRepository(prisma),
       autonomyGrants,
+      new PrismaApprovalLifecycleRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

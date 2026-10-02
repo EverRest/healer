@@ -135,7 +135,7 @@ cooldown and attempt-cap predicates read (R-13, C-11). Index `(workflow_run_id)`
 | tenant_id | uuid | |
 | decision_id | uuid | the `require_approval` decision |
 | workflow_run_id | uuid | 012 |
-| summary | jsonb | proposed action, reason, evidence ids, impact summary, rollback plan (FR-015) |
+| summary | jsonb | proposed action, reason codes, ruleset version, target identifiers, impact summary, rollback plan (FR-015) — a **closed shape** built from the stored decision, never from caller input (`approvalSummarySchema`, T070/T071) |
 | evidence_ids | uuid[] | 001 — the approver sees the evidence, not a narrative |
 | autonomy_epoch | bigint | recorded at issue; re-checked at redemption (R-07) |
 | expires_at | timestamptz | projected onto `workflow_run.deadline_at` |
@@ -148,6 +148,32 @@ Unique `(decision_id)`. Index `(tenant_id, state, expires_at)`.
 `summary` holds identifiers and structured fields. Collected customer text never enters it: an
 approval screen that renders attacker-influenced prose is a phishing surface aimed at the one human
 whose click authorises a mutation.
+
+> Implementation notes (T070–T076). **No migration**: the table, its `(decision_id)` uniqueness and
+> the `(tenant_id, state, expires_at)` index already existed from T002.
+>
+> - *Unrepresentable, not checked.* `RequestApproval` accepts no summary from its caller. It builds
+>   one from the stored `policy_decision` (closed enums, booleans, counts) and every free-string
+>   slot must match the identifier alphabet (no whitespace), so a sentence of collected text has no
+>   slot to occupy — it fails the parse instead of being rendered. Evidence appears only as
+>   `evidence_ids`, never as an excerpt.
+> - *The ruleset version a human decided under* is the immutable `policy_decision.ruleset_version`
+>   of the decision the request is `decision_id` for; it is read through that join and written into
+>   the resolution's `audit_entry`, so there is no second column to drift from it.
+> - *Projection (R-09).* `expires_at = min(requested, run.deadline_at)` and the run's `deadline_at`
+>   is set to that value in the same transaction that creates the request, under `FOR UPDATE` on the
+>   run. With neither an expiry nor a run deadline the request is refused: nothing would fire it.
+> - *Races.* `ResolveApproval`, `ExpireApproval` and the revocation sweep all lock the request row
+>   `FOR UPDATE` and re-check `state = pending` under it; `ResolveApproval` additionally reads the
+>   tenant's `autonomy_epoch` `FOR SHARE` in the same transaction. Exactly one of resolve and
+>   expire wins; a request past `expires_at` is refused for resolution even before its tick fires.
+> - *A lapse is recorded, not evaluated.* `ExpireApproval` writes a `policy_decision` with outcome
+>   `deny`, reason `APPROVAL_EXPIRED`, **no matched rule keys**, and the original decision's input,
+>   digest and ruleset version; it also sets the original decision's
+>   `invalidated_reason = 'approval_expired'`. `check:decision-replay` skips exactly that shape
+>   (no input replays to a rule-less deny).
+> - *`check:stale-approvals`* reports a `pending` request past `expires_at` (plus a grace window), one
+>   whose run has no deadline at or after `expires_at`, and one whose run is already terminal.
 
 ## policy.budget_limit
 

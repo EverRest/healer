@@ -22,10 +22,12 @@ import {
   type EvidenceRepository,
 } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type ApprovalLifecycleRepository,
   type AutonomyGrantRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
@@ -65,6 +67,10 @@ import {
   AUTONOMY_GRANT_REPOSITORY,
   AutonomyGrantsController,
 } from './policy/autonomy-grants.controller.js';
+import {
+  APPROVAL_LIFECYCLE_REPOSITORY,
+  ApprovalsController,
+} from './policy/approvals.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -113,6 +119,7 @@ export function createApiModule(
   policyActions: PolicyActionRepository,
   runnerRegistrations: RunnerRegistrationRepository,
   autonomyGrants: AutonomyGrantRepository,
+  approvals: ApprovalLifecycleRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -124,6 +131,7 @@ export function createApiModule(
       PolicyEvaluationController,
       RunnersController,
       AutonomyGrantsController,
+      ApprovalsController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -139,6 +147,7 @@ export function createApiModule(
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
       { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
       { provide: AUTONOMY_GRANT_REPOSITORY, useValue: autonomyGrants },
+      { provide: APPROVAL_LIFECYCLE_REPOSITORY, useValue: approvals },
     ],
   })
   class ApiModule {}
@@ -170,6 +179,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
     new PrismaAutonomyGrantRepository(prisma),
+    new PrismaApprovalLifecycleRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

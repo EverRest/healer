@@ -22,10 +22,13 @@ import {
   type EvidenceRepository,
 } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type ApprovalLifecycleRepository,
+  type AutonomyGrantRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
@@ -110,6 +113,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
       new PrismaAutonomyGrantRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -390,6 +394,22 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     list: () => Promise.resolve([]),
   };
 
+  const noopAutonomyGrants: AutonomyGrantRepository = {
+    findActive: () => Promise.resolve([]),
+    findById: () => Promise.resolve(null),
+    list: () => Promise.resolve([]),
+    create: () => Promise.reject(new Error('not implemented in this test')),
+    revoke: () => Promise.reject(new Error('not implemented in this test')),
+  };
+  const noopApprovals: ApprovalLifecycleRepository = {
+    request: () => Promise.reject(new Error('not implemented in this test')),
+    resolve: () => Promise.reject(new Error('not implemented in this test')),
+    expire: () => Promise.reject(new Error('not implemented in this test')),
+    findById: () => Promise.resolve(null),
+    list: () => Promise.resolve([]),
+    findDue: () => Promise.resolve([]),
+  };
+
   beforeAll(async () => {
     const queue = new BullmqSignalQueue({ url: 'redis://127.0.0.1:6399' });
     const ApiModule = createApiModule(
@@ -405,6 +425,8 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopPolicyDecisions,
       noopPolicyActions,
       noopRunnerRegistrations,
+      noopAutonomyGrants,
+      noopApprovals,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

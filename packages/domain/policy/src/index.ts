@@ -4,9 +4,26 @@ export { ACTION_CLASSES, type ActionClass } from './domain/action-class.js';
 export type { ApprovalCallbackPort } from './domain/approval-callback-port.js';
 export {
   ApprovalNotPendingError,
+  type ApprovalLifecycleRepository,
+  type ApprovalListFilter,
+  type ApprovalRequest,
   type ApprovalRequestRepository,
   type ApprovalRequestSummary,
 } from './domain/approval-request-repository.js';
+export {
+  ApprovalNotDueError,
+  ApprovalWithoutDeadlineError,
+  assertDue,
+  assertRedeemable,
+  buildLapseDecision,
+  projectExpiry,
+} from './domain/approval-lifecycle.js';
+export {
+  approvalSummarySchema,
+  ApprovalSummaryNotStructuralError,
+  buildApprovalSummary,
+  type ApprovalSummary,
+} from './domain/approval-summary.js';
 export type { AuditActorType, NewAuditEntry } from './domain/audit-entry.js';
 export {
   CeilingExceededError,
@@ -98,6 +115,22 @@ export {
   NoPublishedRulesetError,
   UnregisteredActionError,
 } from './application/resolve-ruleset-and-evaluate.js';
+export {
+  expireApproval,
+  expireDueApprovals,
+  EXPIRE_APPROVAL_AUDIT_ACTION,
+  type ExpireDueApprovalsResult,
+} from './application/commands/expire-approval.js';
+export {
+  requestApproval,
+  REQUEST_APPROVAL_AUDIT_ACTION,
+  type RequestApprovalInput,
+} from './application/commands/request-approval.js';
+export {
+  resolveApproval,
+  RESOLVE_APPROVAL_AUDIT_ACTION,
+  type ResolveApprovalInput,
+} from './application/commands/resolve-approval.js';
 export { consumeDecision } from './application/commands/consume-decision.js';
 export {
   explainDecision,
@@ -114,4 +147,7 @@ export { PrismaPolicyDecisionRepository } from './infrastructure/prisma-policy-d
 export { PrismaAutonomyEpochRepository } from './infrastructure/prisma-autonomy-epoch-repository.js';
 export { PrismaAutonomyGrantRepository } from './infrastructure/prisma-autonomy-grant-repository.js';
 export { PrismaApprovalRequestRepository } from './infrastructure/prisma-approval-request-repository.js';
+export { PrismaApprovalLifecycleRepository } from './infrastructure/prisma-approval-lifecycle-repository.js';
+export { PrismaApprovalCallbackPort } from './infrastructure/prisma-approval-callback-port.js';
+export { ApprovalRunTerminalError } from './infrastructure/approval-run-effects.js';
 export { recordAuditEntry } from './infrastructure/record-audit-entry.js';
