@@ -189,7 +189,7 @@ export function monolithFixture() {
         nodeKind: 'component',
         name: 'api',
         componentType: 'service',
-        characteristics: ['user-facing'],
+        characteristics: ['user_facing'],
       },
       {
         nodeKind: 'component',
@@ -201,7 +201,7 @@ export function monolithFixture() {
         nodeKind: 'component',
         name: 'frontend',
         componentType: 'frontend',
-        characteristics: ['user-facing'],
+        characteristics: ['user_facing'],
       },
       {
         nodeKind: 'deployment_unit',
@@ -316,13 +316,13 @@ export function serverlessFixture() {
         nodeKind: 'component',
         name: 'send-email-fn',
         componentType: 'service',
-        characteristics: ['event-driven'],
+        characteristics: ['event_driven'],
       },
       {
         nodeKind: 'component',
         name: 'resize-image-fn',
         componentType: 'service',
-        characteristics: ['event-driven'],
+        characteristics: ['event_driven'],
       },
       {
         nodeKind: 'deployment_unit',
