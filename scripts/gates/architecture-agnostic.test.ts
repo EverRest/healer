@@ -90,3 +90,65 @@ describe('gate-architecture-agnostic (012 T032, constitution VII, 004 SC-008)', 
     expect(issues).toEqual([]);
   });
 });
+
+describe('architecture-conditional branches (004 T050, SC-008, FR-020, 012 FR-002)', () => {
+  const branch = (path: string, content: string) => findArchitectureLeaks([{ path, content }]);
+  const branchIssues = (path: string, content: string) =>
+    branch(path, content).filter((i) => i.includes('conditional branch'));
+
+  it.each([
+    ["if (arch === 'monolith') {}"],
+    ['if (arch !== "microservice") {}'],
+    ["switch (kind) {\n  case 'serverless':\n    break;\n}"],
+    ["const x = style == 'microservices' ? 1 : 2;"],
+    ["const x = 'monolith' === arch;"],
+    ['if (isServerless(system)) {}'],
+    ['while (system.isMonolith) {}'],
+  ])('fails a branch outside packages/integrations: %s', (content) => {
+    expect(branchIssues('apps/api/src/handler.ts', content)).not.toHaveLength(0);
+    expect(branchIssues('packages/domain/architecture/src/domain/x.ts', content)).not.toHaveLength(
+      0,
+    );
+  });
+
+  it('fails a branch in an infrastructure/ directory too (that exemption is for own stack only)', () => {
+    expect(
+      branchIssues(
+        'packages/domain/architecture/src/infrastructure/x.ts',
+        "if (a === 'monolith') {}",
+      ),
+    ).not.toHaveLength(0);
+  });
+
+  it('passes the same text under packages/integrations/** (path pattern, any adapter)', () => {
+    for (const adapter of ['kubernetes', 'gitlab', 'some-future-adapter']) {
+      expect(
+        branch(
+          `packages/integrations/${adapter}/src/collect.ts`,
+          "if (arch === 'monolith') {}\nswitch (k) { case 'serverless': break; }",
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it('does not exempt a look-alike path', () => {
+    for (const path of [
+      'packages/integrations-shared/src/x.ts',
+      'apps/api/packages/integrations/x.ts',
+    ]) {
+      expect(branchIssues(path, "if (a === 'monolith') {}")).not.toHaveLength(0);
+    }
+  });
+
+  it('ignores a branch inside a comment, as the comment-stripping convention says', () => {
+    expect(
+      branch('apps/api/src/x.ts', "// if (arch === 'monolith') {}\n/* case 'serverless': */"),
+    ).toEqual([]);
+  });
+
+  it('is silent on a branch that tests something else', () => {
+    expect(
+      branch('apps/api/src/x.ts', "if (kind === 'component') {}\nswitch (t) { case 'service': }"),
+    ).toEqual([]);
+  });
+});

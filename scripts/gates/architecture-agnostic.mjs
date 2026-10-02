@@ -18,7 +18,17 @@ import { stripComments } from '../lib/strip-comments.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SCAN_ROOTS = ['packages/domain', 'packages/agents'];
+// Branches are searched across all first-party code, not only the domain/agent packages.
+const BRANCH_SCAN_ROOTS = ['packages', 'apps'];
 const EXEMPT_DIR_PATTERN = /(^|\/)(adapters|discovery|infrastructure)(\/|$)/;
+// The one place architecture-specific logic may live (FR-020, 004 T050): a path pattern, so a new
+// adapter package needs no edit here (012 FR-002). Repo-relative, so anchored at the start.
+const INTEGRATIONS_PATTERN = /^packages\/integrations\//;
+// A line that decides something: a branch keyword, a (in)equality or a ternary.
+const BRANCH_CONSTRUCT = /\b(?:if|while|switch|case)\b|[!=]==?|\s\?\s/;
+// `isMonolith` -> `is Monolith`, `k8s_cluster` -> `k8s cluster`: the word-bounded term list below
+// then catches a style named in an identifier as well as in a string.
+const splitIdentifiers = (line) => line.replace(/([a-z\d])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
 
 // Customer deployment/architecture vocabulary (004 SC-008) — not our own stack, which the
 // import-boundary lint (T035) already governs.
@@ -81,10 +91,21 @@ function* walk(dir) {
 export function findArchitectureLeaks(files) {
   const issues = [];
   for (const { path, content } of files) {
-    if (EXEMPT_DIR_PATTERN.test(path)) continue;
+    if (INTEGRATIONS_PATTERN.test(path)) continue;
     const stripped = stripComments(content);
     const lines = stripped.split('\n');
     lines.forEach((line, index) => {
+      // Not subject to the adapters/discovery/infrastructure exemption: infrastructure/ is exempt
+      // for our own stack, not for branching on the customer's style.
+      if (BRANCH_CONSTRUCT.test(line)) {
+        for (const match of splitIdentifiers(line).matchAll(BANNED_PATTERN)) {
+          issues.push(
+            `${path}:${index + 1}: architecture-conditional branch on "${match[1]}" — only packages/integrations/** may branch on style`,
+          );
+        }
+      }
+      if (EXEMPT_DIR_PATTERN.test(path) || !SCAN_ROOTS.some((root) => path.startsWith(`${root}/`)))
+        return;
       for (const match of line.matchAll(BANNED_PATTERN)) {
         issues.push(`${path}:${index + 1}: names "${match[1]}" — customer architecture style`);
       }
@@ -101,7 +122,7 @@ export function findArchitectureLeaks(files) {
 /* v8 ignore start -- CLI wiring; findArchitectureLeaks above is unit tested */
 if (isMainModule(import.meta.url)) {
   const result = await runGate('gate-architecture-agnostic', () => {
-    const files = SCAN_ROOTS.flatMap((root) => {
+    const files = BRANCH_SCAN_ROOTS.flatMap((root) => {
       const abs = join(REPO_ROOT, root);
       return [...walk(abs)].map((path) => ({
         path: relative(REPO_ROOT, path),
