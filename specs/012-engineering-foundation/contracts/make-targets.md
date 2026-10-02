@@ -48,6 +48,11 @@ gate-graph-confirm-capability   no MCP tool or worker job exposes a graph confir
                   that does expose one references the capability constant (004 FR-010, R-09)
 gate-no-send      no package imports an outbound mail, SMS, chat or HTTP-client module except
                   the named egress allowlist, which contains no support package (009)
+check-confirmation-actors   0 graph confirmations recorded against a non-human actor, and 0
+                  draft_item rows in state 'confirmed' whose confirming audit trail is missing or
+                  non-human (004 T034, SC-002, SC-003)
+check-graph-fact-coverage   every non-null graph_node/edge_provenance/draft_item observation_ref
+                  resolves to a real evidence row of type graph_fact (004 T035, FR-027)
 gate-agent-scope  an agent-authored change set touches no protected path and no pre-existing test
                   assertion (FR-054, FR-055)
 gate-red-first    an agent-authored behavioural change set has a test that fails on the base
@@ -64,6 +69,7 @@ Each is callable alone for iteration and is also called by `ci`:
 `secret-scan` · `deps-check` · `db-check` · `format-check` · `lint` · `typecheck` · `build` ·
 `test-unit` · `gate-coverage-completeness` · `test-e2e` · `contracts-check` · `gate-data-model` ·
 `gate-isolation` · `gate-undo` · `gate-ceiling` · `gate-evidence` · `gate-graph-confirm-capability` ·
+`gate-no-send` · `check-confirmation-actors` · `check-graph-fact-coverage` ·
 `gate-agent-scope` · `gate-red-first`
 
 ## Gate semantics
@@ -84,6 +90,8 @@ passes when confused produces a false record of compliance, which is worse than 
 | `gate-architecture-agnostic` | a domain or agent package references a concrete architecture style, runtime or vendor by name — the rule is **constitution VII** (004 SC-008, FR-016a) |
 | `gate-graph-confirm-capability` | an MCP tool or worker job contains anything shaped like a graph confirmation/rejection path, with no escape hatch; an agent (`packages/agents`) or runner (`apps/runner`) package references the `graph:confirm` capability at all; or a command (`**/application/commands/**`), architecture infrastructure handler or `apps/api/src` route exposes a confirm-shaped path without referencing the capability constant. A structural drift detector, not the real boundary — the rule is **004 FR-010, R-09** |
 | `gate-no-send` | any package outside the egress allowlist imports an outbound mail, SMS, chat or HTTP-client module. Scoped **monorepo-wide, not to the support packages** — 009's adapters live under `integrations/` by design, so a support-send adapter added there would otherwise trip nothing (009 SC-005) |
+| `check-confirmation-actors` | any `draft_item` is confirmed by a non-human actor, or any row in state `confirmed` has no human-actor audit entry recording it (004 FR-010, SC-002, SC-003) |
+| `check-graph-fact-coverage` | any non-null `observation_ref` on `graph_node`, `edge_provenance` or `draft_item` fails to resolve to an `evidence` row of type `graph_fact` (004 FR-027, 001 FR-007/FR-008) |
 | `lint` (never-wait) | a processor contains a sleep, a poll loop, or awaits external completion (R-02) |
 | `lint` (boundaries) | a cross-module infrastructure import, a provider SDK outside its adapter, `@prisma/client` or `process.env` outside their permitted paths (R-01) |
 | `lint` (suppression) | a boundary rule is suppressed inline; an exception exists only as a recorded entry referencing an ADR and naming an owner (FR-005) |

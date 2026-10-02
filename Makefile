@@ -9,7 +9,7 @@
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics
+	gate-coverage-completeness check-confirmation-actors check-graph-fact-coverage runner-contract-test runner-compat-test runner-build runner-diagnostics
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -46,6 +46,8 @@ ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) gate-architecture-agnostic
 	$(MAKE) gate-graph-confirm-capability
 	$(MAKE) gate-no-send
+	$(MAKE) check-confirmation-actors
+	$(MAKE) check-graph-fact-coverage
 
 secret-scan: ## No secret material and no committed environment file (FR-008, FR-042)
 	pnpm run secret-scan
@@ -100,6 +102,12 @@ gate-graph-confirm-capability: ## No MCP tool/job/route exposes graph confirm; n
 
 gate-no-send: ## No package outside the egress allowlist imports an outbound mail/SMS/chat module (009 SC-005)
 	pnpm run gate-no-send
+
+check-confirmation-actors: ## 0 graph confirmations by a non-human actor (004 T034, SC-002, SC-003)
+	pnpm run check:confirmation-actors
+
+check-graph-fact-coverage: ## Every graph observation_ref resolves to a real graph_fact evidence row (004 T035, FR-027)
+	pnpm run check:graph-fact-coverage
 
 # Runner targets (012 T049/T050, contracts/make-targets.md's "Runner targets" table). Not
 # composed into `ci` above: the contract's own `ci` composition list omits them, and
