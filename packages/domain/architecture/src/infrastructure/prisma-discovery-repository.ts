@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { TenantScoped } from '@healer/shared';
+import { NotFoundError, type TenantScoped } from '@healer/shared';
 import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import type { ConfirmedGraphSnapshot } from '../domain/confirmed-graph-snapshot.js';
@@ -165,9 +165,21 @@ export class PrismaDiscoveryRepository implements DiscoveryRepository {
 
   async ingestBatch(where: TenantScoped<IngestBatchWriteInput>): Promise<IngestedDraft | null> {
     return this.prisma.$transaction(async (tx) => {
-      const run = await tx.discoveryRun.findUniqueOrThrow({
-        where: { id_tenantId: { id: where.runId, tenantId: where.tenantId } },
-      });
+      // Review fix (#7): `findUniqueOrThrow` + an in-application `finishedAt !== null` check is
+      // check-then-act under READ COMMITTED with no row lock — two concurrent deliveries of the
+      // same run both read `finished_at IS NULL`, both proceed, and both write (double-counted
+      // outcomes, a possible unique-constraint error on the source-outcome upsert, or two
+      // `DiscoveryDraftProposed` events for one draft). `SELECT ... FOR UPDATE` claims the row for
+      // this transaction's lifetime: a concurrent second ingest blocks here until the first
+      // commits, then sees the now-committed `finished_at` and takes the no-op path below —
+      // exactly the guarantee the comment already claimed, now actually enforced.
+      const runRows = await tx.$queryRaw<{ id: string; finishedAt: Date | null }[]>`
+        SELECT id, finished_at AS "finishedAt" FROM "architecture"."discovery_run"
+        WHERE id = ${where.runId}::uuid AND tenant_id = ${where.tenantId}::uuid
+        FOR UPDATE
+      `;
+      const run = runRows[0];
+      if (run === undefined) throw new NotFoundError('DiscoveryRun');
       // Idempotent retry (plan "Architecture of a run"): a batch for a run already finished is a
       // no-op that returns the existing draft untouched, rather than writing a second time.
       if (run.finishedAt !== null) {

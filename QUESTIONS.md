@@ -2817,6 +2817,103 @@ details below.
   "normalises ... with no timezone offset" test with the exact bare string where the `.000Z`-suffixed
   one was expected; restored byte-for-byte.
 
+## 004 Phase 3 — A1 review-fix round (code-reviewer + silent-failure-hunter findings)
+
+Two independent reviews against the merged A1+A2 branch found real bugs, several confirmed by
+runtime probes. All fixed; judgment calls below.
+
+- **down.sql's DELETE needed `SET LOCAL healer.privileged_write = 'on'`** — `evidence.evidence`
+  carries `evidence_append_only` (`reject_evidence_mutation()`, not the generic
+  `reject_mutation_unless_privileged()` I'd assumed when I first wrote the comment; evidence has
+  its own function because of the `ref_state` transition exception). Added a dedicated e2e test
+  (`discovery-evidence-migration-down.e2e.test.ts`) that seeds a `graph_fact` row with a null
+  `issue_id` before reversing — the generic round-trip test in `prisma/migration.e2e.test.ts`
+  only ever ran against an empty database, so it could never have caught this.
+- **Egress-rejected items now count toward the outcome.** `CollectionOutcome`'s `completed`
+  variant gained `egressRejectedCount`; `deriveProvisionalSourceOutcome` treats it as highest
+  priority (`schema_rejected` outranks a mere truncation or region gap — real cause over
+  "there was more of it than the cap"). A rejected item still never crosses into a gap's content.
+- **Per-source timeout is now the orchestrator's own race**, not a courtesy signal a cooperating
+  adapter happens to check (`raceAgainstTimeout` in `collect-discovery.ts`, same technique as
+  `@healer/workflow`'s `runWithBudget` — not imported, since that package pulls in BullMQ/job-state
+  concerns unrelated to this one; the race itself is three lines). The e2e timeout test now uses a
+  genuinely non-cooperating adapter (`new Promise(() => {})`, never touches its signal) to prove
+  the bound is real, not merely cooperative.
+- **Bare `catch {}` → `catch (err)`**, logged via an optional structural logger
+  (`DiscoveryLogger`, pino-shaped, no pino dependency — same technique as `@healer/workflow`'s
+  `AlertLogger`), distinguishing `AbortError` from a genuine failure. Never the payload — class,
+  message, and counts only.
+- **`built_from` edges now resolve their component endpoint through the same identity index a
+  `dependency_observation` endpoint does** — `repository_ref`'s `componentNaturalKeys[]` entries
+  used to become `add_edge` candidates unconditionally. Required restructuring `diff-builder.ts`
+  into a single `resolveEdges` pass over *both* edge sources (was two separate functions, one of
+  which ran before all candidate nodes were even collected).
+- **`lastDeployedAt` is now normalised through `new Date(x).toISOString()` on the candidate
+  side**, matching the confirmed side's own `.toISOString()` reconstruction exactly.
+  **[PAVLO]**: the open design question the finding named — "should a volatile-only diff (nothing
+  but `currentVersion`/`lastDeployedAt` changed) even produce a `modify_attributes`, given the
+  digest already excludes them for re-raise purposes" — is **not decided here**, per the
+  coordinator's explicit instruction to record it rather than choose.
+- **`ingestBatch`'s idempotency check is now `SELECT ... FOR UPDATE`** on the `discovery_run` row
+  inside the transaction, claiming it before any write, instead of a plain read with no lock.
+  Proven two ways (`discovery-ingest-race.e2e.test.ts`): a held-transaction + `pg_stat_activity`
+  test establishes genuine Postgres-level contention exists (mechanism sanity check — this part
+  does *not* by itself distinguish the fix from its absence, since `discoveryRun.update()` later
+  in the same function would also collide with a held lock either way; said so in the test's own
+  comment rather than let it overclaim); the test that actually discriminates is two *real*
+  concurrent `ingestBatch` calls with no artificial holder, asserting exactly one draft and
+  exactly one `DiscoveryDraftProposed` outbox row — confirmed red under the mutation (2 outbox
+  rows), green with the fix.
+- **`push` now returns whether it kept the item** (rejection filter can no-op it); both
+  `markRemovedNodes` and `markRemovedEdges` write their absence `graph_fact` evidence row only
+  when `push` returned `true` — previously the absence row was written unconditionally, so a
+  rejected `mark_removed` still left behind a permanent, never-expiring, uncited orphan evidence
+  row on every re-run.
+- **Unresolved edges are now counted and logged** (`BuildDraftItemsResult.unresolvedEdges`, pure;
+  logged by `ingestDiscoveryBatch`, the one call site) for both `dependency_observation` and
+  `built_from` pairs. **`markRemovedEdges` now excludes a confirmed edge whose natural-key tuple
+  matches an unresolved observation this run** — an identity that failed to resolve is not the
+  same fact as "a fully-collected source looked and didn't see it"; treating it as evidence of
+  absence would have been a false `mark_removed`.
+- **Ingress/cross-check/closed-vocabulary rejections are now counted per reason** (not one
+  collapsed boolean), logged (never the item content — field-level zod messages only), and the
+  per-source gap's `why` names the counts by reason instead of just repeating the status.
+- **Run outcome excludes `not_attempted` sources from the "all collected" check** — a source the
+  operator chose not to request is not evidence of an incomplete run; `complete` now means "every
+  *requested* source came back fully", not "every known source, request it or not".
+- **`collection_gap` evidence ids now hash `sourceKey` too** — two different sources reporting the
+  byte-identical `{what, why}` gap used to collapse into one evidence row via `skipDuplicates`,
+  silently losing one source's own gap. Added a dedicated e2e test with two sources reporting the
+  identical gap, confirmed each gets its own row.
+- **T023's e2e test rewritten**: it previously never varied confidence at all (one run, one
+  adapter — `provenanceBaseConfidence` is a pure function of provenance class, so nothing in a
+  single run could vary it) and its `if (draft !== null)` guard would have passed silently on a
+  null draft. Now runs the identical structural candidate through *two different adapters* with
+  different provenance (confidence 60 vs 70), asserting `draft` non-null and zero items both
+  times — confidence genuinely differs, and a null draft now fails loudly instead of skipping the
+  assertion.
+- **The "DiscoveryAdapter port is structurally read-only" test was checking its own test fixture,
+  not the real interface.** Replaced with a type-level `expectTypeOf<keyof DiscoveryAdapter>().
+  toEqualTypeOf<'key'|'version'|'layer'|'provenance'|'collect'>()` (vitest's own type-testing
+  utility — no new dependency, same idiom `read-envelope.test.ts` already uses in this package) —
+  mirrors A2's `Equals<keyof Port, ...>` pattern in spirit without duplicating its exact helper.
+  Confirmed this fails to *compile* (not merely fails a runtime assertion) by adding a fake `write`
+  method to the real interface and watching the whole build break project-wide, then reverting.
+- **[Not done] Moving `discovery-run.e2e.test.ts` under `packages/domain/architecture/`.** I could
+  not find any existing e2e test anywhere in this repo living under a `packages/**` directory —
+  every one I can find is at the repo root, under `apps/*`, under `scripts/checks/`, or
+  `prisma/migration.e2e.test.ts` (checked via a repo-wide `find` for `*.e2e.test.ts` on this
+  branch). This also matches the coordinator's own binding plan document for this sub-batch,
+  which explicitly says e2e tests live at the repo root. Moving it would also create a real
+  structural problem: the file imports `@healer/domain-architecture` (the package's own compiled
+  output) to exercise the public API the way a real consumer would — a copy living inside that
+  same package's `src/` tree would be a self-import, and the package's own `tsconfig.json`
+  (`include: ["src/**/*"]`) would sweep the e2e test into its own project-reference build, which
+  isn't how any other package's tests are organised here. Left at the root; flagging this
+  explicitly rather than silently doing something I believe is wrong — if there's a convention
+  from a different branch I haven't seen (e.g. sub-batch A2's own new test files), point me at it
+  and I'll reconcile.
+
 ## 004 Phase 3 — two coordinator calls, ruled on by Pavlo mid-batch
 
 - **Discovery evidence is issue-less and does not expire — approved.** `evidence.issue_id` is
@@ -2833,6 +2930,46 @@ details below.
   raised: its `issue_id` is NOT NULL and raising a `knowledge_drift` issue is T073/T074 (Phase 7, out
   of scope). T029 stays unticked, pointing at Phase 7.
 
+## 004 Phase 3 — sub-batch C (T018 full, T030, T031, quickstart 44): reconciliation and judgment calls
+
+Merged A2 (final `de957e6`) then A1 (final `524cd4c`) into this branch after both review-fix rounds
+landed. Judgment calls from this sub-batch's own work, plus how the egress-accounting duplication
+was resolved.
+
+- **Duplicate production-code fix, reconciled by discarding mine.** While writing T030's full-pipeline
+  test I independently found and fixed the same bug the coordinator separately routed to A1: an item
+  failing `validateEgress` in `collectOne` vanished with no outcome signal at all. My fix added a
+  boolean `anyEgressRejected` to `CollectionOutcome`'s `completed` variant; A1's later, broader
+  review-fix round fixed the same bug properly as part of `raceAgainstTimeout` or (`egressRejectedCount:
+  number`, plus counting toward a synthesised `collection_gap`, plus structured logging) — a strict
+  superset of mine. Per the coordinator's explicit instruction, I discarded my version in favour of
+  A1's at merge time (`git checkout --theirs` on `collect-discovery.ts`, `source-outcome.ts`,
+  `source-outcome.test.ts`) rather than hand-reconciling two shapes of the same guard. My own
+  red/green proof (documented in my commit `a9b0840`) stands as independent confirmation the bug was
+  real and the general approach (count egress rejections, surface as `schema_rejected`) was right.
+- **The non-cooperating-adapter KNOWN GAP test, converted rather than removed.** A1's review-fix round
+  also fixed the timeout-race bug (`raceAgainstTimeout`) and added their own unit-level proof with a
+  non-cooperating fake adapter. My own test exercises the same underlying guarantee but through the
+  full real pipeline (`collectDiscovery` against a raw non-cooperating `DiscoveryAdapter`, in
+  `design-partner-discovery.e2e.test.ts`) rather than at the unit level — a different angle (e2e
+  integration vs. unit), not a pure duplicate, so it was converted from a "KNOWN GAP" (asserting the
+  bug) to a plain positive assertion (`status: 'timed_out'` within `perSourceTimeoutMs`, call
+  resolving rather than racing against an external bound) now that the underlying fix is merged, and
+  kept.
+- **Content-length leak vector (T030's "KNOWN GAP: a file body stuffed into an existing string field
+  is not caught by schema validation") is left as-is, not escalated to A1/A2's scope.** Neither review
+  round touched `discovery-shapes.ts`'s per-field string bounds, so this remains an accepted,
+  documented limit — see the index entry below.
+- **Confirmed no other overlap.** Read A2's four review-fix commits before merging (signal-forwarding
+  into readers, timestamp normalisation, T031 clock-freezing, broadened read-only port proof) —
+  none touch `collect-discovery.ts`, `source-outcome.ts`, or either of my two new files, so that
+  merge was clean with no reconciliation needed.
+- **Pre-existing defect found and fixed in passing**: an already-committed, unresolved merge-conflict
+  marker (`<<<<<<< HEAD` with no matching close) in this file, present since the coordinator's own
+  `fee5499` merge, in the middle of the "004 Phase 3" sections — unrelated to this sub-batch's work,
+  but directly in a region I was already resolving a real conflict in, so removed rather than left for
+  someone else to trip over.
+
 ## Decisions waiting on Pavlo — 004 Phase 3 (index; detail in the named sections above)
 
 1. **Once Phase 7 exists, does a contradiction of a confirmed element go to drift *instead of* the
@@ -2842,3 +2979,15 @@ details below.
 2. **Does an `absence` observation deserve its own boundary-contract shape?** A1's `mark_removed`
    items carry a synthetic `absence` `graph_fact` row the control plane writes itself (see "004 Phase
    3 — discovery run and draft (A1)") — not one of the four validated shapes.
+3. **Should `lastDeployedAt`/`currentVersion` changing alone (nothing else) even produce a
+   `modify_attributes` item**, given `proposal-digest.ts` already excludes both from the re-raise
+   digest? Named by A1's review-fix round ("004 Phase 3 — A1 review-fix round" above); recorded, not
+   decided, per the coordinator's instruction.
+4. **Does a string field that is supposed to carry a short identifier (`name`, `naturalKey`,
+   `environment`, …) need a length bound at the boundary-contract schema level**, the way
+   `tool_output_summary`'s declared fields already do for a different reason? Neither review round
+   raised this; found independently while writing T030's mutation-check (see "sub-batch C" above) —
+   a buggy adapter can stuff a whole file body into an existing string field today and nothing at the
+   schema layer notices. Not fixed unilaterally: the right bound, and whether it belongs on these 4
+   shapes alone or on `RunnerEvidence`'s other 20+ shapes too, is a design call bigger than this
+   sub-batch.

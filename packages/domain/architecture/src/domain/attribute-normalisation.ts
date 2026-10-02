@@ -38,7 +38,15 @@ export function normaliseDeploymentUnitAttributes(
     runtimeKind: candidate.runtimeKind,
     runtimeRef: candidate.runtimeRef,
     currentVersion: candidate.currentVersion,
-    lastDeployedAt: candidate.lastDeployedAt ?? null,
+    // Review fix: the confirmed side is rebuilt from a `Date` column via `.toISOString()`
+    // (`prisma-discovery-repository.ts`'s `attributesFromRow`), which can differ from the wire's
+    // own ISO string in millisecond formatting even for the identical instant — producing a
+    // spurious `modify_attributes` on every re-run. Both sides now go through `Date.toISOString()`
+    // so they compare in the one canonical format regardless of what the wire sent.
+    lastDeployedAt:
+      candidate.lastDeployedAt !== undefined
+        ? new Date(candidate.lastDeployedAt).toISOString()
+        : null,
   };
 }
 

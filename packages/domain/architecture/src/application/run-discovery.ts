@@ -1,5 +1,6 @@
 import type { TenantContext } from '@healer/shared';
 import type { AdapterConstants } from '../domain/discovery-batch.js';
+import type { DiscoveryLogger } from '../domain/discovery-logger.js';
 import type { DiscoveryRepository, IngestedDraft } from '../domain/discovery-repository.js';
 import {
   collectDiscovery,
@@ -17,6 +18,7 @@ export interface RunDiscoveryInput {
   readonly itemCap: number;
   readonly signal?: AbortSignal;
   readonly now?: Date;
+  readonly logger?: DiscoveryLogger;
 }
 
 /**
@@ -43,6 +45,7 @@ export async function runDiscovery(
     perSourceTimeoutMs: input.perSourceTimeoutMs,
     itemCap: input.itemCap,
     ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    ...(input.logger !== undefined ? { logger: input.logger } : {}),
   };
   const sourceResults = await collectDiscovery(input.sources, collectOptions);
 
@@ -60,5 +63,6 @@ export async function runDiscovery(
     baseVersion: run.baseVersion,
     sources: sourceResults,
     adapterConstants,
+    ...(input.logger !== undefined ? { logger: input.logger } : {}),
   });
 }

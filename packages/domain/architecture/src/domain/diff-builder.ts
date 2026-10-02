@@ -74,6 +74,9 @@ export interface BuildDraftItemsResult {
   readonly items: readonly DraftItemCandidate[];
   readonly countsByOp: Readonly<Record<DraftItemOp, number>>;
   readonly absenceEvidence: readonly AbsenceEvidenceCandidate[];
+  /** `dependency_observation`/`built_from` pairs whose endpoint(s) did not resolve this run
+   *  (review fix #11) — the caller logs this; it is never silent. */
+  readonly unresolvedEdges: number;
 }
 
 export interface CandidateNode {
@@ -93,10 +96,13 @@ export interface CandidateEdge {
   readonly observationRef: string;
 }
 
+/** Returns whether the item was actually kept (review fix #8): the rejection filter can no-op
+ *  this call, and a caller that also writes evidence tied only to this one item (`mark_removed`'s
+ *  synthetic absence fact) must not write that evidence when the item itself was dropped. */
 export type Push = (
   op: DraftItemOp,
   item: Omit<DraftItemCandidate, 'op' | 'proposalDigest'>,
-) => void;
+) => boolean;
 
 const STRONGEST_FIRST = (a: { provenance: ProvenanceClass }, b: { provenance: ProvenanceClass }) =>
   provenanceStrength(b.provenance) - provenanceStrength(a.provenance);
@@ -152,16 +158,29 @@ function toCandidateNode(
   };
 }
 
+/** A `built_from` edge whose component endpoint is not yet resolved — `repository_ref` only
+ *  names a natural key, never a kind, so it needs the same identity-index resolution a
+ *  `dependency_observation` endpoint does (review fix: this used to skip resolution entirely and
+ *  propose an edge to a component that might not exist at all — see `resolveBuiltFromEdges`). */
+interface PendingBuiltFromEdge {
+  readonly componentNaturalKey: string;
+  readonly repository: NodeRef;
+  readonly provenance: ProvenanceClass;
+  readonly observationRef: string;
+}
+
 interface Candidates {
   readonly nodes: CandidateNode[];
-  readonly edges: CandidateEdge[];
+  readonly pendingBuiltFromEdges: PendingBuiltFromEdge[];
   /** Node kinds a fully-`collected` source produced ≥1 candidate of, this run — `mark_removed`
    *  eligibility ("absence from a source that did not fully answer is not evidence"). */
   readonly collectedKinds: Map<string, Set<DiscoveryNodeKind>>;
 }
 
-/** Component/deployment-unit/repository candidates, plus the `built_from` edges a `repository_ref`
- *  carries (one per `componentNaturalKeys[]` entry, plan "Ingestion rules"). */
+/** Component/deployment-unit/repository candidates, plus the *unresolved* `built_from` pairs a
+ *  `repository_ref` lists (one per `componentNaturalKeys[]` entry, plan "Ingestion rules") —
+ *  resolved against the identity index once every candidate node is known
+ *  (`resolveBuiltFromEdges`), the same way a `dependency_observation` endpoint is. */
 function collectNodeCandidates(
   sources: readonly AcceptedSourceItems[],
   adapterConstants: Readonly<Record<string, AdapterConstants>>,
@@ -169,7 +188,7 @@ function collectNodeCandidates(
   runId: string,
 ): Candidates {
   const nodes: CandidateNode[] = [];
-  const edges: CandidateEdge[] = [];
+  const pendingBuiltFromEdges: PendingBuiltFromEdge[] = [];
   const collectedKinds = new Map<string, Set<DiscoveryNodeKind>>();
 
   for (const source of sources) {
@@ -191,11 +210,9 @@ function collectNodeCandidates(
       if (item.kind === 'repository_ref') {
         const observationRef = graphFactId(tenantId, runId, item.kind, item);
         for (const componentNaturalKey of item.componentNaturalKeys) {
-          edges.push({
-            from: { nodeKind: 'component', naturalKey: componentNaturalKey },
-            to: { nodeKind: 'repository', naturalKey: item.projectRef },
-            edgeType: 'built_from',
-            layer: 'code',
+          pendingBuiltFromEdges.push({
+            componentNaturalKey,
+            repository: { nodeKind: 'repository', naturalKey: item.projectRef },
             provenance,
             observationRef,
           });
@@ -207,7 +224,7 @@ function collectNodeCandidates(
     if (kinds.size > 0 && source.finalStatus === 'collected')
       collectedKinds.set(source.sourceKey, kinds);
   }
-  return { nodes, edges, collectedKinds };
+  return { nodes, pendingBuiltFromEdges, collectedKinds };
 }
 
 function buildIdentityIndex(
@@ -230,24 +247,62 @@ function resolveRef(
   return kinds === undefined || kinds.size !== 1 ? null : { nodeKind: [...kinds][0]!, naturalKey };
 }
 
-/** `dependency_observation` candidate edges — endpoints resolved by natural key across candidates
- *  and confirmed nodes together; zero or more than one match is "not proposed" (its evidence is
- *  still written by the ingestion layer, independent of this). */
-function collectDependencyEdges(
+/** `${fromNaturalKey}>${toNaturalKey}|${edgeType}|${layer}` — the natural-key-only edge key used
+ *  when an endpoint never resolved to an id, so there is no `NodeRef` (with a kind) to build
+ *  `edgeKey()`'s usual key from. */
+export function naturalEdgeKey(
+  fromNaturalKey: string,
+  toNaturalKey: string,
+  edgeType: string,
+  layer: string,
+): string {
+  return `${fromNaturalKey}>${toNaturalKey}|${edgeType}|${layer}`;
+}
+
+export interface EdgeResolutionResult {
+  readonly edges: CandidateEdge[];
+  /** Review fix (#11): dropped with no count or log before — a `dependency_observation` or
+   *  `built_from` pair whose endpoint resolves to no candidate/confirmed node, or to more than
+   *  one, was silently discarded. Counted here so the caller can log it (this module stays pure). */
+  readonly unresolvedCount: number;
+  /** Natural-key edge keys for every unresolved `dependency_observation` this run (review fix
+   *  #11, #5's sibling concern) — `markRemovedEdges` must not treat "could not resolve" the same
+   *  as "looked and did not see": an ambiguous or missing identity is not a full answer either
+   *  (plan: "absence from a source that did not fully answer is not evidence"). */
+  readonly unresolvedDependencyKeys: ReadonlySet<string>;
+}
+
+/** `dependency_observation` and `built_from` candidate edges — endpoints resolved by natural key
+ *  across candidates and confirmed nodes together, in one pass, so a `built_from` endpoint gets
+ *  exactly the same resolution a `dependency_observation` endpoint does (review fix #5: it
+ *  previously proposed an edge to an unresolved component unconditionally). Zero or more than one
+ *  match is "not proposed" — its evidence is still written by the ingestion layer, independent of
+ *  this, and it is counted above rather than silently dropped. */
+function resolveEdges(
   sources: readonly AcceptedSourceItems[],
+  pendingBuiltFromEdges: readonly PendingBuiltFromEdge[],
   candidateNodes: readonly CandidateNode[],
   confirmedNodes: readonly ConfirmedNode[],
   tenantId: string,
   runId: string,
-): CandidateEdge[] {
+): EdgeResolutionResult {
   const identityIndex = buildIdentityIndex(candidateNodes, confirmedNodes);
   const edges: CandidateEdge[] = [];
+  let unresolvedCount = 0;
+  const unresolvedDependencyKeys = new Set<string>();
+
   for (const source of sources) {
     for (const item of source.items) {
       if (item.kind !== 'dependency_observation') continue;
       const from = resolveRef(item.fromNaturalKey, identityIndex);
       const to = resolveRef(item.toNaturalKey, identityIndex);
-      if (from === null || to === null) continue;
+      if (from === null || to === null) {
+        unresolvedCount += 1;
+        unresolvedDependencyKeys.add(
+          naturalEdgeKey(item.fromNaturalKey, item.toNaturalKey, item.edgeType, item.layer),
+        );
+        continue;
+      }
       edges.push({
         from,
         to,
@@ -258,7 +313,26 @@ function collectDependencyEdges(
       });
     }
   }
-  return edges;
+
+  for (const pending of pendingBuiltFromEdges) {
+    // A `built_from` edge is always component -> repository (data-model.md); a natural key that
+    // resolves to some *other* kind is exactly as unresolved as one that resolves to nothing.
+    const from = resolveRef(pending.componentNaturalKey, identityIndex);
+    if (from === null || from.nodeKind !== 'component') {
+      unresolvedCount += 1;
+      continue;
+    }
+    edges.push({
+      from,
+      to: pending.repository,
+      edgeType: 'built_from',
+      layer: 'code',
+      provenance: pending.provenance,
+      observationRef: pending.observationRef,
+    });
+  }
+
+  return { edges, unresolvedCount, unresolvedDependencyKeys };
 }
 
 function diffNodes(
@@ -345,19 +419,17 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
 
   const {
     nodes: candidateNodes,
-    edges: builtFromEdges,
+    pendingBuiltFromEdges,
     collectedKinds,
   } = collectNodeCandidates(sources, adapterConstants, tenantId, runId);
-  const dependencyEdges = collectDependencyEdges(
-    sources,
-    candidateNodes,
-    snapshot.nodes,
-    tenantId,
-    runId,
-  );
+  const {
+    edges: resolvedEdges,
+    unresolvedCount,
+    unresolvedDependencyKeys,
+  } = resolveEdges(sources, pendingBuiltFromEdges, candidateNodes, snapshot.nodes, tenantId, runId);
 
   const dedupedNodes = dedupeByKey(candidateNodes, (n) => nodeRefKey(n.ref));
-  const dedupedEdges = dedupeByKey([...builtFromEdges, ...dependencyEdges], (e) =>
+  const dedupedEdges = dedupeByKey(resolvedEdges, (e) =>
     edgeKey(e.from, e.to, e.edgeType, e.layer),
   );
 
@@ -371,9 +443,10 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
   };
   const push: Push = (op, item) => {
     const digest = proposalDigest(item.proposed);
-    if (rejectedDigests.has(digest)) return;
+    if (rejectedDigests.has(digest)) return false;
     items.push({ op, proposalDigest: digest, ...item });
     countsByOp[op] += 1;
+    return true;
   };
 
   diffNodes(dedupedNodes, snapshot.nodes, push);
@@ -393,6 +466,7 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
     snapshot.edges,
     dedupedEdges,
     finalStatusBySourceKey,
+    unresolvedDependencyKeys,
     adapterConstants,
     tenantId,
     runId,
@@ -400,5 +474,5 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
     absenceEvidence,
   );
 
-  return { items, countsByOp, absenceEvidence };
+  return { items, countsByOp, absenceEvidence, unresolvedEdges: unresolvedCount };
 }

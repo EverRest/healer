@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import { TenantContext, withCorrelation } from '@healer/shared';
 import {
@@ -714,6 +714,87 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
       });
       expect(items.some((i) => JSON.stringify(i.proposed).includes('parsable-svc'))).toBe(true);
     });
+
+    // Review fix (#13): the collection_gap evidence id's hash excluded sourceKey — two different
+    // sources reporting the byte-identical {what, why} gap collapsed into one evidence row via
+    // createMany's skipDuplicates, silently losing one source's own gap.
+    it('two different sources reporting the identical gap each get their own evidence row', async () => {
+      const identicalGap = {
+        kind: 'collection_gap' as const,
+        what: 'vendor/weird-format/',
+        why: 'unparsable manifest',
+        withheldByRedaction: false,
+      };
+      const sources: DiscoverySourceRequest[] = [
+        {
+          requested: true,
+          adapter: fakeAdapter('gitlab-partial-a', 'code', 'derived_from_code', async () => ({
+            ...emptyFacts,
+            componentCandidates: [
+              {
+                kind: 'component_candidate',
+                naturalKey: 'a-svc',
+                name: 'a-svc',
+                componentType: 'service',
+                characteristics: [],
+                sourcePaths: [],
+                adapterKey: 'gitlab-partial-a',
+                adapterVersion: '1.0.0',
+              },
+            ],
+            collectionGaps: [identicalGap],
+          })),
+        },
+        {
+          requested: true,
+          adapter: fakeAdapter('gitlab-partial-b', 'code', 'derived_from_code', async () => ({
+            ...emptyFacts,
+            componentCandidates: [
+              {
+                kind: 'component_candidate',
+                naturalKey: 'b-svc',
+                name: 'b-svc',
+                componentType: 'service',
+                characteristics: [],
+                sourcePaths: [],
+                adapterKey: 'gitlab-partial-b',
+                adapterVersion: '1.0.0',
+              },
+            ],
+            collectionGaps: [identicalGap],
+          })),
+        },
+      ];
+      const draft = await withCorrelation('corr-t032-dup', () =>
+        runDiscovery(repo, CONTEXT, {
+          trigger: 'manual',
+          runnerId: 'runner-1',
+          sources,
+          perSourceTimeoutMs: 5000,
+          itemCap: 1000,
+        }),
+      );
+      const runId = (
+        await prisma.discoveryDraft.findUniqueOrThrow({
+          where: { id_tenantId: { id: draft!.draftId, tenantId: TENANT_ID } },
+        })
+      ).runId;
+      // Each source also gets its own non-collected-source gap (status `partial`, since each has
+      // a region gap) — that one already carries `sourceKey` as its own `what`, so it was never
+      // at risk of colliding. Isolating by `why` picks out just the region gap both sources
+      // reported with byte-identical content, which is the one the review finding is about.
+      const gaps = await prisma.evidence.findMany({
+        where: { tenantId: TENANT_ID, type: 'collection_gap', sourceRef: runId },
+      });
+      const regionGaps = gaps.filter(
+        (g) => (g.payload as { why?: string }).why === 'unparsable manifest',
+      );
+      const fromA = regionGaps.filter((g) => g.sourceSystem === 'gitlab-partial-a');
+      const fromB = regionGaps.filter((g) => g.sourceSystem === 'gitlab-partial-b');
+      expect(fromA).toHaveLength(1);
+      expect(fromB).toHaveLength(1);
+      expect(fromA[0]!.id).not.toBe(fromB[0]!.id);
+    });
   });
 
   // ─────────────────────────────── T021: parallel, bounded, cancellable ───────────────────────────────
@@ -776,21 +857,21 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
       });
       expect(results[0]!.items).toHaveLength(3);
       expect(results[0]!.status).toBe('partial');
+      // Review fix: truncation used to produce no gap at all — indistinguishable from an
+      // unparsable region (T032). Named by reason, not confused with a schema rejection.
+      expect(results[0]!.reasonCode).toBeNull();
+      expect(results[0]!.gaps.some((g) => g.why === 'item cap reached')).toBe(true);
     });
 
-    it('a per-source timeout does not hang the whole run', async () => {
+    it('a per-source timeout does not hang the whole run, even against a non-cooperating adapter', async () => {
+      // Review fix: a cooperative fake that rejects on `signal.abort()` only proves the
+      // cooperative case — the real bound has to come from the orchestrator's own race, not from
+      // the adapter checking its signal. This adapter never resolves and never looks at `signal`
+      // at all, proving the orchestrator enforces the bound regardless.
       const sources: DiscoverySourceRequest[] = [
         {
           requested: true,
-          adapter: fakeAdapter(
-            'hangs',
-            'code',
-            'derived_from_code',
-            (scope) =>
-              new Promise((_, reject) => {
-                scope.signal?.addEventListener('abort', () => reject(new Error('aborted')));
-              }),
-          ),
+          adapter: fakeAdapter('hangs', 'code', 'derived_from_code', () => new Promise(() => {})),
         },
       ];
       const results = await collectDiscovery(sources, {
@@ -835,12 +916,17 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
       expect(drafts).toHaveLength(0);
     });
 
-    it('the DiscoveryAdapter port is structurally read-only — no method but collect()', () => {
-      const adapter = fakeAdapter('ro', 'code', 'derived_from_code', async () => emptyFacts);
-      const methods = Object.keys(adapter).filter(
-        (k) => typeof (adapter as unknown as Record<string, unknown>)[k] === 'function',
-      );
-      expect(methods).toEqual(['collect']);
+    // Review fix: the original version only inspected `fakeAdapter(...)`'s own fixture object —
+    // that proves something about the test's own helper, not about the real `DiscoveryAdapter`
+    // interface or FR-022. A type-level equality check on the interface itself (vitest's
+    // `expectTypeOf`, no extra dependency — same idiom as `read-envelope.test.ts`) fails to
+    // *compile* the moment a write-shaped member is added to the real port, which a runtime probe
+    // against one fixture can never catch (mirrors A2's `Equals<keyof Port, ...>` check in
+    // `packages/integrations/src/ports-read-only.test.ts` for the adapter-side ports).
+    it('the DiscoveryAdapter port is structurally read-only — no method but collect() (type-level)', () => {
+      expectTypeOf<keyof DiscoveryAdapter>().toEqualTypeOf<
+        'key' | 'version' | 'layer' | 'provenance' | 'collect'
+      >();
     });
   });
 
@@ -850,30 +936,29 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
     const TENANT_ID = '00000000-0000-0000-8000-0000000d0006';
     const CONTEXT = TenantContext.forTrustedInternalUse(TENANT_ID);
 
-    it('a rejected digest is never re-raised, even though its confidence would differ', async () => {
-      const candidate: ComponentCandidate = {
+    // Review fix (#14): the original version never actually varied confidence (one run, one
+    // adapter, `provenanceBaseConfidence` is a pure function of provenance class) and its
+    // `if (draft !== null)` guard would have passed silently even if the run had failed
+    // outright. Fixed on both counts: `draft` is asserted non-null before anything else, and
+    // confidence genuinely differs across the two runs below because two *different* adapters
+    // with two different provenance classes (60 vs 70, confidence.ts) each independently propose
+    // the identical structural candidate.
+    it('a rejected digest is never re-raised, even though its confidence differs between the two adapters that propose it', async () => {
+      const candidateFrom = (adapterKey: string): ComponentCandidate => ({
         kind: 'component_candidate',
         naturalKey: 'rejected-svc',
         name: 'rejected-svc',
         componentType: 'service',
         characteristics: [],
         sourcePaths: [],
-        adapterKey: 'gitlab-reject',
+        adapterKey,
         adapterVersion: '1.0.0',
-      };
-      const sources: DiscoverySourceRequest[] = [
-        {
-          requested: true,
-          adapter: fakeAdapter('gitlab-reject', 'code', 'derived_from_code', async () => ({
-            ...emptyFacts,
-            componentCandidates: [candidate],
-          })),
-        },
-      ];
+      });
 
       // The real `proposalDigest` over the exact proposal the diff builder would construct for
       // this candidate (add_node, component, this natural key, these normalised attributes) —
       // not a hand-rolled hash, so this test can never drift from what the production code hashes.
+      // Deliberately independent of provenance/confidence — neither is a field on `ProposedPayload`.
       const digest = proposalDigest({
         op: 'add_node',
         nodeKind: 'component',
@@ -890,21 +975,41 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
         },
       });
 
-      const draft = await withCorrelation('corr-t023', () =>
-        runDiscovery(repo, CONTEXT, {
-          trigger: 'manual',
-          runnerId: 'runner-1',
-          sources,
-          perSourceTimeoutMs: 5000,
-          itemCap: 1000,
-        }),
-      );
-      if (draft !== null) {
+      const runOnce = async (
+        adapterKey: string,
+        provenance: 'derived_from_code' | 'derived_from_trace',
+      ) => {
+        const draft = await withCorrelation(`corr-t023-${adapterKey}`, () =>
+          runDiscovery(repo, CONTEXT, {
+            trigger: 'manual',
+            runnerId: 'runner-1',
+            sources: [
+              {
+                requested: true,
+                adapter: fakeAdapter(adapterKey, 'code', provenance, async () => ({
+                  ...emptyFacts,
+                  componentCandidates: [candidateFrom(adapterKey)],
+                })),
+              },
+            ],
+            perSourceTimeoutMs: 5000,
+            itemCap: 1000,
+          }),
+        );
+        // The candidate itself is accepted at ingestion (it is well-formed) — the rejection
+        // filter runs later, inside the diff builder — so a draft is still created, with zero
+        // items. Asserted directly (never skipped): a null draft here would mean the run outcome
+        // computation changed underneath this test, which must fail loudly, not pass silently.
+        expect(draft).not.toBeNull();
         const items = await prisma.draftItem.findMany({
-          where: { tenantId: TENANT_ID, draftId: draft.draftId },
+          where: { tenantId: TENANT_ID, draftId: draft!.draftId },
         });
-        expect(items.some((i) => JSON.stringify(i.proposed).includes('rejected-svc'))).toBe(false);
-      }
+        expect(items).toHaveLength(0);
+      };
+
+      // confidence.ts: derived_from_code -> 60, derived_from_trace -> 70. Genuinely different.
+      await runOnce('gitlab-reject', 'derived_from_code');
+      await runOnce('otel-reject', 'derived_from_trace');
     });
   });
 

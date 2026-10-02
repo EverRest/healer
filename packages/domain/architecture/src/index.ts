@@ -17,6 +17,7 @@ export * from './domain/discovery-batch.js';
 export * from './domain/confirmed-graph-snapshot.js';
 export * from './domain/graph-fact-id.js';
 export * from './domain/discovery-evidence.js';
+export * from './domain/discovery-logger.js';
 export * from './domain/source-outcome.js';
 export * from './domain/node-key.js';
 export * from './domain/diff-builder.js';
