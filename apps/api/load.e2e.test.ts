@@ -20,6 +20,7 @@ import {
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
 } from '@healer/domain-policy';
+import { PrismaGraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
@@ -135,6 +136,7 @@ describe('ingestion load and downstream-failure recovery (001 T026, SC-006)', ()
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
       new PrismaAutonomyGrantRepository(prisma),
+      new PrismaGraphReadRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -18,6 +18,9 @@ importers:
         specifier: ^7.3.0
         version: 7.3.0
     devDependencies:
+      '@healer/domain-architecture':
+        specifier: workspace:*
+        version: link:packages/domain/architecture
       '@healer/domain-evidence':
         specifier: workspace:*
         version: link:packages/domain/evidence

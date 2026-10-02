@@ -15,6 +15,7 @@ import {
   type SignalQueue,
   type TimelineRepository,
 } from '@healer/domain-issues';
+import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import {
   PrismaEvidenceGraphRepository,
   PrismaEvidenceRepository,
@@ -58,6 +59,7 @@ import {
   POLICY_ACTION_REPOSITORY,
   PolicyEvaluationController,
 } from './policy/policy-evaluation.controller.js';
+import { GRAPH_READ_REPOSITORY, GraphNodesController } from './graph/graph-nodes.controller.js';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
@@ -113,6 +115,7 @@ export function createApiModule(
   policyActions: PolicyActionRepository,
   runnerRegistrations: RunnerRegistrationRepository,
   autonomyGrants: AutonomyGrantRepository,
+  graphReads: GraphReadRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -124,6 +127,7 @@ export function createApiModule(
       PolicyEvaluationController,
       RunnersController,
       AutonomyGrantsController,
+      GraphNodesController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -139,6 +143,7 @@ export function createApiModule(
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
       { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
       { provide: AUTONOMY_GRANT_REPOSITORY, useValue: autonomyGrants },
+      { provide: GRAPH_READ_REPOSITORY, useValue: graphReads },
     ],
   })
   class ApiModule {}
@@ -170,6 +175,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
     new PrismaAutonomyGrantRepository(prisma),
+    new PrismaGraphReadRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

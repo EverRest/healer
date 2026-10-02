@@ -37,12 +37,15 @@
     "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs",
     "check:ceiling": "node --env-file=.env scripts/checks/ceiling.mjs",
     "check:graph-structure": "node --env-file=.env scripts/checks/graph-structure.mjs",
+    "check:graph-provenance": "node --env-file=.env scripts/checks/graph-provenance.mjs",
+    "check:edge-strength-max": "node --env-file=.env scripts/checks/edge-strength-max.mjs",
     "runner-contract-test": "vitest run packages/boundary-contract/src/index.test.ts",
     "runner-compat-test": "vitest run packages/boundary-contract/src/handshake.test.ts",
     "runner-build": "node scripts/runner-build.mjs",
     "runner-diagnostics": "node scripts/runner-diagnostics.mjs"
   },
   "devDependencies": {
+    "@healer/domain-architecture": "workspace:*",
     "@healer/domain-evidence": "workspace:*",
     "@healer/domain-issues": "workspace:*",
     "@healer/domain-policy": "workspace:*",

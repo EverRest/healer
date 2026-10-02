@@ -2376,7 +2376,24 @@ rather than reading the code alone. Results:
    `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
    found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
    instead of duplicating, since the dependency already runs that direction). No longer open.
-3. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
+3. **`graph_fact` evidence has no home for a discovery run that is not about an issue.**
+   `evidence.issue_id` is `NOT NULL` (001), while FR-027/`PersistGraphFacts` (T035) writes one
+   `graph_fact` row per discovery shape and discovery runs are tenant-scoped, not issue-scoped.
+   `check:graph-provenance` (T040) now requires `observation_ref` to resolve to an `evidence` row of
+   the same tenant, so whoever builds T035 must either relax `issue_id` for `graph_fact` or pick a
+   per-tenant holder issue — a schema decision, not mine to take from T036-T041. Not blocking T036-T041
+   (the merge path takes already-formed observations).
+4. **Pinned graph reads and `edge_provenance` — the R-04a vs data-model.md disagreement, decided
+   interim.** R-04a says `edge_provenance` carries a validity range; data-model.md and the
+   migrations say it does not, so a provenance row has no version of its own. Interim rule (do not
+   treat as settled): a read pinned to `graphVersion` v returns only `edge_provenance` rows with
+   `recorded_at <=` that version's minted time (`graph_version.created_at`), and shows class,
+   strength, confidence and observation of the strongest of those rows (a max of stored values,
+   never a recompute from configuration). Cost: the pin follows wall-clock minting time rather
+   than a stored version number, so a row backfilled with an old `recorded_at` would appear in a
+   past version. Owner of the decision: whoever settles R-04a (a `valid_from_version` on
+   `edge_provenance` would make this exact). Unpinned reads show all rows.
+5. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
    `component | deployment_unit -> endpoint`; confirm or narrow it. Not blocking — one table entry in
    `structural-edges.ts`. See "004 T036-T052 — judgment calls", Split B.
 
@@ -2720,3 +2737,96 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   `implements` and an `exposes` edge, so every structural edge type is exercised by the query set;
   T004's invariants (every component built_from and deployed) are unaffected because endpoints are
   not components.
+### Split A (T036-T041, US2: provenance merge, derived confidence, checks, node reads)
+
+- **Human provenance does not enter the merge path (R-04a vs data-model.md).** Followed
+  `data-model.md` and migrations T002/T011: `edge_provenance` has no validity range and no
+  `actor_ref`; humans author `graph_node`/`graph_edge` directly. Enforced by type:
+  `EdgeObservation.provenance` is `MachineProvenanceClass` (the closed list minus the two human
+  classes, derived by `Exclude`, so there is still one authority), proven by a `@ts-expect-error`
+  test. `check:graph-provenance` reports a human-class *edge* as a violation because nothing can
+  name its actor (item 1 of the decisions list stays open).
+- **The max-maintenance trigger is lossy under a race, so the merge locks the edge row.** Measured
+  in a scratch container: a held-open writer inserts a strength-50 `edge_provenance` row; a second
+  writer's 40 row, computed from a statement snapshot that cannot see the first, overwrites the
+  edge back to 40 with no error. The merge does `SELECT ... FOR UPDATE` on the open edge row
+  before any insert (READ COMMITTED, no SERIALIZABLE needed). Proven by
+  `graph-edge-merge-race.e2e.test.ts` (holder transaction polled via `pg_stat_activity`, 10
+  trials) and mutation-checked: with the lock removed the same test fails every trial (10 of 10) with
+  "expected 40 to be 50". A first draft that founded the edge with `INSERT ... ON CONFLICT` BEFORE
+  locking passed the race test with the lock removed, because the conflict check itself waits on
+  the other writer's row - so the lock now comes first and the founding insert only when absent.
+- **`ON CONFLICT ... WHERE valid_to_version = <bind param>` fails with 42P10 after five
+  executions** (Postgres switches to a generic plan and cannot infer the partial unique index from
+  a parameter). The `2147483647` sentinel is a literal in that SQL. Noted in the repository.
+- **Replay key: unique `(tenant_id, edge_id, observation_ref)` on `edge_provenance`.** Jobs may run
+  twice; without it a replay double-counts `observation_count`. Added to the one T038/T039
+  migration (`20261003070000_graph_confidence_config`, prefix free on this tree's master), with
+  the T039 per-tenant config table `architecture.confidence_config` (`tenant_id` PK, `config`
+  jsonb of overridden knobs). `data-model.md` updated in the same commit.
+- **Confidence volume term uses `observationCount`, not R-15's "distinct observation days".** The
+  dependency observation carries a count and a window, not a day set. Integer-only: the
+  `log2` is `floor(log2(1+n))` by bit length (no `Math.log2`, so it is byte-reproducible),
+  times a per-tenant scale, capped. A volume of 1 is capped at `singleObservationCap` (default
+  40). `base` covers the five machine classes only (R-15's human rows are not reachable here).
+  An invalid tenant override throws rather than falling back to the default.
+- **Edge `provenance` follows the strongest `edge_provenance` row** (class and ordinal agree), and
+  `observation_count`/`last_observed_at` are accumulated by the merge in the same transaction;
+  `strength`/`confidence` stay the trigger's job (one authority, no duplicate app-side max).
+- **`check:edge-strength-max` only checks open edge rows** (`valid_to_version = 2147483647`): the
+  trigger deliberately never touches a closed row, so a closed edge legitimately stops tracking
+  later provenance. An edge with no provenance rows is `check:graph-provenance`'s finding.
+- **`GET /graph/nodes` returns the open rows unless `graphVersion` is given**, and states
+  `graphVersion` (max minted version, or 0 before any). `attributes` (Split B's attribute tables)
+  is not in the node response. `discoveryRunId` was added to the contract's `Node` schema
+  (FR-006 asks for "the producing run"; the contract had no field for it). Edge detail is returned
+  inline on `GET /graph/nodes/{nodeId}` with every contributing source.
+- **Filters validate against the schema's own Prisma enums** (`GraphNodeKind`, `GraphLayer`,
+  `GraphElementState`) in the repository, not a hand-kept list at the HTTP edge; a bad value is 400.
+- **`apps/api/ingest.e2e.test.ts`'s second `createApiModule` call already omitted
+  `autonomyGrants`** on master (tests outside `src/` are not type-checked); both missing slots are
+  now filled with no-op repositories.
+- **Environment:** Docker Desktop was not running at start; it was started (`open -a Docker`) to run
+  the e2e suites. No docker prune was run.
+
+#### Split A, review round (fixes to the above)
+
+- **Confidence is derived from the edge's aggregate after the lock** (`edge.observation_count +
+  this observation`, latest `lastObservedAt`), not one row's own count. Fifty single observations
+  of one edge now clear `singleObservationCap`. Each `edge_provenance` row stores the confidence
+  it was derived with; the edge keeps the MAX of them.
+- **The reference instant is input, not wall clock** (`EdgeObservation.observedUntil`, the end of
+  the run's observation window). No default; a retried job stores the same confidence. Validation:
+  `observationCount` a safe integer >= 1, both instants valid Dates, `lastObservedAt` no later than
+  `observedUntil` plus a named 5-minute skew (`MAX_CLOCK_SKEW_MS`). The check is against the
+  window, not `Date.now()`, so it is deterministic on retry.
+- **Replay with a different payload throws `ObservationReplayMismatchError`** (provenance, adapter
+  key/version, run id compared; confidence and counts deliberately not, because confidence is
+  derived). **L2, recorded:** the replay key is per `edge_id`, so it relies on an upstream re-run
+  reusing the same `graph_fact` evidence id for the same observation; a re-run that mints new
+  evidence ids would be recorded as new observations and double-count volume.
+- **M6, recorded for confirmation:** the edge keeps the MAX of the confidences written at each
+  observation, so staleness never lowers an edge's stored confidence; a stale edge is surfaced
+  through `last_observed_at` / `lifecycle_state` (data-model.md "never recomputed on a schedule").
+  This reads R-15 as "staleness is evaluated at write time against the window", which is what the
+  spec says; if R-15 meant a stale edge should lose confidence on a later quiet run, that needs a
+  new write (a fresh observation row) rather than a recompute.
+- **`edge_provenance` stores `observation_count` and `last_observed_at`** (amended migration
+  `20261003070000_graph_confidence_config` in place: it was unpushed and mine; `down.sql` and
+  data-model.md amended with it). `check:edge-strength-max` now also compares SUM(count),
+  MAX(last_observed_at) and the strongest row's class.
+- **Pinned reads (interim, see decisions item 4).** Version resolution: unpinned reads use the
+  tenant's current version; **current version 0 with nodes present** (nothing minted yet) reads the
+  open rows (`valid_to_version = 2147483647`) and states `graphVersion: 0`. An explicit
+  `graphVersion` must be a minted version: 0, a future version, an unminted gap or an int32
+  overflow is a 400 (the caller's mistake), not an empty graph. `minStrength` outside 0-32767 is
+  a 400. Each read is one RepeatableRead transaction.
+- **Edge view:** class, strength, confidence and observation shown come from ONE row, the
+  strongest (ties: earliest recorded, then id; one shared compare function and the same order in
+  SQL). Consequence: the displayed confidence can be lower than the edge's stored confidence
+  (the MAX over rows, which traversal uses) when a weaker-class row had higher volume; both are
+  inspectable through `contributingSources`. An edge with no visible provenance row carries
+  `provenanceUnresolved: true` (added to the contract's `Edge`).
+- **Config errors name the tenant**; `base` must be a plain object. `check:graph-provenance` also
+  flags human-class and observation-less `edge_provenance` rows. Both checks print how many rows
+  they checked.
