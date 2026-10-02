@@ -2970,6 +2970,111 @@ was resolved.
   but directly in a region I was already resolving a real conflict in, so removed rather than left for
   someone else to trip over.
 
+## 004 Phase 3 — sub-batch B (T022, T024-T029): confirm/reject and the draft rebase
+
+Scope: T022, T024-T029 — `ConfirmDraftItems`/`RejectDraftItems` and the live-graph rebase they both
+need. Built on `worktree-agent-a31d900d8405536d6` at `4d58065` (A1+A2+sub-batch C merged, T018-T021/
+T023/T030-T032 done, T035's write path done). Judgment calls, in the order a reviewer would hit them:
+
+- **`audit_entry` gained three nullable columns: `before`, `after`, `graph_version`** (migration
+  `20261004010000_t026_audit_entry_before_after`). Data-model.md's own text ("Graph mutations write
+  to `audit.audit_entry` ... the before and after payloads ... and the minted `graph_version`")
+  promises exactly this, but the table (001's) had no field for either — checked `audit.ts`/
+  `audit-entry.ts` in both 001 and 002 before adding anything, found no precedent anywhere in this
+  repo for recording before/after state on an audit entry at all. Purely additive and nullable, same
+  precedent as A1's `evidence.issue_id` change (T018): the table is 001's, 004 extends it, documented
+  in 004's `data-model.md` (001's doesn't own this fact, so not touched there — flagging the
+  asymmetry in case a future reviewer expects the mirror). Round-trips cleanly in
+  `prisma/migration.e2e.test.ts` (schema-drift check + full reverse-and-reapply).
+- **`NewGraphAuditEntry`/`recordGraphAuditEntry` mirror 001's/002's `audit.ts` shape locally**
+  (`domain/graph-audit-entry.ts`), not imported from `@healer/domain-issues` — the exact precedent
+  002's own `record-audit-entry.ts` comment documents ("a cross-domain-package dependency has no
+  precedent in this repo and no ADR"). `recordGraphAuditEntry`'s parameter is a plain
+  `{tenantId} & NewGraphAuditEntry`, not the branded `TenantScoped`: every call site is already
+  inside a transaction whose `tenantId` came from a `TenantScoped` input one layer up (the
+  `DraftReviewRepository.recordAuditEntry` interface method, which *is* branded, called from
+  `application/` with a real `TenantContext`) — re-deriving the brand at the inner Prisma layer
+  would gain nothing, since `scope()`'s brand exists to stop a caller forging a tenant id into a
+  *repository read*, not to re-prove a write already inside a transaction this package's own public
+  method opened.
+- **Confirmation stamps the resulting `graph_node`/`graph_edge` row `provenance: 'human_confirmed'`**
+  (strength 70, confidence 90 — `provenanceStrength`/`provenanceBaseConfidence`'s existing constants),
+  never the discovered item's own class. FR-007 names `human_confirmed` as its own provenance tier
+  specifically for "a named human accepted a proposal" (graph-contract.md §2's own ordinal table) —
+  this is that tier's one and only producer. A confirmed `add_edge` also gets one `edge_provenance`
+  row (`adapterKey: 'human'`, `adapterVersion: 'confirmation'`) so T011's "`graph_edge.strength`/
+  `.confidence` = MAX over `edge_provenance`" invariant holds from the row's first moment, not only
+  once a real adapter corroborates it later — `edge_provenance` has no `actor_ref` column (data-model.md
+  flags this as unresolved, see A1's "004 T002/T005–T011" section); `adapterKey`/`adapterVersion`
+  are this batch's stand-in, same open question, not re-litigated here.
+- **`graph_node.layer` for a confirmed `add_node` is a fixed function of `node_kind`**
+  (`domain/node-kind-layer.ts`: `component`/`repository` → `code`, `deployment_unit` → `runtime`),
+  not a field carried on the wire. Checked `ComponentCandidate`/`DeploymentUnitCandidate`/
+  `RepositoryRef` and `ProposedPayload`'s `add_node` variant — neither carries `layer` at all (only
+  `dependency_observation` is adapter-layer-stamped, since only edges cross layers); `graph_node.layer`
+  is `NOT NULL` (T006) and this is the first code in the repository that ever writes a `graph_node`
+  row, so something has to supply it. A structural mapping rather than a parameter, per
+  docs/patterns.md — there is no discovery-time signal this could ever disagree with.
+- **The rebase (T027/T028) is one pure function, `decideDraftItemApplication`**, covering every op
+  with one `superseded` outcome rather than a per-op check: an `add_*` whose identity now exists live,
+  an `add_edge` whose endpoint doesn't resolve live, or a `modify_attributes`/`mark_removed` whose live
+  content no longer matches the draft's own `current` snapshot. Live snapshot load locks (`FOR UPDATE`)
+  exactly the rows a batch's `target_node_id`/`target_edge_id` name — a real lock held across the
+  compare-then-write window, not a guarded blind update (the review's explicit ask) — simple here
+  because every row this needs already has an id to lock by. The `add_node`/`add_edge` identity
+  -collision check is read-only and best-effort by contrast: there is no row to lock when none exists
+  yet under that identity — same accepted, documented limit as T052's natural-key-collision scope.
+- **Found and fixed a real bug while proving the rebase**: comparing `draft_item.current` (read back
+  through a jsonb column) against a freshly-built live-side object with `sameAttributes`
+  (`attribute-normalisation.ts`, a plain `JSON.stringify` equality) produced false positives —
+  Postgres's jsonb storage does not preserve object key insertion order, so two semantically-identical
+  objects serialise to different strings once one side has round-tripped through the database.
+  `sameAttributes`'s own doc comment already says it is "safe... because every field is a scalar or a
+  pre-sorted array, never a nested object whose key order could vary" — my `{name, attributes}`
+  wrapper violates exactly that precondition, so this needed its own comparison (`sameShape`, built on
+  `proposal-digest.ts`'s existing `canonicalJson`) rather than reusing `sameAttributes` out of its
+  documented scope. Caught by the "confirms cleanly when the target was not touched" test going red
+  for the wrong item on the first run, not by inspection.
+- **Confirming a batch applies all of it or none of it.** Supersede detection runs as a full first
+  pass over every item in the call (simulating `add_node`/`add_edge` ids forward so a same-batch
+  `add_edge` can resolve against a node the same call just confirmed) before any write happens; one
+  superseded item throws `DRAFT_ITEM_SUPERSEDED` for the whole batch. Not specified either way by the
+  plan; chosen because "one serialised transaction minting exactly one graph version" (T026's own
+  text) reads as one atomic unit, and a partial-batch apply would need a second, different story for
+  what the minted version's `changedElementCounts` means when some requested items didn't make it.
+- **The version race is proven exactly the way the review asked**: a held-open transaction with an
+  uncommitted `graph_version` row, polled through `pg_stat_activity` for a genuine `wait_event_type =
+  'Lock'` / `transactionid` wait (confirmed empirically with a throwaway probe before writing the real
+  test — the wait is real and visible, not merely slow), then released to prove the losing side gets a
+  translated `GraphConcurrencyError`, never a silent double-version. Translation is scoped to exactly
+  `GraphVersion`'s own `(tenant_id, version)` unique index (`isGraphVersionConflict`, mirroring
+  `prisma-policy-ruleset-repository.ts`'s `isRulesetVersionOrDigestConflict` precedent and its own
+  documented reason: a blanket "any error after this point is a concurrency conflict" catch would
+  misdiagnose a real bug as a race, the same mistake that repository's own review caught once already.
+  **Not built**: an automatic retry loop (`publishRuleset`'s own pattern) — `GraphConcurrencyError`'s
+  doc comment already says "the caller's own re-read and retry is the correct response, not something
+  this error attempts on the caller's behalf," and nothing in T026's scope calls for a retrying
+  caller yet.
+- **T029's test needed a correction to my own first assumption**, left in the test's final shape
+  rather than smoothed over: a confirmed edge's `edge_provenance.adapter_key` is `'human'` (the
+  confirmation's own contribution, see above) — `'human'` never appears as a discovery source key in
+  any later run, so `markRemovedEdges`'s existing "every contributing adapter ran `collected` this
+  run" rule can never be satisfied for a human-confirmed edge, by construction. I initially expected
+  (and wrote a test asserting) that the confirmed edge would *also* get a `mark_removed` proposal
+  when a later run's adapter stopped reporting it — it does not, and should not: that would mean a
+  confirmed edge becomes removable the moment some unrelated adapter runs, which is a stronger
+  overwrite risk than FR-012 already forbids in the other direction. Fixed the test rather than the
+  (correct) production behaviour.
+- **Mutation checks performed and reported** (red-for-the-right-reason, then restored byte-for-byte):
+  the human-actor guard (`require-human-review-actor.ts`'s `actorType === 'human'` check — inverting
+  it broke every test in `confirm-reject-draft-items.e2e.test.ts`, including two caught by TypeScript
+  itself at compile time via the discriminated union's narrowing); the supersede comparison
+  (`decideDraftItemApplication`'s `sameShape` check — inverting it broke 5 of 12
+  `apply-draft-item.test.ts` unit tests); and my own addition to the rejection re-raise path (the
+  `proposal_rejection` write in `rejectDraftItems` — disabling it made T022 re-raise the rejected edge
+  on the very next run). The digest/filter logic itself (`proposal-digest.ts`, `diff-builder.ts`'s
+  `push`) is A1's own code, already mutation-checked in "004 Phase 3 — discovery run and draft (A1)".
+
 ## Decisions waiting on Pavlo — 004 Phase 3 (index; detail in the named sections above)
 
 1. **Once Phase 7 exists, does a contradiction of a confirmed element go to drift *instead of* the
@@ -2991,3 +3096,16 @@ was resolved.
    schema layer notices. Not fixed unilaterally: the right bound, and whether it belongs on these 4
    shapes alone or on `RunnerEvidence`'s other 20+ shapes too, is a design call bigger than this
    sub-batch.
+5. **`edge_provenance`'s missing `actor_ref` column** (flagged by A1, not re-decided here) now has a
+   second concrete instance: sub-batch B's `adapterKey: 'human'`/`adapterVersion: 'confirmation'`
+   stand-in for a human-confirmed edge's own `edge_provenance` row. Two independent sub-batches
+   improvising the same workaround is a signal this is worth resolving once, not twice more.
+6. **No retry loop exists yet for `GraphConcurrencyError` from `confirmDraftItems`** — a caller
+   (T033's HTTP route, or whatever calls this in-process) gets a clean, catchable "re-read and retry"
+   signal but has to build the retry itself, unlike `publishRuleset`'s self-retrying pattern in 002.
+   Not built because nothing in T026's scope asked for a retrying caller; flagging in case T033 wants
+   one.
+7. ~~Does `audit_entry.before`/`.after` deserve the mirror update in 001's own `data-model.md`~~ —
+   done: added to `specs/001-issue-and-evidence/data-model.md`'s own `audit.audit_entry` section,
+   matching T018's precedent for `evidence.issue_id`. Removed from this index, kept struck through
+   rather than deleted so the "did I check this" trail stays visible.
