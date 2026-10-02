@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { findArchitectureLeaks } from './architecture-agnostic.mjs';
+import {
+  assertEveryRootScanned,
+  findArchitectureLeaks,
+  isScannedFile,
+} from './architecture-agnostic.mjs';
 
 describe('gate-architecture-agnostic (012 T032, constitution VII, 004 SC-008)', () => {
   it('fails when a domain type names a customer deployment style', () => {
@@ -93,8 +97,9 @@ describe('gate-architecture-agnostic (012 T032, constitution VII, 004 SC-008)', 
 
 describe('architecture-conditional branches (004 T050, SC-008, FR-020, 012 FR-002)', () => {
   const branch = (path: string, content: string) => findArchitectureLeaks([{ path, content }]);
-  const branchIssues = (path: string, content: string) =>
-    branch(path, content).filter((i) => i.includes('conditional branch'));
+  // The rule is the term, not the shape of the statement around it: any form of branching
+  // (and any alias of a style) names the style somewhere.
+  const branchIssues = branch;
 
   it.each([
     ["if (arch === 'monolith') {}"],
@@ -104,7 +109,31 @@ describe('architecture-conditional branches (004 T050, SC-008, FR-020, 012 FR-00
     ["const x = 'monolith' === arch;"],
     ['if (isServerless(system)) {}'],
     ['while (system.isMonolith) {}'],
-  ])('fails a branch outside packages/integrations: %s', (content) => {
+    ["if (\n  arch ===\n  'monolith'\n) {}"],
+    ["if (arch\n  === 'monolith') {}"],
+    ['const h = { monolith: a, serverless: b }[style];'],
+    ['const H = {\n monolith: runA,\n serverless: runB,\n};\nH[style]();'],
+    ["const go = ['monolith','serverless'].includes(style) && run();"],
+    ['isServerless(s) && doIt();'],
+    ["handlers[arch]?.('monolith');"],
+    ['const m = /monolith/i.test(arch);\nif (m) {}'],
+    ['if (`${arch}` === `monolith`) {}'],
+    ["strategies.get('serverless')?.run();"],
+    ["const x = arch=='a'?'monolith':1;"],
+    ["const x = cond\n  ? 'monolith'\n  : 'serverless';"],
+    ["if (arch === 'lambdas') {}"],
+    ['if (isMicroServices(x)) {}'],
+    ["if (arch === 'micro-service') {}"],
+    ["if (arch === 'micro services') {}"],
+    ['if (isECS) {}'],
+    ['if (ECSCluster) {}'],
+    ['if (isAWSLambda) {}'],
+    ["if ('serverless' in caps) {}"],
+    ['if (isDockerSwarm) {}'],
+    ['if (cond &&\n  isMonolith) {}'],
+    ["const MONO = 'monolith';\nif (arch === MONO) {}"],
+    ["enum S { Mono = 'monolith' }\nif (arch === S.Mono) {}"],
+  ])('fails a style named anywhere outside packages/integrations: %s', (content) => {
     expect(branchIssues('apps/api/src/handler.ts', content)).not.toHaveLength(0);
     expect(branchIssues('packages/domain/architecture/src/domain/x.ts', content)).not.toHaveLength(
       0,
@@ -134,10 +163,40 @@ describe('architecture-conditional branches (004 T050, SC-008, FR-020, 012 FR-00
   it('does not exempt a look-alike path', () => {
     for (const path of [
       'packages/integrations-shared/src/x.ts',
+      'packages/integrations-foo/src/x.ts',
+      'packages/integrationsX/x.ts',
+      'packages/Integrations/x.ts',
       'apps/api/packages/integrations/x.ts',
     ]) {
       expect(branchIssues(path, "if (a === 'monolith') {}")).not.toHaveLength(0);
     }
+  });
+
+  it('applies the exemption and the scope to Windows separators too', () => {
+    expect(branch('packages\\integrations\\k8s\\a.ts', "if (a === 'monolith') {}")).toEqual([]);
+    expect(branch('apps\\api\\a.ts', "if (a === 'monolith') {}")).not.toHaveLength(0);
+    expect(branch('packages\\domain\\x\\src\\a.ts', "const p = 'prisma';").join()).toContain(
+      'own stack',
+    );
+  });
+
+  it('scans every JS/TS source extension, never declarations or tests', () => {
+    for (const f of ['a.ts', 'a.tsx', 'a.mts', 'a.cts', 'a.js', 'a.mjs', 'a.cjs', 'a.jsx'])
+      expect(isScannedFile(f)).toBe(true);
+    for (const f of ['a.d.ts', 'a.test.ts', 'a.spec.tsx', 'a.test.mjs', 'a.json', 'a.md'])
+      expect(isScannedFile(f)).toBe(false);
+  });
+
+  it('fails closed when a scan root yields no files', () => {
+    expect(() =>
+      assertEveryRootScanned([{ path: 'apps/api/a.ts' }], ['packages/domain', 'apps']),
+    ).toThrow(/packages\/domain/);
+    expect(() =>
+      assertEveryRootScanned(
+        [{ path: 'apps/api/a.ts' }, { path: 'packages/domain/b.ts' }],
+        ['packages/domain', 'apps'],
+      ),
+    ).not.toThrow();
   });
 
   it('ignores a branch inside a comment, as the comment-stripping convention says', () => {
