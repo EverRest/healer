@@ -1473,6 +1473,10 @@ model EdgeProvenance {
   adapterKey     String          @map("adapter_key")
   adapterVersion String          @map("adapter_version")
   discoveryRunId String?         @map("discovery_run_id") @db.Uuid
+  /// What this observation contributed; the edge's denormalised count/last-observed are the SUM/MAX
+  /// of these (004 T038, checked by `check:edge-strength-max`).
+  observationCount BigInt         @default(0) @map("observation_count")
+  lastObservedAt   DateTime?      @map("last_observed_at") @db.Timestamptz(6)
   recordedAt     DateTime        @default(now()) @map("recorded_at") @db.Timestamptz(6)
 
   edge GraphEdge @relation(fields: [edgeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import {
+  InvalidEdgeObservationError,
+  ObservationReplayMismatchError,
   PROVENANCE_STRENGTH_V1,
   PrismaEdgeProvenanceRepository,
   type EdgeObservation,
@@ -88,12 +90,13 @@ describe('edge provenance merge (004 T036-T038)', () => {
       adapterVersion: '1.0.0',
       observationCount: 120,
       lastObservedAt: NOW,
+      observedUntil: NOW,
       baseVersion: 1,
       ...overrides,
     };
   }
 
-  const merge = (o: EdgeObservation) => repo.mergeObservation(scope(CONTEXT, o), NOW);
+  const merge = (o: EdgeObservation) => repo.mergeObservation(scope(CONTEXT, o));
 
   it('T036: a trace-derived edge outranks a folder-inferred one by the STORED ordinal', async () => {
     const [a, b, c] = [await seedNode(), await seedNode(), await seedNode()];
@@ -197,7 +200,6 @@ describe('edge provenance merge (004 T036-T038)', () => {
       );
       const merged = await repo.mergeObservation(
         scope(TenantContext.forTrustedInternalUse(tenantId), o),
-        NOW,
       );
       return (await prisma.graphEdge.findUniqueOrThrow({ where: { id: merged.edgeId } }))
         .confidence;
@@ -213,5 +215,100 @@ describe('edge provenance merge (004 T036-T038)', () => {
     expect(edge.state).toBe('proposed');
     expect(edge.validFromVersion).toBe(1);
     expect(edge.confidence).toBeLessThanOrEqual(40); // one observation is not a fact
+  });
+
+  it('confidence follows the EDGE aggregate: 50 separate single observations are not 50 facts of one', async () => {
+    const [a, b] = [await seedNode(), await seedNode()];
+    let edgeId = '';
+    for (let i = 0; i < 50; i += 1) {
+      edgeId = (await merge(observation(a, b, 'derived_from_trace', { observationCount: 1 })))
+        .edgeId;
+    }
+    const edge = await prisma.graphEdge.findUniqueOrThrow({ where: { id: edgeId } });
+    expect(Number(edge.observationCount)).toBe(50);
+    expect(edge.confidence).toBeGreaterThan(40); // singleObservationCap
+    const rows = await prisma.edgeProvenance.findMany({ where: { edgeId } });
+    expect(rows.reduce((sum, r) => sum + Number(r.observationCount), 0)).toBe(50);
+    expect(rows.every((r) => r.lastObservedAt?.getTime() === NOW.getTime())).toBe(true);
+  });
+
+  it('the reference instant is part of the input: the same observation stores the same confidence on retry, and a later window is staler', async () => {
+    const [a, b, c] = [await seedNode(), await seedNode(), await seedNode()];
+    const o = (to: string, observedUntil: Date) =>
+      observation(a, to, 'derived_from_trace', { observationCount: 50, observedUntil });
+    const first = await merge(o(b, NOW));
+    const retry = await merge(o(c, NOW));
+    const stale = await merge(
+      observation(c, b, 'derived_from_trace', {
+        observationCount: 50,
+        observedUntil: new Date(NOW.getTime() + 120 * 86_400_000),
+      }),
+    );
+    const conf = async (id: string) =>
+      (await prisma.graphEdge.findUniqueOrThrow({ where: { id } })).confidence;
+    expect(await conf(retry.edgeId)).toBe(await conf(first.edgeId));
+    expect(await conf(stale.edgeId)).toBeLessThan(await conf(first.edgeId));
+  });
+
+  it.each([
+    ['zero count', { observationCount: 0 }],
+    ['negative count', { observationCount: -1 }],
+    ['NaN count', { observationCount: Number.NaN }],
+    ['invalid Date', { lastObservedAt: new Date('nope') }],
+    ['an instant after the window', { lastObservedAt: new Date(NOW.getTime() + 3_600_000) }],
+  ])('rejects %s and stores nothing', async (_name, over) => {
+    const [a, b] = [await seedNode(), await seedNode()];
+    await expect(merge(observation(a, b, 'derived_from_trace', over))).rejects.toBeInstanceOf(
+      InvalidEdgeObservationError,
+    );
+    expect(await prisma.graphEdge.count({ where: { fromNodeId: a } })).toBe(0);
+  });
+
+  it('a replayed observation_ref with different content is refused, not silently dropped', async () => {
+    const [a, b] = [await seedNode(), await seedNode()];
+    const o = observation(a, b, 'derived_from_trace');
+    await merge(o);
+    await expect(merge({ ...o, adapterKey: 'someone-else' })).rejects.toBeInstanceOf(
+      ObservationReplayMismatchError,
+    );
+    await expect(merge({ ...o, provenance: 'derived_from_code' })).rejects.toBeInstanceOf(
+      ObservationReplayMismatchError,
+    );
+    await expect(merge({ ...o, discoveryRunId: randomUUID() })).rejects.toBeInstanceOf(
+      ObservationReplayMismatchError,
+    );
+    // a different confidence-relevant value is NOT a mismatch: confidence is derived, not content
+    await expect(merge({ ...o, observationCount: 999 })).resolves.toMatchObject({
+      recorded: false,
+    });
+  });
+
+  it('a bad tenant confidence override fails loudly and names the tenant', async () => {
+    const tenantId = '00000000-0000-0000-8000-00000000c036';
+    await prisma.confidenceConfig.create({ data: { tenantId, config: { base: 5 } } });
+    const id = async () => {
+      const n = randomUUID();
+      await prisma.graphNode.create({
+        data: {
+          id: n,
+          tenantId,
+          nodeKind: 'component',
+          layer: 'code',
+          name: 'n',
+          naturalKey: n,
+          provenance: 'derived_from_code',
+          strength: 30,
+          confidence: 50,
+          state: 'proposed',
+          validFromVersion: 1,
+          observationRef: randomUUID(),
+        },
+      });
+      return n;
+    };
+    const o = observation(await id(), await id(), 'derived_from_trace');
+    await expect(
+      repo.mergeObservation(scope(TenantContext.forTrustedInternalUse(tenantId), o)),
+    ).rejects.toThrow(new RegExp(tenantId));
   });
 });

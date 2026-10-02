@@ -14,6 +14,7 @@ describe('EdgeObservation (004 T038)', () => {
       adapterVersion: '1',
       observationCount: 1,
       lastObservedAt: new Date(),
+      observedUntil: new Date(),
       baseVersion: 1,
     };
     // @ts-expect-error human_confirmed is not a MachineProvenanceClass

@@ -69,7 +69,8 @@ Indexes: `(tenant_id, from_node_id, valid_from_version, valid_to_version)` and t
 Every contributing observation for an edge, so a merged edge stays inspectable (FR-008).
 
 `id`, `tenant_id`, `edge_id`, `provenance`, `strength`, `confidence`, `observation_ref` (`evidence.id`),
-`adapter_key`, `adapter_version`, `discovery_run_id`, `recorded_at`.
+`adapter_key`, `adapter_version`, `discovery_run_id`, `observation_count` (what this observation contributed), `last_observed_at`, `recorded_at`.
+The edge's `observation_count` is the SUM and its `last_observed_at` the MAX over these rows, and its `provenance` class is the strongest row's (ties: earliest `recorded_at`, then `id`) — all three checked by `check:edge-strength-max`.
 
 The denormalised `strength` and `confidence` on `graph_edge` are the maximum over these rows;
 keeping them on the edge is what lets the traversal stay a single self-join.

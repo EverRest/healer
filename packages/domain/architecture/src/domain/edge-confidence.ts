@@ -1,4 +1,4 @@
-import type { MachineProvenanceClass } from './edge-observation.js';
+import { assertValidObservation, type MachineProvenanceClass } from './edge-observation.js';
 
 /**
  * R-15 (FR-006): `min(100, base + observation_term - staleness_term)`, clamped at 0, every term an
@@ -53,7 +53,8 @@ export function deriveEdgeConfidence(
   now: Date,
   config: ConfidenceConfig = DEFAULT_CONFIDENCE_CONFIG,
 ): number {
-  const volume = Math.max(0, Math.floor(input.observationCount));
+  assertValidObservation({ ...input, observedUntil: now });
+  const volume = input.observationCount;
   // floor(log2(1 + volume)) by bit length — exact integer arithmetic, no Math.log2.
   const doublings = volume >= 2 ** 31 - 1 ? 31 : 31 - Math.clz32(1 + volume);
   const observationTerm = Math.min(config.observationCap, config.observationScale * doublings);
@@ -80,6 +81,30 @@ const SCALARS = [
 const isInt0to100 = (v: unknown): v is number =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 100;
 
+function baseOverrideOf(base: unknown): Record<string, unknown> {
+  if (base === undefined) return {};
+  if (typeof base !== 'object' || base === null || Array.isArray(base)) {
+    throw new Error('confidence `base` must be an object of provenance class to integer');
+  }
+  for (const [key, value] of Object.entries(base)) {
+    if (!(key in DEFAULT_CONFIDENCE_CONFIG.base))
+      throw new Error(`unknown provenance class: ${key}`);
+    if (!isInt0to100(value)) throw new Error(`confidence base for ${key} must be an integer 0-100`);
+  }
+  return base as Record<string, unknown>;
+}
+
+function assertScalars(scalars: Record<string, unknown>): void {
+  const known = new Set<string>(SCALARS);
+  const unknownKey = Object.keys(scalars).find((k) => !known.has(k));
+  if (unknownKey !== undefined) throw new Error(`unknown confidence setting: ${unknownKey}`);
+  for (const key of SCALARS) {
+    if (key in scalars && !isInt0to100(scalars[key])) {
+      throw new Error(`${key} must be an integer 0-100`);
+    }
+  }
+}
+
 /**
  * A tenant's stored override (jsonb, so `unknown`) laid over the default. Anything that is not a
  * known key holding an integer 0-100 throws: a typo'd or out-of-range knob silently falling back
@@ -91,21 +116,8 @@ export function resolveConfidenceConfig(override: unknown): ConfidenceConfig {
     throw new Error('confidence configuration must be an object');
   }
   const { base, ...scalars } = override as Record<string, unknown>;
-  const known = new Set<string>(SCALARS);
-  const unknownKey = Object.keys(scalars).find((k) => !known.has(k));
-  if (unknownKey !== undefined) throw new Error(`unknown confidence setting: ${unknownKey}`);
-
-  const baseOverride = (base ?? {}) as Record<string, unknown>;
-  for (const [key, value] of Object.entries(baseOverride)) {
-    if (!(key in DEFAULT_CONFIDENCE_CONFIG.base))
-      throw new Error(`unknown provenance class: ${key}`);
-    if (!isInt0to100(value)) throw new Error(`confidence base for ${key} must be an integer 0-100`);
-  }
-  for (const key of SCALARS) {
-    if (key in scalars && !isInt0to100(scalars[key])) {
-      throw new Error(`${key} must be an integer 0-100`);
-    }
-  }
+  assertScalars(scalars);
+  const baseOverride = baseOverrideOf(base);
   return {
     ...DEFAULT_CONFIDENCE_CONFIG,
     ...(scalars as Partial<ConfidenceConfig>),

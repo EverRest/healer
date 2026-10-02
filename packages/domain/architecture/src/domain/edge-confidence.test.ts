@@ -5,6 +5,7 @@ import {
   deriveEdgeConfidence,
   resolveConfidenceConfig,
 } from './edge-confidence.js';
+import { InvalidEdgeObservationError, MAX_CLOCK_SKEW_MS } from './edge-observation.js';
 
 const NOW = new Date('2026-10-02T12:00:00Z');
 const daysAgo = (days: number) => new Date(NOW.getTime() - days * 86_400_000);
@@ -16,7 +17,7 @@ const derive = (
 
 describe('deriveEdgeConfidence (004 T039, R-15)', () => {
   it('is an integer in 0-100', () => {
-    for (const volume of [0, 1, 2, 10, 1000, 1e9]) {
+    for (const volume of [1, 2, 10, 1000, 1e9]) {
       const c = derive('derived_from_trace', volume);
       expect(Number.isInteger(c)).toBe(true);
       expect(c).toBeGreaterThanOrEqual(0);
@@ -112,6 +113,40 @@ describe('deriveEdgeConfidence (004 T039, R-15)', () => {
     expect(() => resolveConfidenceConfig('90')).toThrow();
   });
 
+  it('rejects a `base` that is not a plain object (5, true, an array)', () => {
+    for (const base of [5, true, [], 'x', null]) {
+      expect(() => resolveConfidenceConfig({ base })).toThrow(/base/);
+    }
+  });
+});
+
+describe('observation validation at the domain boundary (R-15 inputs)', () => {
+  const at = (observationCount: number, lastObservedAt: Date = NOW) =>
+    deriveEdgeConfidence(
+      { provenance: 'derived_from_trace', observationCount, lastObservedAt },
+      NOW,
+    );
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects an observation count of %s',
+    (count) => {
+      expect(() => at(count)).toThrow(InvalidEdgeObservationError);
+    },
+  );
+
+  it('rejects an invalid Date', () => {
+    expect(() => at(5, new Date('nope'))).toThrow(InvalidEdgeObservationError);
+  });
+
+  it('rejects a last-observed instant beyond the window end plus the named skew, accepts within', () => {
+    expect(() => at(5, new Date(NOW.getTime() + MAX_CLOCK_SKEW_MS + 1))).toThrow(
+      InvalidEdgeObservationError,
+    );
+    expect(() => at(5, new Date(NOW.getTime() + MAX_CLOCK_SKEW_MS))).not.toThrow();
+  });
+});
+
+describe('self-report', () => {
   it('takes no confidence from the caller: the input type has no such field', () => {
     const selfReported = {
       provenance: 'derived_from_trace' as const,

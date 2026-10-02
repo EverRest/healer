@@ -7,6 +7,14 @@
 -- CreateIndex
 CREATE UNIQUE INDEX "edge_provenance_tenant_id_edge_id_observation_ref_key" ON "architecture"."edge_provenance"("tenant_id", "edge_id", "observation_ref");
 
+-- (1b) What each observation contributed, so the denormalised graph_edge.observation_count,
+-- last_observed_at and provenance class are checkable (`check:edge-strength-max`): the edge's
+-- count is the SUM and its last_observed_at the MAX over these rows. Defaults keep rows written
+-- by earlier migrations' tests valid.
+-- AlterTable
+ALTER TABLE "architecture"."edge_provenance" ADD COLUMN "observation_count" BIGINT NOT NULL DEFAULT 0,
+ADD COLUMN "last_observed_at" TIMESTAMPTZ(6);
+
 -- (2) Per-tenant confidence configuration (R-15: constants are per-tenant, with defaults in
 -- code). One row per tenant holding only the overridden knobs; `domain/edge-confidence.ts`
 -- validates and lays it over the default at write time. A tenant with no row uses the default.

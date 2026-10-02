@@ -173,6 +173,7 @@ describe('GraphReadRepository (004 T041)', () => {
       adapterVersion: '1',
       observationCount: 30,
       lastObservedAt: new Date('2026-10-01T00:00:00Z'),
+      observedUntil: new Date('2026-10-01T00:00:00Z'),
       baseVersion: 1,
     };
     await merge.mergeObservation(

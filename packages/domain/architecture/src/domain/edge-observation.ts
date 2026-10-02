@@ -26,8 +26,62 @@ export interface EdgeObservation {
   /** Volume: how many times the source saw it. 1 is an observation, not a fact. */
   readonly observationCount: number;
   readonly lastObservedAt: Date;
+  /**
+   * The reference instant confidence is evaluated against: the end of the observation window the
+   * run read (R-15 — "against the observation window, not today"). Part of the input so a retried
+   * job stores the same confidence for the same observation; there is no wall-clock default.
+   */
+  readonly observedUntil: Date;
   /** Graph version a newly created edge becomes valid from (the run's base version). */
   readonly baseVersion: number;
+}
+
+/** How far past the window end an observation timestamp may sit before it is a bad clock. */
+export const MAX_CLOCK_SKEW_MS = 5 * 60_000;
+
+/** The observation's own numbers or instants cannot be right; nothing is stored. */
+export class InvalidEdgeObservationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidEdgeObservationError';
+  }
+}
+
+/**
+ * The same `observation_ref` reached an edge again with a different provenance, adapter or run:
+ * a replay would be identical, so this is two different facts claiming one evidence id. Silently
+ * keeping the first would drop the second.
+ */
+export class ObservationReplayMismatchError extends Error {
+  constructor(readonly observationRef: string) {
+    super(
+      `observation ${observationRef} was already recorded for this edge with different content`,
+    );
+    this.name = 'ObservationReplayMismatchError';
+  }
+}
+
+export function assertValidObservation(o: {
+  readonly observationCount: number;
+  readonly lastObservedAt: Date;
+  readonly observedUntil: Date;
+}): void {
+  if (!Number.isSafeInteger(o.observationCount) || o.observationCount < 1) {
+    throw new InvalidEdgeObservationError('observationCount must be a safe integer >= 1');
+  }
+  for (const [name, value] of [
+    ['lastObservedAt', o.lastObservedAt],
+    ['observedUntil', o.observedUntil],
+  ] as const) {
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
+      throw new InvalidEdgeObservationError(`${name} must be a valid Date`);
+    }
+  }
+  if (o.lastObservedAt.getTime() > o.observedUntil.getTime() + MAX_CLOCK_SKEW_MS) {
+    throw new InvalidEdgeObservationError(
+      'lastObservedAt is after the end of the observation window',
+    );
+  }
 }
 
 export interface MergedEdge {
@@ -41,8 +95,10 @@ export interface MergedEdge {
 /**
  * Merge one observation into the graph (FR-008, R-03): one `graph_edge` per logical edge, one
  * `edge_provenance` row per observation, the edge's strength/confidence the maximum over them.
- * Throws `GraphConcurrencyError` when the database reports a serialization failure or deadlock.
+ * Throws `GraphConcurrencyError` when the database reports a serialization failure or deadlock,
+ * `InvalidEdgeObservationError` for impossible numbers or instants, and
+ * `ObservationReplayMismatchError` when a replayed `observationRef` differs from what was stored.
  */
 export interface EdgeProvenanceRepository {
-  mergeObservation(observation: TenantScoped<EdgeObservation>, now?: Date): Promise<MergedEdge>;
+  mergeObservation(observation: TenantScoped<EdgeObservation>): Promise<MergedEdge>;
 }

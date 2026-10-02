@@ -144,9 +144,9 @@ describe('edge provenance merge: concurrent writers to one edge (004 T038)', () 
           adapterVersion: '1',
           observationCount: 10,
           lastObservedAt: NOW,
+          observedUntil: NOW,
           baseVersion: 1,
         }),
-        NOW,
       );
 
       const holder = await holdTraceWriter(seeded.edgeId);
@@ -162,9 +162,9 @@ describe('edge provenance merge: concurrent writers to one edge (004 T038)', () 
           adapterVersion: '1',
           observationCount: 10,
           lastObservedAt: NOW,
+          observedUntil: NOW,
           baseVersion: 1,
         }),
-        NOW,
       );
       racer.catch(() => {});
 
@@ -177,6 +177,71 @@ describe('edge provenance merge: concurrent writers to one edge (004 T038)', () 
       expect(rows).toHaveLength(3);
       expect(edge.strength).toBe(PROVENANCE_STRENGTH_V1.derived_from_trace);
       expect(edge.confidence).toBe(Math.max(...rows.map((r) => r.confidence)));
+    },
+  );
+
+  /** A writer that founded the edge (uncommitted) and stays open until `release()`. */
+  async function holdFounder(a: string, b: string) {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    let ready!: () => void;
+    const isReady = new Promise<void>((resolve) => (ready = resolve));
+    let pid = 0;
+    const done = prisma.$transaction(
+      async (tx) => {
+        pid = (await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`)[0]!.pid;
+        await tx.$executeRaw`
+          INSERT INTO "architecture"."graph_edge"
+            (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
+             confidence, state, valid_from_version)
+          VALUES (${randomUUID()}::uuid, ${TENANT_ID}::uuid, ${a}::uuid, ${b}::uuid, 'depends_on',
+                  'code', 'derived_from_code', 30, 50, 'proposed', 1)`;
+        ready();
+        await gate;
+      },
+      { timeout: 120_000, maxWait: 60_000 },
+    );
+    done.catch(() => ready());
+    await isReady;
+    return {
+      pid,
+      release: async () => {
+        open();
+        await done;
+      },
+    };
+  }
+
+  it(
+    'the loser of a founding race reports created=false and still records its observation',
+    { repeats: 4 },
+    async () => {
+      const [a, b] = [await seedNode(), await seedNode()];
+      const holder = await holdFounder(a, b);
+      const racer = repo.mergeObservation(
+        scope(CONTEXT, {
+          fromNodeId: a,
+          toNodeId: b,
+          edgeType: 'depends_on',
+          layer: 'code' as const,
+          provenance: 'derived_from_trace' as const,
+          observationRef: randomUUID(),
+          adapterKey: 'otel',
+          adapterVersion: '1',
+          observationCount: 5,
+          lastObservedAt: NOW,
+          observedUntil: NOW,
+          baseVersion: 1,
+        }),
+      );
+      racer.catch(() => {});
+      await waitForBlocked(holder);
+      await holder.release();
+      const result = await racer;
+      expect(result.created).toBe(false);
+      expect(result.recorded).toBe(true);
+      expect(await prisma.graphEdge.count({ where: { fromNodeId: a, toNodeId: b } })).toBe(1);
+      expect(await prisma.edgeProvenance.count({ where: { edgeId: result.edgeId } })).toBe(1);
     },
   );
 });
