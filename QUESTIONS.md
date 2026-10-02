@@ -2396,6 +2396,10 @@ rather than reading the code alone. Results:
 5. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
    `component | deployment_unit -> endpoint`; confirm or narrow it. Not blocking — one table entry in
    `structural-edges.ts`. See "004 T036-T052 — judgment calls", Split B.
+6. **Where may architecture-specific logic live: "adapters and discovery" (FR-020) or only
+   `packages/integrations/**` (T050, graph-contract §3)?** The gate follows T050 and additionally
+   exempts directories named `adapters/`/`discovery/`. Pick one and amend the other text. Not
+   blocking. See "004 T036-T052 — judgment calls", T049-T050.
 
 ## 004 T012–T015 — judgment calls
 
@@ -2739,24 +2743,33 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   not components.
 ### T049-T050
 
-- **`GetSystemContext` reads its own snapshot instead of reusing `PrismaGraphReadRepository`'s
-  version window.** That class keeps `resolve`/`envelope` private and Split A's files were off
-  limits, so the ~10 lines resolving "current version, or open rows before any version is minted"
-  are restated in `prisma-system-context-repository.ts`. Follow-up: extract the window into one
-  shared helper. Unpinned only (the envelope states the version); a pin is YAGNI until 006/008 ask.
-- **Rejected elements are left out of `SystemContext`** (and out of its coverage counts), unlike
-  `GET /graph/nodes`, which shows every state: an agent handed context should not reason about a
-  component a human rejected. `proposed`/`stale` stay, with `state` shown (FR-016). Edges appear
-  only when both endpoints are among the three node lists (edges to `endpoint` nodes are not in
-  the context).
-- **The branch rule exempts only `packages/integrations/**`.** The old `adapters/`/`discovery/`/
-  `infrastructure/` directory exemption still applies to the vocabulary check, not to branching:
-  `infrastructure/` is exempt for our own stack, not for branching on the customer's style. The
-  branch scan covers `packages/**` and `apps/**` (the vocabulary check keeps its two roots). It is
-  textual (a branch keyword, an (in)equality or a ternary on a line naming a style term, identifiers
-  split on camelCase/underscore): a multi-line condition whose style term is on a line with no
-  operator is not caught. No integration file contains a style branch today, so the exemption is
-  proven by unit tests, not by the real tree.
+- **`GetSystemContext` and `GET /graph/nodes` share one unpinned version scope**
+  (`infrastructure/graph-version-scope.ts`: current version, validity window, the `OPEN_VERSION`
+  sentinel). The context is unpinned only (the envelope states the version); a pin is YAGNI until
+  006/008 ask. `PrismaGraphReadRepository.resolve` was touched only to call the helper.
+- **Rejected elements are left out of `SystemContext`**, unlike `GET /graph/nodes`, which shows
+  every state: an agent handed context should not reason about a component a human rejected.
+  `proposed`/`stale` stay, with `state` shown (FR-016); the state type cannot hold `rejected`.
+  Edges appear only when both endpoints are among the three node lists.
+- **Coverage is context-scoped**, not graph-wide, so it can differ from `GET /graph/nodes`.
+  `excludedEdges` counts the open, non-rejected edges dropped for an endpoint that is rejected,
+  closed or of another kind (edges to `endpoint` nodes make it nonzero in every fixture).
+  `check:graph-structure` fails on an open edge whose endpoint is rejected or closed — that
+  case is a defect, the endpoint-kind case is not.
+- **The architecture-agnostic rule is "no style term outside `packages/integrations/**`", not
+  "no style branch".** A branch-line heuristic was bypassed by aliases, object dispatch,
+  `.includes()` and multi-line conditions, so the gate flags any banned term in comment-stripped,
+  identifier-split code (camelCase, acronyms, `_`/`-`, plurals) across every JS/TS source file in
+  `packages/**` and `apps/**`, minus declarations and tests. Strings are scanned (comments are
+  not). Residual weakness: it is textual — a style spelled by concatenation or held in config data
+  is invisible to it — and the term list is a vocabulary, not a proof. It fails closed if a scan
+  root yields no files and reports the scanned count. No real file outside the integrations
+  adapters names a style today; breaking the exemption makes the real tree fail.
+- **Open spec mismatch (for Pavlo, item 6 below):** FR-020 allows architecture-specific logic in
+  "adapters and discovery"; T050 and `graph-contract.md` exempt only `packages/integrations/**`.
+  The gate follows T050, except that a directory literally named `adapters/` or `discovery/`
+  stays exempt for style terms (the original 012 T032 behaviour, kept so its tests stay green);
+  `infrastructure/` is exempt for our own stack only.
 
 ### Split A (T036-T041, US2: provenance merge, derived confidence, checks, node reads)
 
