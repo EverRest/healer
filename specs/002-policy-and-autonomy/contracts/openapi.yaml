@@ -36,7 +36,6 @@ components:
             - UNAUTHENTICATED
             - NOT_FOUND
             - IDEMPOTENCY_CONFLICT
-            - RULESET_INVALID
             - CEILING_EXCEEDED
             - UNDO_NOT_ATTESTED
             - DECISION_ALREADY_CONSUMED
@@ -396,7 +395,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Ruleset' }
         '422':
-          description: "RULESET_INVALID — unknown predicate field, operator outside the field's domain, or wrong value type"
+          description: "VALIDATION — unknown predicate field, operator outside the field's domain, or wrong value type"
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }

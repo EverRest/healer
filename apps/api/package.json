@@ -18,6 +18,7 @@
     "@healer/boundary-contract": "workspace:*",
     "@healer/domain-evidence": "workspace:*",
     "@healer/domain-issues": "workspace:*",
+    "@healer/domain-policy": "workspace:*",
     "@healer/events": "workspace:*",
     "@healer/prisma-client": "workspace:*",
     "@healer/shared": "workspace:*",

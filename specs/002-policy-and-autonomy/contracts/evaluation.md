@@ -168,7 +168,8 @@ substrate rather than a copy of it.
 
 ## Error codes
 
-`RULESET_INVALID` · `CEILING_EXCEEDED` · `UNDO_NOT_ATTESTED` · `DECISION_ALREADY_CONSUMED` ·
+`VALIDATION` (an invalid rule set — unknown predicate field, operator outside the field's domain,
+or wrong value type) · `CEILING_EXCEEDED` · `UNDO_NOT_ATTESTED` · `DECISION_ALREADY_CONSUMED` ·
 `DECISION_NOT_ALLOWED` · `DIGEST_MISMATCH` · `STALE_AUTONOMY_EPOCH` · `APPROVAL_NOT_PENDING` ·
 `BUDGET_EXHAUSTED` · `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` ·
 `NO_MATCHING_RULE` (the reason code accompanying the default `DENY`, so that "no rule matched" is a

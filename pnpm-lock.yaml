@@ -75,6 +75,9 @@ importers:
       '@healer/domain-issues':
         specifier: workspace:*
         version: link:../../packages/domain/issues
+      '@healer/domain-policy':
+        specifier: workspace:*
+        version: link:../../packages/domain/policy
       '@healer/events':
         specifier: workspace:*
         version: link:../../packages/events
