@@ -35,6 +35,7 @@
     "check:decision-replay": "node --env-file=.env scripts/checks/decision-replay.mjs",
     "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs",
     "check:confirmation-actors": "node --env-file-if-exists=.env scripts/checks/confirmation-actors.mjs",
+    "check:graph-fact-coverage": "node --env-file-if-exists=.env scripts/checks/graph-fact-coverage.mjs",
     "runner-contract-test": "vitest run packages/boundary-contract/src/index.test.ts",
     "runner-compat-test": "vitest run packages/boundary-contract/src/handshake.test.ts",
     "runner-build": "node scripts/runner-build.mjs",
