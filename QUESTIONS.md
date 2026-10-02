@@ -2737,6 +2737,27 @@ being asked). Judgment calls made along the way, flagged rather than blocking on
   `implements` and an `exposes` edge, so every structural edge type is exercised by the query set;
   T004's invariants (every component built_from and deployed) are unaffected because endpoints are
   not components.
+### T049-T050
+
+- **`GetSystemContext` reads its own snapshot instead of reusing `PrismaGraphReadRepository`'s
+  version window.** That class keeps `resolve`/`envelope` private and Split A's files were off
+  limits, so the ~10 lines resolving "current version, or open rows before any version is minted"
+  are restated in `prisma-system-context-repository.ts`. Follow-up: extract the window into one
+  shared helper. Unpinned only (the envelope states the version); a pin is YAGNI until 006/008 ask.
+- **Rejected elements are left out of `SystemContext`** (and out of its coverage counts), unlike
+  `GET /graph/nodes`, which shows every state: an agent handed context should not reason about a
+  component a human rejected. `proposed`/`stale` stay, with `state` shown (FR-016). Edges appear
+  only when both endpoints are among the three node lists (edges to `endpoint` nodes are not in
+  the context).
+- **The branch rule exempts only `packages/integrations/**`.** The old `adapters/`/`discovery/`/
+  `infrastructure/` directory exemption still applies to the vocabulary check, not to branching:
+  `infrastructure/` is exempt for our own stack, not for branching on the customer's style. The
+  branch scan covers `packages/**` and `apps/**` (the vocabulary check keeps its two roots). It is
+  textual (a branch keyword, an (in)equality or a ternary on a line naming a style term, identifiers
+  split on camelCase/underscore): a multi-line condition whose style term is on a line with no
+  operator is not caught. No integration file contains a style branch today, so the exemption is
+  proven by unit tests, not by the real tree.
+
 ### Split A (T036-T041, US2: provenance merge, derived confidence, checks, node reads)
 
 - **Human provenance does not enter the merge path (R-04a vs data-model.md).** Followed
