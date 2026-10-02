@@ -19,7 +19,7 @@ import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
 /**
  * @param {import('../../prisma/generated/client/index.js').PrismaClient} prisma
- * @returns {Promise<string[]>} one message per violation
+ * @returns {Promise<{ violations: string[], checked: { nodes: number, edges: number } }>}
  */
 export async function findProvenanceViolations(prisma) {
   const nodes = await prisma.$queryRaw`
@@ -39,6 +39,11 @@ export async function findProvenanceViolations(prisma) {
     WHERE p.observation_ref IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM "evidence"."evidence" ev
       WHERE ev.id = p.observation_ref AND ev.tenant_id = p.tenant_id)`;
+  // edge_provenance has no actor column: a human-class row, or any row with no observation, names
+  // neither a source nor a person.
+  const unsourced = await prisma.$queryRaw`
+    SELECT p.edge_id, p.tenant_id FROM "architecture"."edge_provenance" p
+    WHERE p.provenance IN ('human_authored', 'human_confirmed') OR p.observation_ref IS NULL`;
 
   const human = (p) => p === 'human_authored' || p === 'human_confirmed';
   const out = [];
@@ -69,7 +74,12 @@ export async function findProvenanceViolations(prisma) {
       `graph_edge ${r.edge_id} (tenant ${r.tenant_id}): edge_provenance observation_ref ${r.observation_ref} does not resolve to evidence`,
     );
   }
-  return out;
+  for (const r of unsourced) {
+    out.push(
+      `graph_edge ${r.edge_id} (tenant ${r.tenant_id}): edge_provenance row has human provenance or no observation_ref`,
+    );
+  }
+  return { violations: out, checked: { nodes: nodes.length, edges: edges.length } };
 }
 
 /* v8 ignore start -- CLI wiring; the query it drives is proven by graph-checks.e2e.test.ts */
@@ -77,10 +87,10 @@ if (isMainModule(import.meta.url)) {
   const result = await runGate('check:graph-provenance', async () => {
     const prisma = new PrismaClient();
     try {
-      const violations = await findProvenanceViolations(prisma);
+      const { violations, checked } = await findProvenanceViolations(prisma);
       if (violations.length > 0) throw new Error(violations.join('; '));
       process.stderr.write(
-        'check:graph-provenance: every node and edge carries a resolvable source\n',
+        `check:graph-provenance: checked ${checked.nodes} nodes / ${checked.edges} edges, every one carries a resolvable source\n`,
       );
     } finally {
       await prisma.$disconnect();
