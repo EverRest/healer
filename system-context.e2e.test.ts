@@ -6,6 +6,7 @@ import { PrismaClient } from '@healer/prisma-client';
 import {
   getSystemContext,
   PrismaSystemContextRepository,
+  SystemContextInvariantError,
   type SystemContext,
 } from '@healer/domain-architecture';
 import { TenantContext } from '@healer/shared';
@@ -80,28 +81,43 @@ describe('GetSystemContext (004 T049, FR-020)', () => {
 
   it('carries every component, deployment unit, repository and edge between them, per fixture', () => {
     for (const spec of SPECS) {
-      const { items, graphVersion } = results.get(spec.tenantId) as {
-        items: SystemContext;
-        graphVersion: number;
-      };
+      const result = results.get(spec.tenantId) as Awaited<ReturnType<typeof getSystemContext>>;
+      const { items } = result;
       const kinds = (k: string) => spec.nodes.filter((n) => n.nodeKind === k).length;
-      expect(graphVersion).toBeGreaterThanOrEqual(0);
+      expect(result.graphVersion).toBe(1);
       expect(items.components).toHaveLength(kinds('component'));
       expect(items.deploymentUnits).toHaveLength(kinds('deployment_unit'));
       expect(items.repositories).toHaveLength(kinds('repository'));
-      // Edges to or from an endpoint node fall outside the context's four node lists.
+      // Edges to or from an endpoint node fall outside the context's three node lists.
       const endpointNames = new Set(
         (spec.nodes as { nodeKind: string; name?: string }[])
           .filter((n) => n.nodeKind === 'endpoint')
           .map((n) => n.name),
       );
-      expect(items.edges).toHaveLength(
-        spec.edges.filter((e) => !endpointNames.has(e.from) && !endpointNames.has(e.to)).length,
+      const inContext = spec.edges.filter(
+        (e) => !endpointNames.has(e.from) && !endpointNames.has(e.to),
       );
+      expect(items.edges).toHaveLength(inContext.length);
+      expect(items.excludedEdges).toBe(spec.edges.length - inContext.length);
+      expect(items.excludedEdges).toBeGreaterThan(0);
       expect(items.components.every((c) => c.attributes.componentType.length > 0)).toBe(true);
-      expect(items.characteristics).toEqual(
-        [...new Set(items.components.flatMap((c) => c.attributes.characteristics))].sort(),
+      // Against the fixture's own spec, not a recomputation over the result.
+      const wanted = new Set(
+        (spec.nodes as { nodeKind: string; characteristics?: string[] }[]).flatMap((n) =>
+          n.nodeKind === 'component' ? (n.characteristics ?? []) : [],
+        ),
       );
+      expect(items.characteristics).toEqual([...wanted].sort());
+      // Every fixture row is confirmed: coverage is context-scoped and complete.
+      expect(result.confirmationState).toBe('confirmed');
+      expect(result.coverage).toEqual({
+        nodesConfirmed:
+          items.components.length + items.deploymentUnits.length + items.repositories.length,
+        nodesTotal:
+          items.components.length + items.deploymentUnits.length + items.repositories.length,
+        edgesConfirmed: inContext.length,
+        edgesTotal: inContext.length,
+      });
     }
   });
 
@@ -130,50 +146,98 @@ describe('GetSystemContext (004 T049, FR-020)', () => {
     expect(empty.items.edges).toEqual([]);
   });
 
-  it('leaves a rejected element and its edges out of the context', async () => {
-    const make = (name: string, state: 'confirmed' | 'rejected') =>
-      prisma.graphNode
-        .create({
-          data: {
-            id: randomUUID(),
-            tenantId: SCRATCH_TENANT_ID,
-            nodeKind: 'component',
-            layer: 'code',
-            name,
-            naturalKey: name,
-            provenance: 'human_authored',
-            strength: 65,
-            confidence: 100,
-            state,
-            actorRef: 'fixture',
-            validFromVersion: 1,
-          },
-        })
-        .then(async (n) => {
+  const seedNode = (
+    tenantId: string,
+    name: string,
+    over: { state?: 'confirmed' | 'rejected'; from?: number; to?: number; attr?: boolean } = {},
+  ) =>
+    prisma.graphNode
+      .create({
+        data: {
+          id: randomUUID(),
+          tenantId,
+          nodeKind: 'component',
+          layer: 'code',
+          name,
+          naturalKey: name,
+          provenance: 'human_authored',
+          strength: 65,
+          confidence: 100,
+          state: over.state ?? 'confirmed',
+          actorRef: 'fixture',
+          validFromVersion: over.from ?? 1,
+          ...(over.to === undefined ? {} : { validToVersion: over.to }),
+        },
+      })
+      .then(async (n) => {
+        if (over.attr !== false)
           await prisma.componentAttr.create({
-            data: { nodeId: n.id, tenantId: SCRATCH_TENANT_ID, componentType: 'service' },
+            data: { nodeId: n.id, tenantId, componentType: 'service' },
           });
-          return n.id;
-        });
-    const kept = await make('kept', 'confirmed');
-    const dropped = await make('dropped', 'rejected');
-    await prisma.graphEdge.create({
+        return n.id;
+      });
+  const seedEdge = (
+    tenantId: string,
+    from: string,
+    to: string,
+    state: 'confirmed' | 'rejected' = 'confirmed',
+  ) =>
+    prisma.graphEdge.create({
       data: {
         id: randomUUID(),
-        tenantId: SCRATCH_TENANT_ID,
-        fromNodeId: kept,
-        toNodeId: dropped,
+        tenantId,
+        fromNodeId: from,
+        toNodeId: to,
         edgeType: 'depends_on',
         layer: 'code',
         provenance: 'human_authored',
         strength: 65,
         confidence: 100,
-        state: 'confirmed',
+        state,
         validFromVersion: 1,
       },
     });
+
+  it('leaves a rejected element and its edges out of the context, counting what was dropped', async () => {
+    const kept = await seedNode(SCRATCH_TENANT_ID, 'kept');
+    const kept2 = await seedNode(SCRATCH_TENANT_ID, 'kept2');
+    const dropped = await seedNode(SCRATCH_TENANT_ID, 'dropped', { state: 'rejected' });
+    await seedEdge(SCRATCH_TENANT_ID, kept, dropped);
+    await seedEdge(SCRATCH_TENANT_ID, kept, kept2, 'rejected'); // between two live nodes
     const { items } = await getSystemContext(repo, ctx(SCRATCH_TENANT_ID));
-    expect(items.components.map((c) => c.name)).toEqual(['kept']);
-    expect(items.edges).toEqual([]);
+    expect(items.components.map((c) => c.name)).toEqual(['kept', 'kept2']);
+    expect(items.edges).toEqual([]); // the rejected edge is excluded by its own state
+    expect(items.excludedEdges).toBe(1); // the edge to the rejected node; a rejected edge is not counted
+  });
+
+  it('shows only the rows valid at the current version', async () => {
+    const T = '00000000-0000-0000-a000-0000000000f8';
+    for (const version of [1, 2])
+      await prisma.graphVersion.create({
+        data: {
+          id: randomUUID(),
+          tenantId: T,
+          version,
+          mintedBy: 'confirmation',
+          actorRef: 'fixture',
+        },
+      });
+    const live = await seedNode(T, 'live', { from: 1 });
+    await seedNode(T, 'closed-at-1', { from: 1, to: 1 });
+    await seedNode(T, 'future', { from: 3 });
+    const live2 = await seedNode(T, 'live2', { from: 2 });
+    await seedEdge(T, live, live2);
+    const result = await getSystemContext(repo, ctx(T));
+    expect(result.graphVersion).toBe(2);
+    expect(result.items.components.map((c) => c.name)).toEqual(['live', 'live2']);
+    expect(result.items.edges).toHaveLength(1);
+  });
+
+  it('names the tenant and node when a node has no attribute row', async () => {
+    const T = '00000000-0000-0000-a000-0000000000f9';
+    const id = await seedNode(T, 'no-attr', { attr: false });
+    const error = await getSystemContext(repo, ctx(T)).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SystemContextInvariantError);
+    expect(error).toMatchObject({ tenantId: T, nodeId: id });
   });
 });

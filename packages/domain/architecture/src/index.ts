@@ -25,3 +25,4 @@ export * from './domain/system-context.js';
 export * from './application/queries/get-system-context.js';
 export * from './infrastructure/prisma-system-context-repository.js';
 export * from './domain/strongest-provenance.js';
+export * from './infrastructure/graph-version-scope.js';

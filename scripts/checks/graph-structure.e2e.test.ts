@@ -95,4 +95,61 @@ describe('check:graph-structure against a real Postgres', () => {
     expect(violations.some((v) => /deploys/.test(v))).toBe(true);
     expect(violations.some((v) => /billing.*cross_repository/.test(v))).toBe(true);
   });
+
+  it('flags an open, non-rejected edge whose endpoint is rejected or closed — and only that', async () => {
+    const T = '00000000-0000-0000-a000-0000000000c2';
+    const mk = async (name: string, state: 'confirmed' | 'rejected', validTo?: number) => {
+      const id = randomUUID();
+      await prisma.graphNode.create({
+        data: {
+          id,
+          tenantId: T,
+          nodeKind: 'component',
+          layer: 'code',
+          name,
+          naturalKey: name,
+          provenance: 'human_authored',
+          strength: 65,
+          confidence: 100,
+          state,
+          actorRef: 'fixture',
+          validFromVersion: 1,
+          ...(validTo === undefined ? {} : { validToVersion: validTo }),
+        },
+      });
+      return id;
+    };
+    const edge = (from: string, to: string, state: 'confirmed' | 'rejected', validTo?: number) =>
+      prisma.graphEdge.create({
+        data: {
+          id: randomUUID(),
+          tenantId: T,
+          fromNodeId: from,
+          toNodeId: to,
+          edgeType: 'depends_on',
+          layer: 'code',
+          provenance: 'human_authored',
+          strength: 65,
+          confidence: 100,
+          state,
+          validFromVersion: 1,
+          ...(validTo === undefined ? {} : { validToVersion: validTo }),
+        },
+      });
+    const live = await mk('live', 'confirmed');
+    const live2 = await mk('live2', 'confirmed');
+    const rejected = await mk('rejected', 'rejected');
+    const closed = await mk('closed', 'confirmed', 1);
+    await edge(live, live2, 'confirmed'); // fine
+    await edge(live, rejected, 'confirmed'); // dangling: rejected endpoint
+    await edge(closed, live, 'confirmed'); // dangling: closed endpoint
+    await edge(live2, rejected, 'rejected'); // a rejected edge may point anywhere
+    await edge(live, closed, 'confirmed', 1); // a closed edge is history, not a defect
+
+    const mine = (await findGraphStructureViolations(prisma)).filter((v) => v.includes(T));
+    expect(mine).toHaveLength(2);
+    expect(mine.every((v) => /dangling/.test(v))).toBe(true);
+    expect(mine.some((v) => /rejected/.test(v))).toBe(true);
+    expect(mine.some((v) => /closed/.test(v))).toBe(true);
+  });
 });

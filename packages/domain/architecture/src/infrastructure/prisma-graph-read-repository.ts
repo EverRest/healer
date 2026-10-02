@@ -16,7 +16,8 @@ import {
 import { compareStrongestFirst } from '../domain/strongest-provenance.js';
 import { toReadEnvelope, type ReadEnvelope } from '../domain/read-envelope.js';
 
-const OPEN = 2147483647;
+import { OPEN_VERSION, unpinnedVersionScope } from './graph-version-scope.js';
+
 const MAX_SMALLINT = 32767;
 
 type Tx = Prisma.TransactionClient;
@@ -152,22 +153,10 @@ export class PrismaGraphReadRepository implements GraphReadRepository {
    * mistake, not an empty graph.
    */
   private async resolve(tx: Tx, tenantId: string, pin: number | undefined): Promise<ReadScope> {
-    assertInRange('graphVersion', pin, 1, OPEN - 1);
-    const latest = await tx.graphVersion.aggregate({
-      where: { tenantId },
-      _max: { version: true },
-    });
-    const current = latest._max.version ?? 0;
-    if (pin === undefined) {
-      return {
-        graphVersion: current,
-        window:
-          current === 0
-            ? { validToVersion: OPEN }
-            : { validFromVersion: { lte: current }, validToVersion: { gte: current } },
-        mintedAt: null,
-      };
-    }
+    assertInRange('graphVersion', pin, 1, OPEN_VERSION - 1);
+    const unpinned = await unpinnedVersionScope(tx, tenantId);
+    const current = unpinned.graphVersion;
+    if (pin === undefined) return { ...unpinned, mintedAt: null };
     const minted = await tx.graphVersion.findUnique({
       where: { tenantId_version: { tenantId, version: pin } },
     });

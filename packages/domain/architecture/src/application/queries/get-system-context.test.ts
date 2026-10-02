@@ -12,6 +12,7 @@ const EMPTY: SystemContext = {
   repositories: [],
   characteristics: [],
   edges: [],
+  excludedEdges: 0,
 };
 
 describe('getSystemContext (004 T049, FR-020, quickstart 16)', () => {
@@ -58,5 +59,16 @@ describe('getSystemContext (004 T049, FR-020, quickstart 16)', () => {
       style: 'x',
     };
     expect(widened).toBeDefined();
+  });
+
+  it('cannot hold a rejected element: the state type excludes it', () => {
+    const node = {} as SystemContext['components'][number];
+    const edge = {} as SystemContext['edges'][number];
+    // @ts-expect-error -- 'rejected' is not a state a context node can be in
+    const n: typeof node.state = 'rejected';
+    // @ts-expect-error -- nor an edge
+    const e: typeof edge.state = 'rejected';
+    const ok: typeof node.state = 'confirmed';
+    expect([n, e, ok]).toHaveLength(3);
   });
 });

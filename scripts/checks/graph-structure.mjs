@@ -6,7 +6,7 @@
 // confirmation write path calls them at write time. Same posture as `check:ceiling`: production
 // monitoring, not a release gate. Runs over every tenant as trusted internal code, one
 // tenant-scoped repository call per tenant (the repository never reads across tenants).
-import { PrismaGraphStructureRepository } from '@healer/domain-architecture';
+import { OPEN_VERSION, PrismaGraphStructureRepository } from '@healer/domain-architecture';
 import { TenantContext, scope } from '@healer/shared';
 import { PrismaClient } from '../../prisma/generated/client/index.js';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
@@ -28,6 +28,24 @@ export async function findGraphStructureViolations(prisma) {
       messages.push(
         `tenant ${tenantId}: edge ${v.edge.type} ${v.edge.from} -> ${v.edge.to}: ${v.reason}`,
       );
+    // An open, non-rejected edge must not point at a rejected or closed node: GetSystemContext
+    // drops such an edge (counted in `excludedEdges`) and nothing else would ever say why.
+    const gone = { OR: [{ state: 'rejected' }, { validToVersion: { lt: OPEN_VERSION } }] };
+    const dangling = await prisma.graphEdge.findMany({
+      where: {
+        tenantId,
+        validToVersion: OPEN_VERSION,
+        state: { not: 'rejected' },
+        OR: [{ fromNode: { is: gone } }, { toNode: { is: gone } }],
+      },
+      include: { fromNode: true, toNode: true },
+    });
+    for (const e of dangling)
+      for (const end of [e.fromNode, e.toNode])
+        if (end.state === 'rejected' || end.validToVersion < OPEN_VERSION)
+          messages.push(
+            `tenant ${tenantId}: dangling edge ${e.edgeType} ${e.fromNode.name} -> ${e.toNode.name}: endpoint ${end.name} is ${end.state === 'rejected' ? 'rejected' : 'closed'}`,
+          );
     for (const c of await repo.listNaturalKeyCollisions(where))
       messages.push(
         `tenant ${tenantId}: natural_key ${JSON.stringify(c.naturalKey)} ${c.scope} collision between components ` +
