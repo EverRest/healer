@@ -24,6 +24,10 @@ import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
+import {
+  PrismaDiscoveryRepository,
+  PrismaDraftReviewRepository,
+} from '@healer/domain-architecture';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 
 /**
@@ -93,6 +97,8 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
       runnerRegistrations,
+      new PrismaDiscoveryRepository(prisma),
+      new PrismaDraftReviewRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -14,6 +14,11 @@ import type {
   PolicyDecisionRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import {
+  GRAPH_CONFIRM_CAPABILITY,
+  type DiscoveryRepository,
+  type DraftReviewRepository,
+} from '@healer/domain-architecture';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
 
@@ -75,6 +80,25 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented for contract generation')),
   findByName: () => Promise.resolve(null),
 };
+const noopDiscovery: DiscoveryRepository = {
+  createRun: () => Promise.reject(new Error('not implemented for contract generation')),
+  loadConfirmedSnapshot: () => Promise.reject(new Error('not implemented for contract generation')),
+  loadRejectedDigests: () => Promise.resolve(new Set()),
+  ingestBatch: () => Promise.reject(new Error('not implemented for contract generation')),
+  listRuns: () => Promise.resolve([]),
+  getDraft: () => Promise.resolve(null),
+};
+// `scripts/gates/graph-confirm-capability.mjs`'s own convention for a file that legitimately
+// carries confirm-shaped identifiers without enforcing anything itself (same pattern
+// `PrismaDraftReviewRepository`'s constructor already uses): this noop only exists so
+// `DraftReviewRepository`'s shape — the real, capability-gated routes' own dependency — type-checks
+// for contract generation; it is never called.
+void GRAPH_CONFIRM_CAPABILITY;
+const noopDraftReview: DraftReviewRepository = {
+  confirmDraftItems: () => Promise.reject(new Error('not implemented for contract generation')),
+  rejectDraftItems: () => Promise.reject(new Error('not implemented for contract generation')),
+  recordAuditEntry: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 
 /**
  * Contract generation (012 T033, FR-009, FR-012) reuses `createApiModule` rather than a second
@@ -102,6 +126,8 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopPolicyDecisions,
     noopPolicyActions,
     noopRunnerRegistrations,
+    noopDiscovery,
+    noopDraftReview,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

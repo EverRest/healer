@@ -29,6 +29,12 @@ import {
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
 } from '@healer/domain-policy';
+import {
+  PrismaDiscoveryRepository,
+  PrismaDraftReviewRepository,
+  type DiscoveryRepository,
+  type DraftReviewRepository,
+} from '@healer/domain-architecture';
 import { createPrismaClient } from './infrastructure/prisma.js';
 import { HEALTH_META, HealthController, type HealthMeta } from './health/health.controller.js';
 import {
@@ -59,6 +65,14 @@ import {
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
+import {
+  DISCOVERY_REPOSITORY,
+  DiscoveryRunsController,
+} from './architecture/discovery-runs.controller.js';
+import {
+  DRAFT_REVIEW_REPOSITORY,
+  DiscoveryDraftsController,
+} from './architecture/discovery-drafts.controller.js';
 
 const VERSION = '0.5.0';
 const BUILD = 'local';
@@ -106,6 +120,8 @@ export function createApiModule(
   policyDecisions: PolicyDecisionRepository,
   policyActions: PolicyActionRepository,
   runnerRegistrations: RunnerRegistrationRepository,
+  discovery: DiscoveryRepository,
+  draftReview: DraftReviewRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -116,6 +132,8 @@ export function createApiModule(
       PolicyDecisionsController,
       PolicyEvaluationController,
       RunnersController,
+      DiscoveryRunsController,
+      DiscoveryDraftsController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -130,6 +148,8 @@ export function createApiModule(
       { provide: POLICY_DECISION_REPOSITORY, useValue: policyDecisions },
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
       { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
+      { provide: DISCOVERY_REPOSITORY, useValue: discovery },
+      { provide: DRAFT_REVIEW_REPOSITORY, useValue: draftReview },
     ],
   })
   class ApiModule {}
@@ -160,6 +180,8 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyDecisionRepository(prisma),
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
+    new PrismaDiscoveryRepository(prisma),
+    new PrismaDraftReviewRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

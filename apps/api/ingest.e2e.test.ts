@@ -39,11 +39,30 @@ import {
 } from '../../test/containers.js';
 import type { RunnerRegistrationRepository } from './src/runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
+import {
+  PrismaDiscoveryRepository,
+  PrismaDraftReviewRepository,
+  type DiscoveryRepository,
+  type DraftReviewRepository,
+} from '@healer/domain-architecture';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
 
 const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
+};
+const noopDiscovery: DiscoveryRepository = {
+  createRun: () => Promise.reject(new Error('not implemented in this test')),
+  loadConfirmedSnapshot: () => Promise.reject(new Error('not implemented in this test')),
+  loadRejectedDigests: () => Promise.resolve(new Set()),
+  ingestBatch: () => Promise.reject(new Error('not implemented in this test')),
+  listRuns: () => Promise.resolve([]),
+  getDraft: () => Promise.resolve(null),
+};
+const noopDraftReview: DraftReviewRepository = {
+  confirmDraftItems: () => Promise.reject(new Error('not implemented in this test')),
+  rejectDraftItems: () => Promise.reject(new Error('not implemented in this test')),
+  recordAuditEntry: () => Promise.reject(new Error('not implemented in this test')),
 };
 
 /**
@@ -108,6 +127,8 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
+      new PrismaDiscoveryRepository(prisma),
+      new PrismaDraftReviewRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -403,6 +424,8 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopPolicyDecisions,
       noopPolicyActions,
       noopRunnerRegistrations,
+      noopDiscovery,
+      noopDraftReview,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -19,6 +19,9 @@
       "path": "../../packages/workflow"
     },
     {
+      "path": "../../packages/domain/architecture"
+    },
+    {
       "path": "../../packages/domain/issues"
     },
     {

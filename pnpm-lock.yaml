@@ -69,6 +69,9 @@ importers:
       '@healer/boundary-contract':
         specifier: workspace:*
         version: link:../../packages/boundary-contract
+      '@healer/domain-architecture':
+        specifier: workspace:*
+        version: link:../../packages/domain/architecture
       '@healer/domain-evidence':
         specifier: workspace:*
         version: link:../../packages/domain/evidence
