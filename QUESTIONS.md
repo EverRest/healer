@@ -2372,8 +2372,8 @@ rather than reading the code alone. Results:
    the same tenant, so whoever builds T035 must either relax `issue_id` for `graph_fact` or pick a
    per-tenant holder issue — a schema decision, not mine to take from T036-T041. Not blocking T036-T041
    (the merge path takes already-formed observations).
-4. **Pinned graph reads and `edge_provenance` — the R-04a vs data-model.md disagreement, decided
-   interim.** R-04a says `edge_provenance` carries a validity range; data-model.md and the
+4. **Direction resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87 (R-04a is right; `edge_provenance` gains `actor_ref`/`observation_ref` and a `valid_from`/`valid_to` range in the first phase that needs a human-authored edge). The interim rule below stays until then, then is replaced by an exact version filter.** Pinned graph reads and `edge_provenance` — the R-04a vs data-model.md disagreement, decided
+   interim. R-04a says `edge_provenance` carries a validity range; data-model.md and the
    migrations say it does not, so a provenance row has no version of its own. Interim rule (do not
    treat as settled): a read pinned to `graphVersion` v returns only `edge_provenance` rows with
    `recorded_at <=` that version's minted time (`graph_version.created_at`), and shows class,
