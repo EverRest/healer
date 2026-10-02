@@ -13,3 +13,4 @@ export * from './infrastructure/prisma-edge-provenance-repository.js';
 export * from './domain/edge-confidence.js';
 export * from './domain/graph-read.js';
 export * from './infrastructure/prisma-graph-read-repository.js';
+export * from './domain/strongest-provenance.js';

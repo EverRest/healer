@@ -205,4 +205,127 @@ describe('GraphReadRepository (004 T041)', () => {
     ]);
     expect(edge.observationCount).toBe(60);
   });
+
+  /** `created_at` is the database's own clock (the same one `recorded_at` uses). */
+  async function mintVersion(tenantId: string, version: number) {
+    await prisma.$executeRaw`
+      INSERT INTO "architecture"."graph_version" (id, tenant_id, version, minted_by, actor_ref)
+      VALUES (${randomUUID()}::uuid, ${tenantId}::uuid, ${version}, 'confirmation', 'ana')`;
+  }
+
+  it('a pinned read is stable: observations recorded after the version was minted do not change it', async () => {
+    const tenant = randomUUID();
+    const [a, b] = [await node(tenant), await node(tenant)];
+    const merge = new PrismaEdgeProvenanceRepository(prisma);
+    const mergeAs = (provenance: 'derived_from_code' | 'derived_from_trace') =>
+      merge.mergeObservation(
+        scope(ctx(tenant), {
+          fromNodeId: a,
+          toNodeId: b,
+          edgeType: 'depends_on',
+          layer: 'code' as const,
+          provenance,
+          adapterKey: provenance,
+          adapterVersion: '1',
+          observationRef: randomUUID(),
+          observationCount: 30,
+          lastObservedAt: new Date('2026-10-01T00:00:00Z'),
+          observedUntil: new Date('2026-10-01T00:00:00Z'),
+          baseVersion: 1,
+        }),
+      );
+    await mergeAs('derived_from_code');
+    await mintVersion(tenant, 1);
+
+    const before = await reads.getNode(scope(ctx(tenant), { id: a, graphVersion: 1 }));
+    await mergeAs('derived_from_trace');
+    const after = await reads.getNode(scope(ctx(tenant), { id: a, graphVersion: 1 }));
+
+    expect(after).toEqual(before);
+    expect(after.items.edges[0]?.provenance.class).toBe('derived_from_code');
+    const live = await reads.getNode(scope(ctx(tenant), { id: a }));
+    expect(live.items.edges[0]?.provenance.class).toBe('derived_from_trace');
+    expect(live.items.edges[0]?.provenance.contributingSources).toHaveLength(2);
+  });
+
+  it('shows class, strength, confidence and observation from the SAME (strongest) row; ties break on id', async () => {
+    const tenant = randomUUID();
+    const [a, b] = [await node(tenant), await node(tenant)];
+    const edge = await prisma.graphEdge.create({
+      data: {
+        id: randomUUID(),
+        tenantId: tenant,
+        fromNodeId: a,
+        toNodeId: b,
+        edgeType: 'depends_on',
+        layer: 'code',
+        provenance: 'derived_from_code',
+        strength: 30,
+        confidence: 90,
+        state: 'proposed',
+        validFromVersion: 1,
+      },
+    });
+    const high = { id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', ref: randomUUID(), confidence: 90 };
+    const low = { id: '00000000-0000-4000-8000-000000000001', ref: randomUUID(), confidence: 55 };
+    // One transaction: identical recorded_at, so only the id can break the tie.
+    await prisma.$transaction(async (tx) => {
+      for (const r of [high, low]) {
+        await tx.$executeRaw`
+          INSERT INTO "architecture"."edge_provenance"
+            (id, tenant_id, edge_id, provenance, strength, confidence, observation_ref, adapter_key,
+             adapter_version)
+          VALUES (${r.id}::uuid, ${tenant}::uuid, ${edge.id}::uuid, 'derived_from_code', 30,
+                  ${r.confidence}, ${r.ref}::uuid, 'ast', '1')`;
+      }
+    });
+    const shown = (await reads.getNode(scope(ctx(tenant), { id: a }))).items.edges[0]!;
+    expect(shown.provenance.observationRef).toBe(low.ref);
+    expect(shown.provenance.confidence).toBe(low.confidence);
+    expect(shown.provenanceUnresolved).toBe(false);
+  });
+
+  it('an edge with no provenance row is flagged, not served as if it were sourced', async () => {
+    const tenant = randomUUID();
+    const [a, b] = [await node(tenant), await node(tenant)];
+    await prisma.graphEdge.create({
+      data: {
+        id: randomUUID(),
+        tenantId: tenant,
+        fromNodeId: a,
+        toNodeId: b,
+        edgeType: 'depends_on',
+        layer: 'code',
+        provenance: 'derived_from_trace',
+        strength: 50,
+        confidence: 70,
+        state: 'proposed',
+        validFromVersion: 1,
+      },
+    });
+    const shown = (await reads.getNode(scope(ctx(tenant), { id: a }))).items.edges[0]!;
+    expect(shown.provenanceUnresolved).toBe(true);
+    expect(shown.provenance.observationRef).toBeNull();
+    expect(shown.provenance.contributingSources).toEqual([]);
+  });
+
+  it.each([
+    ['a graphVersion beyond the current one', { graphVersion: 5 }],
+    ['graphVersion 0', { graphVersion: 0 }],
+    ['a graphVersion beyond int32', { graphVersion: 2 ** 31 }],
+    ['a minStrength beyond smallint', { minStrength: 40_000 }],
+    ['a negative minStrength', { minStrength: -1 }],
+  ])('rejects %s', async (_name, filter) => {
+    const tenant = randomUUID();
+    await node(tenant);
+    await mintVersion(tenant, 1);
+    await expect(reads.listNodes(scope(ctx(tenant), filter))).rejects.toBeInstanceOf(
+      InvalidGraphFilterError,
+    );
+    if ('graphVersion' in filter) {
+      await expect(
+        reads.getNode(scope(ctx(tenant), { id: randomUUID(), graphVersion: filter.graphVersion })),
+      ).rejects.toBeInstanceOf(InvalidGraphFilterError);
+    }
+  });
 });

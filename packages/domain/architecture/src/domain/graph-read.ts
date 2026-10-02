@@ -47,6 +47,15 @@ export interface GraphEdgeView {
   readonly state: string;
   readonly observationCount: number;
   readonly lastObservedAt: Date | null;
+  /**
+   * True when no `edge_provenance` row is visible for this edge at the version read: what
+   * `provenance` then shows is only the edge's own stored columns, not a source anyone can
+   * resolve. Never absent, so a consumer cannot mistake an unsourced edge for a sourced one.
+   *
+   * Otherwise class, strength, confidence and observationRef all come from ONE row: the
+   * strongest (ties: earliest recorded, then id), so what is shown is internally consistent.
+   */
+  readonly provenanceUnresolved: boolean;
   readonly provenance: ProvenanceView & {
     readonly contributingSources: readonly ContributingSource[];
   };
