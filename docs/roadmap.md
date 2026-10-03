@@ -240,6 +240,13 @@ Safe remediation    reversible actions including autonomous rollback
 TDD fix + PR        L2 ceiling — human always merges
 ```
 
+## Agent intake through chat (proposed, 2026-10-03)
+
+012 US10 gains a chat-channel intake and report path (FR-060..FR-065, T098, T102–T104, ADR 0016,
+Proposed). It lands after T084–T087 (the two agent gates) and needs the repository-level steps of
+T088–T092 and a Telegram bot token. T097 (which coding agent) blocks T089. The bridge from Healer's own
+incidents to its product `change` agent (T101) waits for 006–008 and the GitHub adapter.
+
 ## Beyond v1
 
 L3 (merge) only after a measured false-fix rate. L4/L5 per component and environment, never

@@ -304,6 +304,14 @@ hand-crafted agent change set touching a protected path is refused by the build.
    on the task rather than choosing.
 6. **Given** an agent's pull request, **When** merge is attempted, **Then** it requires a human
    approval; no agent credential holds merge permission or counts as an approval.
+7. **Given** a task post in the project's chat channel from an allowlisted user, **When** the owner
+   confirms the card the bot shows, **Then** a task line or tracked issue exists and an agent job is
+   dispatched on it; **and** a post from any other sender causes nothing and leaves an audit entry.
+8. **Given** a log or QA finding posted to the channel, **When** it is received, **Then** it enters
+   ingestion as a signal and no agent job is dispatched on it as a task.
+9. **Given** an agent job started from the channel, **When** it runs and ends, **Then** the same channel
+   shows its start, current step and one of the three outcomes of FR-058/FR-059, with a link to the
+   pull request or draft.
 
 ---
 
@@ -580,6 +588,25 @@ hand-crafted agent change set touching a protected path is refused by the build.
 - **FR-059**: Agents MAY work in parallel only on tasks marked `[P]`, each in its own worktree and
   branch. Every agent task run MUST declare a wall-clock and spend budget; a run exceeding either stops,
   leaves its branch with the reason recorded, and opens no pull request presented as complete.
+- **FR-060**: Work reaches an agent from a chat channel only through an allowlisted sender. The
+  allowlist MUST be control-plane configuration; a sender identifier read from message text MUST NOT
+  confer any right. A message from any other sender MUST cause no task, signal or job and MUST be
+  recorded in the audit trail (ADR 0016, C-48).
+- **FR-061**: A chat post MUST be classified by structure into a *task* or a *finding*. A task post MUST
+  become a task line or tracked issue before any agent job exists, so FR-053 holds; a finding MUST enter
+  001 ingestion as a signal and MUST NOT start an agent job as a task.
+- **FR-062**: The content of a chat post, including pasted logs, MUST reach an agent only as data in the
+  task description. It MUST NOT alter the prompt in use (FR-041), the task identifier, a protected path
+  or a budget.
+- **FR-063**: An agent job started from a chat post MUST start only after the allowlisted owner confirms
+  the task as the bot restated it. Relaxing this is a recorded decision, not a setting. **Proposed** —
+  ADR 0016, pending confirmation.
+- **FR-064**: Every agent job MUST report to the channel it was started from — start, current step, and
+  one of: a pull request, a `needs-decision` draft, a stopped branch with the budget breach. Reports
+  MUST carry identifiers and digests, never credentials or customer source, and MUST NOT be the only
+  record: the pull request and the audit trail remain the record.
+- **FR-065**: The chat channel MUST hold no merge, approval or administration right. It can ask for a
+  job, confirm a card and read reports; the host refuses everything else (FR-057).
 
 ### Key Entities
 
@@ -616,6 +643,9 @@ already exists somewhere (VIII):
 - **CiGate** — the enumeration is [contracts/make-targets.md](contracts/make-targets.md) plus the
   machine-readable result the gate harness emits per target (FR-016). "Which gates exist" is answered
   by the contract, not by a row.
+- **ChatPost / ChatTask** — the Telegram message is the transport and the task line or issue it becomes
+  is the work item (FR-061); the audit entry records the sender and the decision. A chat-task table
+  would be a fourth copy of the task.
 - **AgentTask** — the task line in `tasks.md` is the work item and the pull request is the record of
   its execution (FR-053). A table of agent tasks would be a third copy of both.
 
@@ -669,6 +699,9 @@ already exists somewhere (VIII):
   refuses.
 - **SC-022**: 100% of agent-authored behavioural change sets contain a test that fails against the
   base revision, and 0 agent credentials hold merge permission.
+- **SC-023**: 0 chat posts from a sender outside the allowlist cause a task, signal or job, and 100% of
+  them are audited; 0 chat findings start an agent job as a task; 100% of agent jobs started from the
+  channel report an outcome back to it.
 
 ## Assumptions
 
@@ -696,6 +729,10 @@ already exists somewhere (VIII):
   future Healer runner pointed at this repository. It presumes the repository is under version control
   with a CI system that reports authenticated author identity; until both exist, no agent-authored
   change set can satisfy FR-054, and agent work stays local and human-committed.
+- The chat channel (FR-060..FR-065) is Telegram first and one channel per project (C-48). Other
+  platforms are adapters of the same intake and report path; Slack is revisited before the channel
+  faces customers. It names no new authority: it is a consumer of the REST surface and of ADR 0011's
+  pipeline.
 - Gate enforcement assumes the change set is inspectable at build time (FR-006, FR-015). On a build
   where that is unavailable, the gate must fail closed rather than pass by default.
 - **The container image and its contract are the runner product** — environment, health, protocol

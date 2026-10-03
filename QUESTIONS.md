@@ -20,6 +20,37 @@ See [decisions.md](docs/decisions.md) C-43 (`gate-architecture-agnostic` own-sta
 (`gate-isolation` calling convention), C-45 (T035 stays structural, no ADR), C-46 (`gate-evidence`
 `@conclusion` tag), C-47 (Phase 13 T084–T087 start now).
 
+## 012 phase 13 — gaps found 2026-10-03
+
+ADR 0011 and FR-053..FR-059 describe the controls on an agent (gates, identity, ruleset, budgets)
+completely. What they leave open is how work reaches the agent and what happens after its job ends.
+Agents that develop Healer run as a GitHub Actions job (ADR 0011 rejects an in-house orchestrator);
+the product's own `change`/`verifier` agents run through control plane, runner and sandbox. The two
+share the gates and the human merge, not a framework. Tasks T097–T101 in
+[012 tasks.md](specs/012-engineering-foundation/tasks.md) track each point below.
+
+1. **Which coding agent runs in `agent-task.yml` (T097).** The spec names no product on purpose
+   (spec.md, Assumptions). T089 cannot be built without one. Recommendation: the Claude Code GitHub
+   Action, authenticated with the GitHub App token of R-16, because this repository's `AGENTS.md`,
+   `CLAUDE.md`, `.claude/rules` and speckit skills already target it.
+2. **How a human gives an agent a task (T098).** Today the only input is `TASK_ID` from a
+   `tasks.md`; an ad-hoc bug or idea has no path, and `gate-agent-scope` rejects a pull request
+   naming no task. The surface is already decided: C-48, one Telegram channel per project where the
+   owner posts tasks and gets reports back. What is open is the path from a post to a task line:
+   who may post (an allowlist of Telegram user ids), whether a post becomes a task automatically or
+   only after the owner confirms it (proposed: confirms, ADR 0016, FR-063), and how bot-posted
+   findings (suspicious logs, QA results) enter
+   001's ingestion as signals rather than as tasks, since classification comes before patching.
+   Written up as 012 FR-060..FR-065, T098/T102–T104, ADR 0016 (Proposed), C-91 and C-92 (Proposed);
+   waiting for the owner to confirm the confirmation step and the agent choice.
+3. **Which task a scheduled run picks (T099).** Dependencies live in prose. Recommendation: a small
+   script that reads the dependency block and the open `needs-decision` drafts and prints the ready
+   `TASK_ID`s; the schedule dispatches only those.
+4. **Who drives an agent pull request to green (T100).** The job is one-shot. Recommendation:
+   re-dispatch on the same branch with the failing check or comment as input, same budgets.
+5. **Healer developing itself through its own pipeline (T101).** C-42 states the intent; nothing
+   specifies it yet. Recommendation: leave it tracked until 006–008 and the GitHub adapter exist.
+
 ## 012 T037 `deps-check` — the ADR-in-the-same-change-set half
 
 **Deferred, not decided.** Base-revision diffing is the same infrastructure

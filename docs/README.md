@@ -37,3 +37,4 @@ Agent instructions in [AGENTS.md](../AGENTS.md).
 | [0013](adr/0013-prisma-client-workspace-package.md) | A dedicated `@healer/prisma-client` workspace package |
 | [0014](adr/0014-runner-artifact-build-and-versioning.md) | Runner artifact build, versioning and packaging |
 | [0015](adr/0015-budget-charge-advisory-lock.md) | The budget charge takes a bounded, transaction-scoped advisory lock |
+| [0016](adr/0016-chat-channel-agent-intake.md) | A chat channel is the intake and report surface for agents — Proposed |
