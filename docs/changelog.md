@@ -95,6 +95,36 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.54.0 — 2026-10-03
+
+Review fixes for three batches that had landed without the two-reviewer pass: 002 phase 4 (0.48.0),
+002 phase 8 (0.52.0) and 012 phase 13 (0.53.0). Five independent reviews; the items below are the ones
+that needed no spec decision. Each new test was watched red first (or, for the two filter tests,
+against the implementation with the filter deleted).
+
+- **002 phase 4 — a grant above its ceiling could not be revoked.** `autonomy_grant_ceiling_check`
+  fired on every UPDATE, so revoking a row left over the ceiling (quickstart 9's privileged write, or a
+  later ceiling change) raised "exceeds ACTION_CEILING", returned 500 and bumped no epoch. New
+  migration `20261003120000` re-creates the trigger as `UPDATE OF level, action_key` (with its
+  `down.sql`); the committed migration is untouched.
+- Revoke is one conditional write (`revoked_at IS NULL`), so concurrent revokes cannot both succeed and
+  double-bump the epoch. The concurrency e2e passed before the fix too — it does not reproduce the race
+  on this machine; the write is correct regardless.
+- `DELETE /autonomy/grants/{id}` 404s a non-UUID id and `POST` 422s a non-UUID `componentId`, instead of
+  a 500 from the `@db.Uuid` column.
+- **002 phase 8:** `gate-ceiling` reads the base at the merge-base (as every other gate now does) and
+  resolves a cited derivation only if git tracks it; the `run_terminal` e2e now proves the tenant filter
+  and the issue filter each hold on their own.
+- **012 phase 13:** git paths are read with `-z`, so a non-ASCII path is no longer C-quoted past every
+  protected-path pattern; `it.only`, `skipIf`, `runIf` and `concurrent.skip` count as a disabled test;
+  `red-first` leaves no temp directory when the worktree cannot be created.
+- **Open, each needing a decision:** `gate-ceiling` accepts any self-consistent derivation artifact (no
+  benchmark-scope, completeness or class check; the digest is unkeyed); `Idempotency-Key` on
+  `POST /autonomy/grants` is required and unused; `AutonomyGranted` carries `epoch: 0`; `red-first`
+  counts a broken base checkout as red (a green-on-head control run would close it); the protected-path
+  list omits `package.json`, `GNUmakefile`, nested `tsconfig`/`test/**`; `[NB]` trusts `TASK_ID`;
+  `invalidate-terminal-run-decisions` and the revocation sweep have no production caller.
+
 ## 0.53.0 — 2026-10-03
 
 012 Phase 13: the author-identity resolver and the two agent gates (T084–T087). T088–T092 wait on the

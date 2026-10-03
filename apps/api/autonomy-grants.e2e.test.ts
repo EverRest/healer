@@ -23,7 +23,7 @@ import {
   PrismaPolicyRulesetRepository,
 } from '@healer/domain-policy';
 import { PrismaGraphReadRepository } from '@healer/domain-architecture';
-import { PrismaClient } from '@healer/prisma-client';
+import { PrismaClient, withPrivilegedWrite } from '@healer/prisma-client';
 import {
   assertTenantIsolated,
   assertTenantIsolatedList,
@@ -164,6 +164,75 @@ describe('/autonomy/grants (002 T046)', () => {
       .set('X-Tenant-Id', tenantId)
       .set('X-Actor-Id', 'pavlo')
       .expect(409);
+  });
+
+  // Review of 002 phase 4: the ceiling trigger fired on every UPDATE, so revoking the one kind of
+  // row that most needs revoking — over the ceiling, written through the documented bypass — hit
+  // "exceeds ACTION_CEILING" and returned 500, with no epoch bump.
+  it('revokes a grant that sits above its ceiling (written through the privileged bypass)', async () => {
+    const tenantId = randomUUID();
+    const id = randomUUID();
+    await withPrivilegedWrite(prisma, (tx) =>
+      tx.autonomyGrant.create({
+        data: {
+          id,
+          tenantId,
+          actionKey: 'change.open_pull_request',
+          level: 5,
+          grantedBy: 'pavlo',
+          grantedAt: new Date(),
+        },
+      }),
+    );
+    const revoked = await request(app.getHttpServer())
+      .delete(path(`/autonomy/grants/${id}`))
+      .set('X-Tenant-Id', tenantId)
+      .set('X-Actor-Id', 'pavlo')
+      .expect(200);
+    expect(revoked.body.revokedAt).not.toBeNull();
+  });
+
+  // Two simultaneous revokes: exactly one wins; the loser is a 409 and leaves no second epoch
+  // bump or audit entry behind.
+  it('serialises concurrent revokes of one grant: one 200, the rest 409, one epoch bump', async () => {
+    const tenantId = randomUUID();
+    const created = await request(app.getHttpServer())
+      .post(path('/autonomy/grants'))
+      .set('X-Tenant-Id', tenantId)
+      .set('X-Actor-Id', 'pavlo')
+      .set('Idempotency-Key', randomUUID())
+      .send(grantBody())
+      .expect(201);
+    const revoke = () =>
+      request(app.getHttpServer())
+        .delete(path(`/autonomy/grants/${created.body.id}`))
+        .set('X-Tenant-Id', tenantId)
+        .set('X-Actor-Id', 'pavlo');
+    const statuses = (await Promise.all([revoke(), revoke(), revoke(), revoke()])).map(
+      (r) => r.status,
+    );
+    expect(statuses.filter((status) => status === 200)).toHaveLength(1);
+    expect(statuses.filter((status) => status === 409)).toHaveLength(3);
+    const epoch = await prisma.autonomyEpoch.findUniqueOrThrow({ where: { tenantId } });
+    expect(Number(epoch.epoch)).toBe(1);
+  });
+
+  it('404s a grant id that is not a UUID instead of failing at the database', async () => {
+    await request(app.getHttpServer())
+      .delete(path('/autonomy/grants/not-a-uuid'))
+      .set('X-Tenant-Id', randomUUID())
+      .set('X-Actor-Id', 'pavlo')
+      .expect(404);
+  });
+
+  it('422s a componentId that is not a UUID instead of failing at the database', async () => {
+    await request(app.getHttpServer())
+      .post(path('/autonomy/grants'))
+      .set('X-Tenant-Id', randomUUID())
+      .set('X-Actor-Id', 'pavlo')
+      .set('Idempotency-Key', randomUUID())
+      .send(grantBody({ componentId: 'web' }))
+      .expect(422);
   });
 
   it('404s revoking a grant that does not exist', async () => {

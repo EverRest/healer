@@ -17,7 +17,8 @@ export const CONTRACT_PATH = 'specs/012-engineering-foundation/contracts/make-ta
 export const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const ASSERTION = /\b(?:expect\w*|assert\w*)(?:\.\w+)*\s*\(/;
 // A test switched off keeps its assertion lines intact, so count the switches themselves.
-const DISABLED = /\b(?:it|test|describe)\.(?:skip|todo)\b|\bx(?:it|describe)\s*\(/g;
+const DISABLED =
+  /\b(?:it|test|describe)(?:\.\w+)*\.(?:skip|todo|only|skipIf|runIf)\b|\bx(?:it|describe)\s*\(/g;
 
 /** The fenced list under "### Protected paths": paths first on a line, prose after 3+ spaces. */
 export function parseProtectedPaths(markdown) {

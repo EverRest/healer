@@ -83,4 +83,14 @@ describe('changedFilesSinceBase (012 T076/T078 shared base-diff, R-09, R-10)', (
     git(dir, ['branch', '-m', 'master', 'trunk']);
     expect(() => resolveBaseRevision(dir)).toThrow(/no base ref resolved/);
   });
+
+  it('reports non-ASCII paths verbatim, not C-quoted — a quoted name slips past every path pattern', () => {
+    dir = initRepo();
+    writeFileSync(join(dir, 'é.txt'), 'x\n');
+    expect(changedFilesSinceBase(dir)).toEqual(['é.txt']);
+    git(dir, ['checkout', '-q', '-b', 'feature']);
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-q', '-m', 'é']);
+    expect(changedFilesSinceBase(dir)).toEqual(['é.txt']);
+  });
 });

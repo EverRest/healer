@@ -88,4 +88,48 @@ describe('IssueStateChanged → run_terminal invalidation', () => {
     expect(await reason(onLive)).toBeNull();
     expect(await reason(theirs)).toBeNull();
   });
+
+  // Review of 0.52.0: the case above puts the other tenant's decision on a *different issue*, so
+  // dropping either the tenant or the issue filter from the hand-written SQL still passed.
+  it('is scoped by tenant AND by issue: neither filter alone is what holds', async () => {
+    const a = await h.newTenant();
+    const b = await h.newTenant();
+    for (const t of [a, b]) {
+      await h.setLimit(t.ctx, { spendLimit: 100 });
+      await h.setLimit(t.ctx, { scopeType: 'issue', period: 'issue', spendLimit: 50 });
+    }
+    const terminalRunOn = async (t: typeof a) => {
+      const issueId = await seedIssue(h.pg, t.tenantId);
+      const run = await seedWorkflowRun(h.pg, {
+        tenantId: t.tenantId,
+        issueId,
+        startedAt: NOON.toISOString(),
+        endedAt: NOON.toISOString(),
+      });
+      return { issueId, decision: await bindOn(t, issueId, run.id) };
+    };
+    const target = await terminalRunOn(a);
+    const sameTenantOtherIssue = await terminalRunOn(a);
+    const otherTenant = await terminalRunOn(b);
+
+    const repo = new PrismaPolicyDecisionRepository(h.prisma);
+    const reason = async (id: string) =>
+      (await h.prisma.policyDecision.findUnique({ where: { id } }))?.invalidatedReason;
+
+    // Tenant A's event naming tenant B's issue matches nothing — the tenant filter, alone.
+    const crossTenant = {
+      name: 'IssueStateChanged',
+      tenantId: a.tenantId,
+      subjectId: otherTenant.issueId,
+    };
+    expect(await onIssueStateChanged(repo, crossTenant)).toBe(0);
+    expect(await reason(otherTenant.decision)).toBeNull();
+
+    // Tenant A's event for A's own issue touches only that issue's decision — the issue filter, alone.
+    const own = { name: 'IssueStateChanged', tenantId: a.tenantId, subjectId: target.issueId };
+    expect(await onIssueStateChanged(repo, own)).toBe(1);
+    expect(await reason(target.decision)).toBe('run_terminal');
+    expect(await reason(sameTenantOtherIssue.decision)).toBeNull();
+    expect(await reason(otherTenant.decision)).toBeNull();
+  });
 });

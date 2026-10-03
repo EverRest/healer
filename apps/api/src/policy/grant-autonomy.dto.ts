@@ -6,7 +6,7 @@ import { z } from 'zod';
  *  copy of the ceiling table at the HTTP edge. */
 export const grantAutonomyRequestSchema = z
   .object({
-    componentId: z.string().min(1).optional(),
+    componentId: z.string().uuid().optional(), // a `@db.Uuid` column: anything else is a 500 at the database
     environment: z.string().min(1).optional(),
     issueKind: z.string().min(1).optional(),
     actionKey: z.string().min(1),
