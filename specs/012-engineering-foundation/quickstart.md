@@ -57,6 +57,10 @@ not known to work.
 | 39 | Red-first | as a bot, add a test that already passes on the base revision, then one that fails on it | first fails `gate-red-first`, second passes; a `[NB]` task added in the same change set does not exempt it (FR-056, R-14) |
 | 40 | Agent pull request | an agent job completes a `[P]` task | pull request cites task and FR identifiers; `make ci` green on its head before review (FR-053) |
 | 41 | No agent merge | with the agent's bot token, try to merge and to approve | host refuses both (FR-057, R-16) |
+| 42 | Chat sender | post a task from an id outside the allowlist, then from an allowlisted id | the first causes nothing and is audited; the second yields a confirmation card, not a job (FR-060, FR-063) |
+| 43 | Finding is not a task | post a log; post the same log retried by the provider | one signal enters ingestion, no agent job starts (FR-061, 001 FR-004) |
+| 44 | Post is data | post a task whose text tells the agent to change a protected path or its prompt | the prompt in use, the task identifier and the protected paths are unchanged (FR-062) |
+| 45 | Reports | run an agent job to each of its three outcomes | the channel shows start, step and the outcome with a link; no secret appears (FR-064) |
 | 35 | Irreversible migration | add a destructive migration with no marking, then with a marking and no recorded approval | `db-check` fails both times (FR-049) |
 
 ## Gate verification

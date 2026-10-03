@@ -49,6 +49,45 @@ makes Healer its own first tenant and its own first source of real incidents for
 usual caveat that incidents from one team's product are not a sealed measurement set for anyone else's
 (011, [failure-modes](failure-modes.md) §10).
 
+## Task intake and reports through a chat channel
+
+The owner wants one chat channel per project (C-48, Telegram first) where tasks, bugs and suspicious
+logs or QA findings are posted by a person or by a bot, and where agents report what they picked up and
+how it is going. Specified in 012 FR-060..FR-065 and [ADR 0016](../../docs/adr/0016-chat-channel-agent-intake.md);
+this is the reasoning.
+
+**A chat message is a wider door than a task line.** ADR 0011 admits only a task line from `tasks.md`.
+A channel admits text from anyone who can write to it, and from bots whose output is somebody else's
+log. If the post itself started an agent, the channel would be the only control between a stranger and a
+model budget, and a prompt-injection line in a pasted log would be an instruction. So the channel adds
+no authority: it is a consumer of the REST surface, and everything it triggers still ends at ADR 0011's
+gates and a human merge.
+
+| Question | Answer | Why |
+|---|---|---|
+| Who may cause anything | an allowlist of Telegram ids in control-plane configuration | an id inside message text is written by the author it would authorise |
+| What a task post does | becomes a task line or issue, then waits for the owner's confirmation | keeps "one task per pull request" true; one tap prevents a forged post spending a budget (proposed) |
+| What a finding post does | enters ingestion as a signal and is classified before anything is patched | infrastructure, capacity and config failures are not code bugs; patching them is the failure the taxonomy exists to prevent ([incident-taxonomy](incident-taxonomy.md)) |
+| What the post text is | data in the task description, never prompt | retrieved content is data, never instructions ([security-posture](security-posture.md)) |
+| What reports contain | identifiers, digests, a link to the pull request | the pull request and audit trail are the record; a chat is a notification, not evidence |
+| What the channel can do on the host | nothing beyond asking, confirming and reading | merge and approval are human actions on the host (FR-057, FR-065) |
+
+**Why not skip confirmation.** The cost is one tap per task; the failure it prevents is silent and
+expensive. Relaxing it should be a measured, recorded decision, for example after a period with no
+unwanted job — not a flag.
+
+**Why findings are not tasks.** A log pasted as "this is broken" is a symptom. Turning it directly into
+an agent task skips reproduction and classification, the two steps that separate Healer from a tool that
+patches whatever it is shown (`AGENTS.md`: reproduce before modifying, classify before patching). The channel is the same front door
+as any other signal source.
+
+**Open.**
+- Which coding agent runs in the job (proposed: the Claude Code GitHub Action).
+- How a bot such as a QA runner identifies itself in the channel; Telegram bots can read only what is
+  addressed to them, so the allowlist must name the bot's own id and the finding format must be fixed.
+- Whether the same intake becomes a per-tenant feature for customers; that is the Slack question in C-48
+  and a separate decision.
+
 ## Open
 
 - Whether agents should draft `plan.md` and `tasks.md` from an approved `spec.md`. Today they do not; the
