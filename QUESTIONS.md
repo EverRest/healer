@@ -35,9 +35,11 @@ share the gates and the human merge, not a framework. Tasks T097–T101 in
    `CLAUDE.md`, `.claude/rules` and speckit skills already target it.
 2. **How a human gives an agent a task (T098).** Today the only input is `TASK_ID` from a
    `tasks.md`; an ad-hoc bug or idea has no path, and `gate-agent-scope` rejects a pull request
-   naming no task. Recommendation: the human writes the task line (or creates the issue with
-   `/speckit-taskstoissues`), then dispatches; no API/dashboard/MCP route until the product needs
-   one.
+   naming no task. The surface is already decided: C-48, one Telegram channel per project where the
+   owner posts tasks and gets reports back. What is open is the path from a post to a task line:
+   who may post (an allowlist of Telegram user ids), whether a post becomes a task automatically or
+   only after the owner confirms it, and how bot-posted findings (suspicious logs, QA results) enter
+   001's ingestion as signals rather than as tasks, since classification comes before patching.
 3. **Which task a scheduled run picks (T099).** Dependencies live in prose. Recommendation: a small
    script that reads the dependency block and the open `needs-decision` drafts and prints the ready
    `TASK_ID`s; the schedule dispatches only those.
