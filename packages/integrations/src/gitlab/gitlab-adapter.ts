@@ -27,7 +27,7 @@ export interface GitlabProjectReader {
   readFile(path: string, signal?: AbortSignal): Promise<string>;
 }
 
-const GITLAB_ADAPTER_KEY = 'gitlab';
+const GITLAB_ADAPTER_ID = 'gitlab';
 const GITLAB_ADAPTER_VERSION = '0.2.0';
 const GITLAB_LAYER = 'code';
 const GITLAB_PROVENANCE = 'derived_from_code';
@@ -125,7 +125,7 @@ function toComponentCandidate(manifest: ParsedManifest): ComponentCandidate {
     componentType: inferComponentType(manifest.dir, manifest.rawName),
     characteristics: [],
     sourcePaths: [manifest.dir],
-    adapterKey: GITLAB_ADAPTER_KEY,
+    adapterKey: GITLAB_ADAPTER_ID,
     adapterVersion: GITLAB_ADAPTER_VERSION,
   };
 }
@@ -169,7 +169,7 @@ function buildDependencyObservations(
  */
 export function createGitlabAdapter(reader: GitlabProjectReader) {
   return Object.freeze({
-    key: GITLAB_ADAPTER_KEY,
+    key: GITLAB_ADAPTER_ID,
     version: GITLAB_ADAPTER_VERSION,
     layer: GITLAB_LAYER,
     provenance: GITLAB_PROVENANCE,

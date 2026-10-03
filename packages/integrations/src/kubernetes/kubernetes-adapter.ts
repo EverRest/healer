@@ -20,7 +20,7 @@ export interface KubernetesReader {
   listWorkloads(signal?: AbortSignal): Promise<readonly KubernetesWorkload[]>;
 }
 
-const KUBERNETES_ADAPTER_KEY = 'kubernetes';
+const KUBERNETES_ADAPTER_ID = 'kubernetes';
 const KUBERNETES_ADAPTER_VERSION = '0.2.0';
 const KUBERNETES_LAYER = 'runtime';
 const KUBERNETES_PROVENANCE = 'derived_from_runtime';
@@ -95,7 +95,7 @@ function toDeploysObservation(
  */
 export function createKubernetesAdapter(reader: KubernetesReader) {
   return Object.freeze({
-    key: KUBERNETES_ADAPTER_KEY,
+    key: KUBERNETES_ADAPTER_ID,
     version: KUBERNETES_ADAPTER_VERSION,
     layer: KUBERNETES_LAYER,
     provenance: KUBERNETES_PROVENANCE,

@@ -4120,3 +4120,42 @@ ceilings), `secret-scan` (PEM header assembled), 001 erasure and retention purge
 6. `data-model.md`'s appended implementation notes should be folded into the tables above them on the
    next schema change (consolidate, don't append).
 7. VERSION renumbered 0.55.0 (master is at 0.54.0); resolve the changelog position at merge.
+
+## 004 Phase 3 — reconciliation batch
+
+Implementing Pavlo's seven already-made decisions (a–g) on top of the mechanical integration
+batch. Started by merging local `master`'s further delta (`104ab61..7038c2e`, i.e. the 012
+agent-development docs/ADR 0016 commits plus 003 phases 1–3 itself) into
+`integrate-004-phase3-into-master` (`7c80395`), on a fresh branch `reconcile-004-phase3-batch`
+(this environment's worktree was pre-seeded on top of master, not the integrate branch, so a new
+branch was cut from the integrate branch's tip rather than reusing the EnterWorktree path named in
+the brief).
+
+1. **Merge conflicts** (`Makefile`, `QUESTIONS.md`, 10 `apps/api/*.e2e.test.ts` files,
+   `apps/api/src/main.ts`, `apps/api/src/main.e2e.test.ts`, `apps/api/src/openapi.ts`,
+   `apps/api/package.json`, `packages/integrations/src/index.ts`, `pnpm-lock.yaml`): every
+   `createApiModule(...)` conflict was "both sides appended a new trailing parameter" — resolved by
+   keeping both in a fixed order (`...graphReads, discovery, draftReview, boundaryRejections`)
+   applied consistently across every call site and its DI wiring. `apps/api/src/main.e2e.test.ts`
+   and `apps/api/src/openapi.ts` additionally had a duplicate `noopGraphReads` definition (master
+   had moved the boundary-rejection/graph-read noop block earlier in the file than where HEAD
+   already defined `noopGraphReads`) — resolved by keeping one definition and simply appending
+   `noopBoundaryRejections` next to the existing `noopDraftReview`. `packages/integrations/src/index.ts`
+   conflicted because master's copy pre-dates a rename (`gitlabAdapter` → `createGitlabAdapter`
+   etc.); kept the current (HEAD) export names and unioned in master's additional context-source
+   exports (`skeletonContextSource` and friends), which are untouched by the rename. `apps/api/openapi.json`
+   and `pnpm-lock.yaml` are generated — merged the lockfile's one dependency-list conflict by hand
+   (same union-of-both-sides pattern) and regenerated `openapi.json` via `pnpm run generate:openapi`
+   once the build was green, rather than hand-resolving its JSON diff.
+2. **Pre-existing false positive surfaced by the merge, fixed before touching a–g:**
+   `no-customer-credentials.test.ts` (new in master's 003 work, scans all control-plane source for
+   `SYSTEM_...SECRET`-shaped identifiers) flagged `GITLAB_ADAPTER_KEY` / `KUBERNETES_ADAPTER_KEY` —
+   module-private identifier-key constants in Phase 3's own `gitlab-adapter.ts`/
+   `kubernetes-adapter.ts`, present since before this merge, that happen to match the
+   `GITLAB_..._KEY` / `KUBERNETES_..._KEY` credential pattern. Renamed both to
+   `GITLAB_ADAPTER_ID` / `KUBERNETES_ADAPTER_ID` (module-private, only used within their own file) —
+   the scanner's intent (no credential-shaped env var name) is correct; the collision was a naming
+   accident, not a scanner bug, so the regex was left untouched.
+3. Ran `pnpm install` + `pnpm exec prisma generate` before the first `make typecheck` — the
+   worktree had no generated Prisma client yet; this is routine setup, not a reconciliation
+   decision, noted only so the commit history makes sense.
