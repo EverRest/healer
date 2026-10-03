@@ -3956,3 +3956,39 @@ Judgment calls made without asking:
 5. This batch was built on top of the unmerged `worktree-002-phase6-7-budgets-approvals` branch
    (0.50.0), because phases 6–7 already existed there — see the hand-off note.
 
+## 004 Phase 3 x master integration (mechanical batch, per a prior read-only review)
+
+Merged local `master` into Phase 3's tip (`5931a37`) on a new branch
+`integrate-004-phase3-into-master`, per the review's exact instructions. Judgment calls:
+
+1. **Merge target was `master`@`104ab61`, not `origin/master`.** `origin/master` (`ee08286`) was
+   behind local `master` by several commits not yet pushed. Fetched origin first as instructed;
+   confirmed `origin/master` is an ancestor of local `master`, so merging against local `master`
+   loses nothing `origin` has. While this merge was in progress, another concurrent session
+   advanced local `master` further (to `9c0e560`, 0.54.0 — 012 agent-development docs/ADR 0016,
+   review fixes for 002 phase 4/8 and 012 phase 13) — commits outside what the review covered.
+   Deliberately did **not** chase that newer tip: the review's scope was specifically the state at
+   `104ab61`, and re-targeting mid-merge against a moving tip someone else is actively advancing
+   risks pulling in unreviewed conflicts. The resulting branch is one commit behind current local
+   `master`; whoever lands this should check whether a short follow-up merge is needed.
+2. **The 5 "clean but silently wrong" `createApiModule` call sites the review flagged**
+   (`apps/api/discovery.e2e.test.ts`, `apps/api/graph-nodes.e2e.test.ts`,
+   `apps/api/autonomy-grants.e2e.test.ts`, `apps/api/approvals.e2e.test.ts`,
+   `apps/api/budgets.e2e.test.ts`) **ended up inside the merge commit itself** (`cc3dcfb`), not a
+   separate follow-up commit as the instructions asked for. Reason: 4 of the 5 are files master
+   added fresh in this merge (no prior version on either branch to diff against), and by the time
+   I noticed, `git add` had already folded the fix into the same staged tree as the conflict
+   resolutions; splitting it out after the fact meant `git reset`/history surgery, which felt like
+   a worse trade than just documenting it here. The merge commit's message does not mention these
+   5 files — this entry is that record.
+3. **VERSION / `package.json`'s `"version"` field left exactly as the merge auto-resolved them**
+   (`0.53.0` / `"0.35.0"`, both conflict-free). Did not bump further to mark the integration itself
+   — no instruction asked for it, and bumping to `0.54.0` would collide with the unrelated commit
+   that independently claimed that number on `master` after `104ab61`.
+4. **`gate-agent-scope`/`gate-red-first` deliberately not routed around.** Did not set
+   `HEALER_AUTHOR_IDENTITY=human` — ran `make ci` as the gate would see any agent-authored change
+   set. See the `make ci` result note for what that produced.
+5. Did not touch any of the explicitly deferred model conflicts (edge provenance for confirmed
+   edges, `confidence.ts` vs `edge-confidence.ts`, Phase 5 hooks, natural-key identity semantics,
+   `DeploymentUnitAttrValue.lastDeployedAt`) — left both sides exactly as each branch had them.
+
