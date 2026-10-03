@@ -42,7 +42,7 @@ function formatMismatch(row, replayed) {
  * `decision-replay.e2e.test.ts`; `decision-replay.test.ts` proves `formatMismatch` and the
  * ruleset-not-found path against a fake repository.
  * @param {import('@healer/domain-policy').ReadOnlyPolicyRulesetRepository} rulesets
- * @param {{ id: string, tenantId: string, decisionInput: unknown, rulesetVersion: number, outcome: string, matchedRuleKeys: readonly string[] }} row
+ * @param {{ id: string, tenantId: string, decisionInput: unknown, rulesetVersion: number, outcome: string, matchedRuleKeys: readonly string[], budgetState?: unknown }} row
  * @returns {Promise<string | null>} a violation message, or null when the replay agrees with history
  */
 export async function replayOne(rulesets, row) {
@@ -66,6 +66,9 @@ export async function replayOne(rulesets, row) {
       rulesetVersion: row.rulesetVersion,
       outcome: row.outcome,
       matchedRuleKeys: row.matchedRuleKeys,
+      // 002 T066: the escalation cap is bound from `budget_limit` at decision time and persisted
+      // in `budget_state`; a replay that omitted it would report every cap-denied decision.
+      ...(row.budgetState ? { budgetState: row.budgetState } : {}),
     });
     return identical ? null : formatMismatch(row, replayed);
   } catch (error) {
@@ -83,7 +86,31 @@ export async function replayOne(rulesets, row) {
  */
 export async function findReplayMismatches(prisma, sampleSize = DEFAULT_SAMPLE_SIZE) {
   const rulesets = new PrismaPolicyRulesetRepository(prisma);
+  const lapseIds = (
+    await prisma.$queryRaw`
+      SELECT l.id
+      FROM "policy"."policy_decision" l
+      WHERE l.outcome = 'deny'
+        AND l.reason_codes = ARRAY['APPROVAL_EXPIRED']
+        AND cardinality(l.matched_rule_keys) = 0
+        AND EXISTS (
+          SELECT 1
+          FROM "policy"."approval_request" ar
+          JOIN "policy"."policy_decision" o ON o.id = ar.decision_id AND o.tenant_id = ar.tenant_id
+          WHERE ar.state = 'expired'
+            AND ar.tenant_id = l.tenant_id
+            AND ar.workflow_run_id = l.workflow_run_id
+            AND o.invalidated_reason = 'approval_expired'
+            AND o.proposal_digest = l.proposal_digest)`
+  ).map((row) => row.id);
   const rows = await prisma.policyDecision.findMany({
+    // A real lapse (`ExpireApproval`, 002 T072) is *recorded*, not evaluated, and no ruleset can
+    // reproduce it from its input (the require-approval decision's own). It is exempt only if
+    // everything `ExpireApproval` writes is there: a `deny` with the one reason `APPROVAL_EXPIRED`
+    // and no matched rule, an `expired` approval request on the same run, and the original decision
+    // (same digest) invalidated as `approval_expired`. A row that merely *looks* like a lapse —
+    // forged, or left by a half-failed write — fails the join and is replayed (and flagged).
+    where: { id: { notIn: lapseIds } },
     take: sampleSize,
     orderBy: { evaluatedAt: 'desc' },
     select: {
@@ -93,6 +120,7 @@ export async function findReplayMismatches(prisma, sampleSize = DEFAULT_SAMPLE_S
       rulesetVersion: true,
       outcome: true,
       matchedRuleKeys: true,
+      budgetState: true,
     },
   });
 

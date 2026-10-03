@@ -95,6 +95,198 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.53.0 — 2026-10-03
+
+012 Phase 13: the author-identity resolver and the two agent gates (T084–T087). T088–T092 wait on the
+repository being under real CI with a GitHub App installed.
+
+- `scripts/gates/agent-identity.mjs`: author is an agent when the PR author **or** the triggering actor
+  is not a `User` on the GitHub API, or either cannot be resolved; outside CI an agent unless
+  `HEALER_AUTHOR_IDENTITY=human` (a declaration never counts in CI).
+- `gate-agent-scope`: for an agent-authored change set, fails on a protected path (the list is parsed from
+  the contract **at the base revision**, so a change cannot shrink it first), a deleted or renamed-away
+  test file, a removed or edited assertion line, or a test switched off with `skip`/`todo`.
+- `gate-red-first`: base revision in a temporary worktree, the change set's tests laid over it, only
+  those run; passes only if one fails. `[NB]` is read from the base's `tasks.md`, from the leading
+  markers only; the task comes from `TASK_ID`.
+- Both are in `make ci` after `gate-no-send`, no-ops for a human-authored change set. A local run needs
+  `HEALER_AUTHOR_IDENTITY=human`.
+- `scripts/lib/changed-files.mjs`: `resolveBaseRevision` is the one base resolution (the diff uses it too), and renames report both sides.
+- Known ceilings: a gate edited in the same change set runs as edited until CI runs gates from the base
+  revision (T089/T090); a push with no pull-request payload is agent-authored, which is harmless on the default branch itself (empty change set, nothing to gate); any failure on
+  the base counts as red (R-14), including a missing non-test support file.
+
+## 0.52.0 — 2026-10-03
+
+002 Phase 8 polish and the Phase-9 additions that needed nothing external.
+
+- `gate-ceiling` gains its FR-008a **diff half**: a change that raises a level in `ACTION_CEILING`
+  (or gives a level to a class that has none, `merge` being the one that matters) fails unless it
+  cites `// derivation[<class>]: <run-id>` resolving to a committed `docs/derivations/<run-id>.json`
+  whose digest matches its own content. Unresolvable means fail; a citation already present at the
+  base does not earn a second raise. Same gate, same harness — no second diffing mechanism.
+- `POST /autonomy/grants` for a `reversible_remediation` action returns `422 UNDO_NOT_ATTESTED`
+  rather than the generic `CEILING_EXCEEDED`; grant errors now carry `code` in the body.
+- `IssueStateChanged` consumer: unconsumed allows bound to a terminal `workflow_run` become
+  `invalidated_reason = 'run_terminal'`.
+- Measured against the plan: evaluation p95 0.03 ms (budget 20 ms); budget aggregate p95 18.7 ms at
+  10 000 agent runs (budget 50 ms). Policy coverage 98.55% lines / 95.95% functions against the 95%
+  floor.
+- Still open: Phase 5 (010's catalogue), T082, T084, T085, and the full quickstart run (T081).
+
+## 0.51.0 — 2026-10-03
+
+004 architecture-graph phases 4 and 5 (T036–T052): every edge says where it came from and how
+sure it is, and one model holds a monolith, microservices or serverless without a special case.
+Phase 3 (discovery and confirmation, T018–T035) is **not** part of this release — it is still on
+unmerged branches, so nothing here is called by a discovery run yet.
+
+- **Provenance merge (T036–T038).** The same edge from traces and from AST is one `graph_edge` with
+  both `edge_provenance` rows kept; strength and confidence are the maximum, read from the stored
+  ordinal, never derived at read time. The merge locks the edge row (`FOR UPDATE`) — the race is
+  proved with a held-open transaction polled through `pg_stat_activity`, and removing the lock fails
+  it on every trial. Human provenance classes cannot be passed to the merge (type-level).
+- **Derived confidence (T039).** From provenance class, the edge's aggregate observation volume and
+  recency against an explicit observation window, per-tenant configuration in the new
+  `confidence_config` table (migration `20261003070000`). A single observation is capped; an invalid
+  override throws instead of falling back.
+- **Continuous checks (T040).** `check:graph-provenance` and `check:edge-strength-max` (strength,
+  confidence, observation count, last-observed and class against the provenance rows), plus
+  `check:graph-structure` (illegal edge endpoints, `natural_key` collisions, dangling edges).
+- **Node reads (T041).** `GET /graph/nodes` and `/graph/nodes/{nodeId}` with class, strength,
+  confidence, the observation or named actor and the producing run; one RepeatableRead snapshot per
+  read; another tenant's node is a 404. `createApiModule` gained a trailing `graphReads` parameter.
+- **One model for any architecture (T042–T049, T051–T052).** Structural separations are edges
+  (`deploys`, `built_from`, `contains`, `implements`, `exposes`) validated by a fail-closed rule
+  table; the component vocabulary is declared once and pinned to the Prisma enums; no column or
+  result field can describe an architecture style. `GetSystemContext` returns components,
+  deployment units, repositories, characteristics and edges, identical in shape across the three
+  fixtures. An unmatched deployment unit becomes an `external` component; a `natural_key` shared
+  across repositories is surfaced as a collision, never merged.
+- **`gate-architecture-agnostic` (T050)** now fails on any architecture-style term outside
+  `packages/integrations/**` (path pattern), after review showed the first, branch-line version
+  missed wrapped conditions, aliases and lookup-table dispatch. It is textual: a style built by
+  concatenation or held in config is invisible to it.
+
+Found by review before merge: a lost update when the founding insert preceded the row lock (caught
+only by mutating the lock out); confidence that never rose with accumulated observations; a
+`validateEdge` that accepted unknown edge types; a gate that passed on code it could not see.
+
+Not built: Phases 6–9 (blast radius, drift, product graph, polish). Open decisions for Pavlo are
+items 3–6 under "Decisions waiting on Pavlo — 004" in `QUESTIONS.md`.
+
+## 0.50.0 — 2026-10-03
+
+**002 phases 6–7 — budgets and approvals** (T056–T076, T088). Built by two parallel implementers,
+each reviewed twice (code review and silent-failure hunt) and fixed before merge.
+
+- **Budgets (US4).** Consumption is derived from `agent_run.cost` and `workflow_run` elapsed time —
+  no stored counter, so the number policy enforces and the number support reports cannot disagree.
+  The ex-ante predicate `consumed + declaredMax <= limit` runs in the pure evaluator with the period
+  key, degradation step and escalation count as inputs. **Research R-11 was wrong**: the predicate
+  alone is unsafe under READ COMMITTED (17 of 20 concurrent charges passed a limit of 10 in the
+  proving test), so a charge is taken under a per-tenant advisory lock with a bounded wait (ADR 0015),
+  and an allowed step stays charged through its persisted `policy_decision` until a finished
+  `agent_run` references it or `releaseAbandonedCharges` invalidates it. Retried evaluations are
+  idempotent on a request key. Parked (awaiting) time does not count against the time budget.
+  `MarkDegradation` writes one `budget_degradation` evidence record per first advance;
+  `budget_degradation_mark` is only its idempotency key. `GET/PUT /budgets`, `GET /budgets/state`,
+  `check:budget-reconcile`. Migrations `20261003090000_budget_limit_bounds` (product bounds, T088)
+  and `20261003110000_budget_hardening`.
+- **Approvals (US5).** `RequestApproval` builds the summary from the stored decision only — every
+  free-string slot must match an identifier alphabet, so no customer text reaches the approver
+  (T071, tested with a real injection payload). `ExpireApproval`, `ResolveApproval` (calls
+  `checkAutonomyEpoch` at redemption, so approve-after-revoke is `STALE_AUTONOMY_EPOCH`, with the
+  sweep disabled too), one pending approval per run with the callback bound to the approval
+  (`20261003100000_approval_callback_binding`), resolve-versus-expire has exactly one winner under a
+  row lock. `GET /approvals`, `GET /approvals/{id}`, `POST /approvals/{id}/resolve`,
+  `check:stale-approvals`.
+- **Not built, un-ticked rather than overstated.** T058b (suspending the workflow on a budget
+  refusal) and T066b (the producer of the `escalating` state and the human hand-off) need consumers
+  owned by 006/008/012. Nothing in production schedules `expireDueApprovals`, the revocation sweep,
+  `releaseAbandonedCharges` or the live checks — the tenant-enumerator gap already tracked as C-90.
+  No production caller of `evaluateAndBind` exists yet, so every enforcement path here is reached
+  only from tests until 008/010 land.
+- `createApiModule` is now 15 parameters; `invalidated_reason` is one closed list
+  (`epoch_bump`, `approval_expired`, `approval_rejected`, `charge_abandoned`) per C-84.
+
+## 0.49.0 — 2026-10-02
+
+**QUESTIONS.md walkthrough with Pavlo**: every genuinely open item across 001, 002 and 004, one by
+one, explained and resolved or confirmed still blocked — `docs/decisions.md` C-72..C-90, with
+`QUESTIONS.md` itself tagged at each resolved item rather than rewritten. Two real fixes landed
+alongside the decisions:
+
+- `parseInstantLiteral` (`packages/domain/policy/src/domain/predicates/instant-literal.ts`): an
+  instant predicate literal (`evaluatedAt before '...'`) now requires an explicit UTC/offset
+  suffix at both publish-time validation and evaluation time, closing a timezone-dependent parsing
+  bug that could make the same rule evaluate differently depending on the server's timezone — a
+  literal FR-002 determinism violation, the same bug class already fixed once for `evaluatedAt`
+  itself.
+- `apps/api` now declares `@healer/domain-policy` as a real dependency (`package.json`) and
+  project reference (`tsconfig.json`) — it previously resolved only through pnpm's workspace
+  hoisting, a phantom dependency flagged during 012 phase 6's own rebase.
+- Two spec documents corrected to match already-shipped, tested code rather than the reverse:
+  `contracts/evaluation.md`/`openapi.yaml` now name `VALIDATION`, not the never-built
+  `RULESET_INVALID`; `data-model.md`'s `policy_decision` state diagram now shows a digest mismatch
+  staying `issued` and retriable, not transitioning to `invalidated`.
+- One prior prediction corrected on inspection, not assumed: Phase 4 (0.48.0) does **not** need an
+  `autonomy_epoch` column on `policy_decision` — revocation works by re-reading the live grant
+  table on every evaluation, never by comparing a stored epoch on the decision itself.
+
+Everything else resolved in this pass is a judgment call recorded in `decisions.md` with no code
+change required this round (a merge's fingerprint staying aliased to its survivor, a merge
+survivor recording what was merged into it, dropping the dead `removed` issue state, refusing to
+delete a merge survivor, widening the staleness sweep's definition of "progress", cited evidence
+staying detach-only, `cooldownBounds` to be baked into `decision_input` at evaluation time once
+Phase 5 builds it, `graph_edge` provenance gaining the same actor/observation columns
+`graph_node` already has) — tracked for whoever implements the feature it belongs to, not built
+speculatively now. A cross-cutting scheduler gap (nothing runs 001's staleness/retention sweeps,
+012's stale-runner sweep, or 002 Phase 4's revocation sweep) is elevated to its own tracked,
+prioritized item (C-90) instead of being deferred separately by each feature again.
+
+## 0.48.0 — 2026-10-01
+
+**002 policy-and-autonomy phase 4 (T034–T047)**: US2 — autonomy is granted in increments the
+customer controls, and the ceiling it is granted under is un-exceedable by construction.
+
+- The ceiling is enforced twice, independently (R-05): `GrantAutonomy` refuses a level above
+  `ACTION_CEILING` before the row is ever written (`422 CEILING_EXCEEDED`), and a new `BEFORE
+  INSERT OR UPDATE` trigger on `autonomy_grant` refuses it a second way for a row written around
+  the command entirely — not a plain `CHECK` constraint, since Postgres `CHECK` cannot reference
+  `policy_action`, which the ceiling depends on via `action_class`. `evaluate()`'s own clamp
+  (already built in phase 2) is the structural backstop proven even against the one documented
+  `healer.privileged_write` bypass. `reversible_remediation` earns no level at all today: no
+  attestation source exists yet (010's catalogue isn't built), so the trigger and `GrantAutonomy`
+  both read `hasTestedUndo` as `false`. `gate-ceiling` (static, no database) keeps `ceiling.ts`
+  and the trigger's literals from drifting apart; `check:ceiling` is the live-database
+  reconciliation counterpart.
+- `autonomy.level` is now resolved from real `autonomy_grant` rows, scoped by component,
+  environment and issue kind, and never trusted from the caller — the same move phase 3 made for
+  `action.actionClass`. The grant table is re-read on every evaluation, never cached across a
+  wait, which is what makes a revocation reach the very next guarded step with no push mechanism.
+- `autonomy_epoch` gained a write side: `RevokeAutonomy` bumps it in the same transaction as the
+  grant revocation. `checkAutonomyEpoch` instantiates the `STALE_AUTONOMY_EPOCH` error (reserved
+  since phase 1, unused until now) for phase 7's `ResolveApproval` to call at redemption.
+  `sweepRevokedApprovals` resolves stale pending approvals to `revoked` and invalidates the
+  decision they were issued for, atomically — the full approval lifecycle (`RequestApproval`/
+  `ResolveApproval`/`ExpireApproval`) stays phase 7; callback delivery is a port with no concrete
+  implementation yet, since no Prisma-backed callback delivery or sweep scheduler exists anywhere
+  in this repository (the same gap 001's staleness sweep already has, recorded there too).
+- `GET/POST /autonomy/grants`, `DELETE /autonomy/grants/{grantId}`, with full tenant-isolation
+  coverage. Found and fixed before merge: `AutonomyGrantsController` and the dry-run controller
+  needed each other's DI token, which made the two controller files circularly import each
+  other — invisible to `pnpm run typecheck`, and NestJS's bootstrap failure on a real cycle
+  crashes the whole worker process with a native stack trace rather than a catchable error, so
+  only an e2e test actually booting the app caught it.
+- Rebased onto master as 012 phase 6 (runner build/diagnostics/heartbeat) landed in parallel:
+  `createApiModule`'s two new required parameters (`runnerRegistrations`, `autonomyGrants`)
+  needed combining by hand across `main.ts`/`openapi.ts` and every e2e test file that boots the
+  real app — the same class of gap 012's own 0.47.0 entry already found and fixed once for a
+  stale call site invisible to `typecheck` (root-level `*.e2e.test.ts` files fall outside this
+  app's `tsconfig.json` `include` pattern); checked every call site by hand this time rather than
+  waiting for a full e2e run to find the one that was missed.
+
 ## 0.47.0 — 2026-10-01
 
 **012 phase 6 (T042, T045, T048–T051)**: the runner is a product we ship, and we debug it blind —

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { changedFilesSinceBase } from './changed-files.mjs';
+import { changedFilesSinceBase, resolveBaseRevision } from './changed-files.mjs';
 
 /**
  * Isolated fixture repos rather than assertions against this repository's own transient git
@@ -64,5 +64,23 @@ describe('changedFilesSinceBase (012 T076/T078 shared base-diff, R-09, R-10)', (
     dir = initRepo();
     git(dir, ['branch', '-m', 'trunk']); // neither master nor main, and no origin remote
     expect(() => changedFilesSinceBase(dir)).toThrow(/no base ref resolved/);
+  });
+
+  it('reports both sides of a rename, so a move out of a watched path is not invisible (T085)', () => {
+    dir = initRepo();
+    git(dir, ['mv', 'a.txt', 'moved.txt']);
+    expect(changedFilesSinceBase(dir).sort()).toEqual(['a.txt', 'moved.txt']);
+  });
+
+  it('resolves the base revision to the merge-base commit, and fails closed without one', () => {
+    dir = initRepo();
+    const base = git(dir, ['rev-parse', 'HEAD']).trim();
+    git(dir, ['checkout', '-q', '-b', 'feature']);
+    writeFileSync(join(dir, 'c.txt'), 'x\n');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-q', '-m', 'c']);
+    expect(resolveBaseRevision(dir)).toBe(base);
+    git(dir, ['branch', '-m', 'master', 'trunk']);
+    expect(() => resolveBaseRevision(dir)).toThrow(/no base ref resolved/);
   });
 });

@@ -10,11 +10,19 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
+  AutonomyGrantRepository,
+  BudgetLimitRepository,
+  BudgetRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
-import type { DiscoveryRepository, DraftReviewRepository } from '@healer/domain-architecture';
+import type {
+  DiscoveryRepository,
+  DraftReviewRepository,
+  GraphReadRepository,
+} from '@healer/domain-architecture';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
 
@@ -69,6 +77,35 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
 };
+const noopAutonomyGrants: AutonomyGrantRepository = {
+  findActive: () => Promise.resolve([]),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  create: () => Promise.reject(new Error('not implemented in this test')),
+  revoke: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopBudgets: BudgetRepository = {
+  resolve: () => Promise.reject(new Error('not implemented in this test')),
+  bindCharged: () => Promise.reject(new Error('not implemented in this test')),
+  markDegradation: () => Promise.reject(new Error('not implemented in this test')),
+  releaseAbandonedCharges: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopBudgetLimits: BudgetLimitRepository = {
+  list: () => Promise.resolve([]),
+  put: () => Promise.reject(new Error('not implemented in this test')),
+};
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented in this test')),
+  resolve: () => Promise.reject(new Error('not implemented in this test')),
+  expire: () => Promise.reject(new Error('not implemented in this test')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
+const noopGraphReads: GraphReadRepository = {
+  listNodes: () => Promise.reject(new Error('not implemented in this test')),
+  getNode: () => Promise.reject(new Error('not implemented in this test')),
+};
 const noopDiscovery: DiscoveryRepository = {
   createRun: () => Promise.reject(new Error('not implemented in this test')),
   loadConfirmedSnapshot: () => Promise.reject(new Error('not implemented in this test')),
@@ -113,6 +150,11 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopPolicyDecisions,
       noopPolicyActions,
       noopRunnerRegistrations,
+      noopAutonomyGrants,
+      noopBudgets,
+      noopBudgetLimits,
+      noopApprovals,
+      noopGraphReads,
       noopDiscovery,
       noopDraftReview,
     );

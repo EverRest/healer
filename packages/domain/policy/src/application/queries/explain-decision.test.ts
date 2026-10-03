@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { TenantContext } from '@healer/shared';
 import type { ActionClass } from '../../domain/action-class.js';
 import type {
+  AutonomyGrant,
+  ReadOnlyAutonomyGrantRepository,
+} from '../../domain/autonomy-grant-repository.js';
+import type {
   PolicyAction,
   PolicyActionRepository,
 } from '../../domain/policy-action-repository.js';
@@ -9,6 +13,10 @@ import type {
   ReadOnlyPolicyRulesetRepository,
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
+import {
+  FakeReadOnlyBudgetRepository,
+  roomyBudget,
+} from '../../domain/test-support/fake-budget-repository.js';
 import { buildDecisionInput } from '../../domain/test-support/fixtures.js';
 import {
   NoPublishedRulesetError,
@@ -98,6 +106,23 @@ class FakeActionRepo implements PolicyActionRepository {
   }
 }
 
+/** Resolves to level 2 for `change.open_pull_request`, matching `buildDecisionInput`'s own
+ *  fixture default `autonomy: { level: 2 }` (T039 made `autonomyGrants` a required dependency,
+ *  the same move batch 9 made for `actions`). */
+class FakeAutonomyGrantRepo implements ReadOnlyAutonomyGrantRepository {
+  async findActive(): Promise<readonly AutonomyGrant[]> {
+    return [
+      {
+        id: 'grant-1',
+        actionKey: 'change.open_pull_request',
+        level: 2,
+        grantedBy: 'pavlo',
+        grantedAt: new Date('2026-01-01T00:00:00Z'),
+      },
+    ];
+  }
+}
+
 describe('ExplainDecision — structural read-only guarantee (T026, R-08, quickstart 32)', () => {
   it('ReadOnlyPolicyRulesetRepository, one of the two types ExplainDecisionRepos names, has no write-shaped method', () => {
     const repo = new ReadOnlyFakeRulesetRepo(published());
@@ -121,6 +146,8 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
     const repos: ExplainDecisionRepos = {
       rulesets: new ReadOnlyFakeRulesetRepo(published()),
       actions: new FakeActionRepo(),
+      autonomyGrants: new FakeAutonomyGrantRepo(),
+      budgets: new FakeReadOnlyBudgetRepository(),
     };
     // @ts-expect-error — `rulesets` is `ReadOnlyPolicyRulesetRepository`; `publish` is not a
     // member of that type. If this stops being a type error (e.g. someone widens
@@ -132,10 +159,77 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
   });
 });
 
+describe('explainDecision resolves the same binding as the enforcing path (R-08, quickstart 31)', () => {
+  const exhaustedIssue = roomyBudget({
+    scopes: [
+      {
+        ...roomyBudget().scopes[0]!,
+        scopeType: 'issue',
+        scopeId: 'issue-1',
+        period: 'issue',
+        periodKey: 'issue',
+        spendConsumed: 2,
+        spendLimit: 2,
+      },
+    ],
+  });
+  const repos = (budgets: FakeReadOnlyBudgetRepository) => ({
+    rulesets: new ReadOnlyFakeRulesetRepo(published()),
+    actions: new FakeActionRepo(),
+    autonomyGrants: new FakeAutonomyGrantRepo(),
+    budgets,
+  });
+
+  it('names the issue and the run to the budget resolver, at the input instant', async () => {
+    const budgets = new FakeReadOnlyBudgetRepository(exhaustedIssue);
+    const input = buildDecisionInput();
+    await explainDecision(repos(budgets), CONTEXT, {
+      decisionInput: input,
+      binding: { issueId: 'issue-1', workflowRunId: 'run-1' },
+    });
+    expect(budgets.queries[0]).toMatchObject({
+      issueId: 'issue-1',
+      workflowRunId: 'run-1',
+      asOf: input.evaluatedAt,
+    });
+    expect(budgets.queries[0]?.enforcing).toBeUndefined(); // a dry run replays history
+  });
+
+  it('an over-budget issue is DENY on the dry run, as it is when enforcing', async () => {
+    const result = await explainDecision(
+      repos(new FakeReadOnlyBudgetRepository(exhaustedIssue)),
+      CONTEXT,
+      { decisionInput: buildDecisionInput(), binding: { issueId: 'issue-1' } },
+    );
+    expect(result.decision.outcome).toBe('deny');
+    expect(result.decision.reasonCodes).toContain('BUDGET_EXHAUSTED');
+    expect(result.trace.budgetState).toMatchObject({ consumed: 2, limit: 2 });
+  });
+
+  it("the caller-supplied budget figures are ignored — only the declared maximum is the step's own", async () => {
+    const result = await explainDecision(
+      repos(new FakeReadOnlyBudgetRepository(exhaustedIssue)),
+      CONTEXT,
+      {
+        decisionInput: buildDecisionInput({
+          budget: { consumed: 0, limit: 1_000_000, declaredMaxCost: 1, degradationStep: 0 },
+        }),
+        binding: { issueId: 'issue-1' },
+      },
+    );
+    expect(result.trace.budgetState).toMatchObject({ consumed: 2, limit: 2, declaredMaxCost: 1 });
+  });
+});
+
 describe('explainDecision (T024)', () => {
   it('returns the decision and trace for the current published ruleset, persisting nothing observable to this handler', async () => {
     const result = await explainDecision(
-      { rulesets: new ReadOnlyFakeRulesetRepo(published()), actions: new FakeActionRepo() },
+      {
+        rulesets: new ReadOnlyFakeRulesetRepo(published()),
+        actions: new FakeActionRepo(),
+        autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeReadOnlyBudgetRepository(),
+      },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
     );
@@ -147,7 +241,12 @@ describe('explainDecision (T024)', () => {
   it('refuses when no ruleset has ever been published for the tenant', async () => {
     await expect(
       explainDecision(
-        { rulesets: new ReadOnlyFakeRulesetRepo(null), actions: new FakeActionRepo() },
+        {
+          rulesets: new ReadOnlyFakeRulesetRepo(null),
+          actions: new FakeActionRepo(),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeReadOnlyBudgetRepository(),
+        },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
       ),
@@ -173,7 +272,12 @@ describe('explainDecision (T024)', () => {
     });
     const actions = new FakeActionRepo(new Map([['merge.something', 'merge']]));
     const result = await explainDecision(
-      { rulesets: new ReadOnlyFakeRulesetRepo(rulesetMatchingRealClass), actions },
+      {
+        rulesets: new ReadOnlyFakeRulesetRepo(rulesetMatchingRealClass),
+        actions,
+        autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeReadOnlyBudgetRepository(),
+      },
       CONTEXT,
       {
         decisionInput: buildDecisionInput({
@@ -190,6 +294,8 @@ describe('explainDecision (T024)', () => {
         {
           rulesets: new ReadOnlyFakeRulesetRepo(published()),
           actions: new FakeActionRepo(new Map()),
+          autonomyGrants: new FakeAutonomyGrantRepo(),
+          budgets: new FakeReadOnlyBudgetRepository(),
         },
         CONTEXT,
         {

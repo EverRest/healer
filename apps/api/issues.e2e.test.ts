@@ -19,11 +19,16 @@ import {
   type NewEvidence,
 } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
+  PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer/shared';
+import { PrismaGraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantIsolated, assertTenantIsolatedList } from '../../test/tenant-isolation.js';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
@@ -140,6 +145,11 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
+      new PrismaAutonomyGrantRepository(prisma),
+      new PrismaBudgetRepository(prisma),
+      new PrismaBudgetLimitRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
+      new PrismaGraphReadRepository(prisma),
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
     );

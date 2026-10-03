@@ -14,6 +14,10 @@ import {
 } from '@healer/domain-issues';
 import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
+  PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
@@ -21,6 +25,7 @@ import {
 import {
   PrismaDiscoveryRepository,
   PrismaDraftReviewRepository,
+  PrismaGraphReadRepository,
 } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
 import {
@@ -153,6 +158,11 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
       new PrismaPolicyDecisionRepository(prisma),
       new PrismaPolicyActionRepository(prisma),
       new PrismaRunnerRegistrationRepository(prisma),
+      new PrismaAutonomyGrantRepository(prisma),
+      new PrismaBudgetRepository(prisma),
+      new PrismaBudgetLimitRepository(prisma),
+      new PrismaApprovalLifecycleRepository(prisma),
+      new PrismaGraphReadRepository(prisma),
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
     );

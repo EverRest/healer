@@ -10,6 +10,10 @@ import type {
 } from '@healer/domain-issues';
 import type { EvidenceGraphRepository, EvidenceRepository } from '@healer/domain-evidence';
 import type {
+  ApprovalLifecycleRepository,
+  AutonomyGrantRepository,
+  BudgetLimitRepository,
+  BudgetRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
   PolicyRulesetRepository,
@@ -18,6 +22,7 @@ import {
   GRAPH_CONFIRM_CAPABILITY,
   type DiscoveryRepository,
   type DraftReviewRepository,
+  type GraphReadRepository,
 } from '@healer/domain-architecture';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { configureApiPrefix, createApiModule } from './main.js';
@@ -80,6 +85,36 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented for contract generation')),
   findByName: () => Promise.resolve(null),
 };
+const noopAutonomyGrants: AutonomyGrantRepository = {
+  findActive: () => Promise.resolve([]),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  create: () => Promise.reject(new Error('not implemented for contract generation')),
+  revoke: () => Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopBudgets: BudgetRepository = {
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+  bindCharged: () => Promise.reject(new Error('not implemented for contract generation')),
+  markDegradation: () => Promise.reject(new Error('not implemented for contract generation')),
+  releaseAbandonedCharges: () =>
+    Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopBudgetLimits: BudgetLimitRepository = {
+  list: () => Promise.resolve([]),
+  put: () => Promise.reject(new Error('not implemented for contract generation')),
+};
+const noopApprovals: ApprovalLifecycleRepository = {
+  request: () => Promise.reject(new Error('not implemented for contract generation')),
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+  expire: () => Promise.reject(new Error('not implemented for contract generation')),
+  findById: () => Promise.resolve(null),
+  list: () => Promise.resolve([]),
+  findDue: () => Promise.resolve([]),
+};
+const noopGraphReads: GraphReadRepository = {
+  listNodes: () => Promise.reject(new Error('not implemented for contract generation')),
+  getNode: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 const noopDiscovery: DiscoveryRepository = {
   createRun: () => Promise.reject(new Error('not implemented for contract generation')),
   loadConfirmedSnapshot: () => Promise.reject(new Error('not implemented for contract generation')),
@@ -126,6 +161,11 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopPolicyDecisions,
     noopPolicyActions,
     noopRunnerRegistrations,
+    noopAutonomyGrants,
+    noopBudgets,
+    noopBudgetLimits,
+    noopApprovals,
+    noopGraphReads,
     noopDiscovery,
     noopDraftReview,
   );

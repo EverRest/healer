@@ -15,6 +15,7 @@ import {
   type SignalQueue,
   type TimelineRepository,
 } from '@healer/domain-issues';
+import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import {
   PrismaEvidenceGraphRepository,
   PrismaEvidenceRepository,
@@ -22,9 +23,17 @@ import {
   type EvidenceRepository,
 } from '@healer/domain-evidence';
 import {
+  PrismaApprovalLifecycleRepository,
+  PrismaAutonomyGrantRepository,
+  PrismaBudgetLimitRepository,
+  PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type ApprovalLifecycleRepository,
+  type AutonomyGrantRepository,
+  type BudgetLimitRepository,
+  type BudgetRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
@@ -62,9 +71,23 @@ import {
   POLICY_ACTION_REPOSITORY,
   PolicyEvaluationController,
 } from './policy/policy-evaluation.controller.js';
+import { GRAPH_READ_REPOSITORY, GraphNodesController } from './graph/graph-nodes.controller.js';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
+import {
+  AUTONOMY_GRANT_REPOSITORY,
+  AutonomyGrantsController,
+} from './policy/autonomy-grants.controller.js';
+import {
+  BUDGET_LIMIT_REPOSITORY,
+  BUDGET_REPOSITORY,
+  BudgetsController,
+} from './policy/budgets.controller.js';
+import {
+  APPROVAL_LIFECYCLE_REPOSITORY,
+  ApprovalsController,
+} from './policy/approvals.controller.js';
 import {
   DISCOVERY_REPOSITORY,
   DiscoveryRunsController,
@@ -120,6 +143,11 @@ export function createApiModule(
   policyDecisions: PolicyDecisionRepository,
   policyActions: PolicyActionRepository,
   runnerRegistrations: RunnerRegistrationRepository,
+  autonomyGrants: AutonomyGrantRepository,
+  budgets: BudgetRepository,
+  budgetLimits: BudgetLimitRepository,
+  approvals: ApprovalLifecycleRepository,
+  graphReads: GraphReadRepository,
   discovery: DiscoveryRepository,
   draftReview: DraftReviewRepository,
 ): Type<unknown> {
@@ -132,6 +160,10 @@ export function createApiModule(
       PolicyDecisionsController,
       PolicyEvaluationController,
       RunnersController,
+      AutonomyGrantsController,
+      BudgetsController,
+      ApprovalsController,
+      GraphNodesController,
       DiscoveryRunsController,
       DiscoveryDraftsController,
     ],
@@ -148,6 +180,11 @@ export function createApiModule(
       { provide: POLICY_DECISION_REPOSITORY, useValue: policyDecisions },
       { provide: POLICY_ACTION_REPOSITORY, useValue: policyActions },
       { provide: RUNNER_REGISTRATION_REPOSITORY, useValue: runnerRegistrations },
+      { provide: AUTONOMY_GRANT_REPOSITORY, useValue: autonomyGrants },
+      { provide: BUDGET_REPOSITORY, useValue: budgets },
+      { provide: BUDGET_LIMIT_REPOSITORY, useValue: budgetLimits },
+      { provide: APPROVAL_LIFECYCLE_REPOSITORY, useValue: approvals },
+      { provide: GRAPH_READ_REPOSITORY, useValue: graphReads },
       { provide: DISCOVERY_REPOSITORY, useValue: discovery },
       { provide: DRAFT_REVIEW_REPOSITORY, useValue: draftReview },
     ],
@@ -180,6 +217,11 @@ export async function bootstrap(): Promise<void> {
     new PrismaPolicyDecisionRepository(prisma),
     new PrismaPolicyActionRepository(prisma),
     new PrismaRunnerRegistrationRepository(prisma),
+    new PrismaAutonomyGrantRepository(prisma),
+    new PrismaBudgetRepository(prisma, { log: logger }),
+    new PrismaBudgetLimitRepository(prisma),
+    new PrismaApprovalLifecycleRepository(prisma),
+    new PrismaGraphReadRepository(prisma),
     new PrismaDiscoveryRepository(prisma),
     new PrismaDraftReviewRepository(prisma),
   );

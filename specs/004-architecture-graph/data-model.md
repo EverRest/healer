@@ -69,10 +69,22 @@ Indexes: `(tenant_id, from_node_id, valid_from_version, valid_to_version)` and t
 Every contributing observation for an edge, so a merged edge stays inspectable (FR-008).
 
 `id`, `tenant_id`, `edge_id`, `provenance`, `strength`, `confidence`, `observation_ref` (`evidence.id`),
-`adapter_key`, `adapter_version`, `discovery_run_id`, `recorded_at`.
+`adapter_key`, `adapter_version`, `discovery_run_id`, `observation_count` (what this observation contributed), `last_observed_at`, `recorded_at`.
+The edge's `observation_count` is the SUM and its `last_observed_at` the MAX over these rows, and its `provenance` class is the strongest row's (ties: earliest `recorded_at`, then `id`) — all three checked by `check:edge-strength-max`.
 
 The denormalised `strength` and `confidence` on `graph_edge` are the maximum over these rows;
 keeping them on the edge is what lets the traversal stay a single self-join.
+
+Unique `(tenant_id, edge_id, observation_ref)`: an observation is recorded at most once per edge, so a
+job that runs twice cannot double-count `graph_edge.observation_count` (004 T038). The merge path
+locks the edge row (`SELECT ... FOR UPDATE`) before inserting, because the trigger that maintains the
+maximum computes it from a statement snapshot and two unserialised writers would lower the edge.
+There is no `actor_ref` and no validity range here: human classes never enter through this table.
+
+### architecture.confidence_config
+
+`tenant_id` (PK), `config` jsonb (only the overridden R-15 constants), `updated_at`. A tenant with no
+row uses the defaults in `domain/edge-confidence.ts`. Read at write time only (004 T039).
 
 ## Kind attributes
 

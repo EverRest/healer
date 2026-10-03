@@ -33,6 +33,9 @@ export interface NewRecordedDecision {
   readonly targetRef?: string;
   readonly fingerprint?: string;
   readonly binding: DecisionBinding;
+  /** Set for a decision that charges (declares a cost): the digest of the caller's request with
+   *  the resolved fields and the instant removed — the idempotency key of the charge (T060). */
+  readonly requestKey?: string;
 }
 
 export interface ConsumeDecisionInput {

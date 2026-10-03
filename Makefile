@@ -8,8 +8,8 @@
 # parallel make, but a single recipe's command lines always run in sequence.
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
-	contracts-check gate-data-model gate-isolation gate-undo gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-coverage-completeness check-confirmation-actors check-graph-fact-coverage runner-contract-test runner-compat-test runner-build runner-diagnostics
+	contracts-check gate-data-model gate-isolation gate-undo gate-ceiling gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
+	gate-agent-scope gate-red-first gate-coverage-completeness check-confirmation-actors check-graph-fact-coverage runner-contract-test runner-compat-test runner-build runner-diagnostics
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -42,12 +42,15 @@ ci: ## The full gate set, in contract order, failing at the first failure
 	$(MAKE) gate-data-model
 	$(MAKE) gate-isolation
 	$(MAKE) gate-undo
+	$(MAKE) gate-ceiling
 	$(MAKE) gate-evidence
 	$(MAKE) gate-architecture-agnostic
 	$(MAKE) gate-graph-confirm-capability
 	$(MAKE) gate-no-send
 	$(MAKE) check-confirmation-actors
 	$(MAKE) check-graph-fact-coverage
+	$(MAKE) gate-agent-scope
+	$(MAKE) gate-red-first
 
 secret-scan: ## No secret material and no committed environment file (FR-008, FR-042)
 	pnpm run secret-scan
@@ -91,6 +94,9 @@ gate-isolation: ## Every HTTP endpoint has a tenant-isolation test (FR-013)
 gate-undo: ## Every reversible-action catalogue entry has a passing undo test (FR-014)
 	pnpm run gate-undo
 
+gate-ceiling: ## ceiling.ts and the autonomy_grant DB trigger agree on the ceiling per action class (002 SC-004, C-18)
+	pnpm run gate-ceiling
+
 gate-evidence: ## No persisted conclusion type has a nullable evidence reference (001 FR-009)
 	pnpm run gate-evidence
 
@@ -108,6 +114,15 @@ check-confirmation-actors: ## 0 graph confirmations by a non-human actor (004 T0
 
 check-graph-fact-coverage: ## Every graph observation_ref resolves to a real graph_fact evidence row (004 T035, FR-027)
 	pnpm run check:graph-fact-coverage
+
+# Both are no-ops for a human-authored change set. Outside CI the author is presumed an agent
+# (FR-054, R-13) until the developer says otherwise: HEALER_AUTHOR_IDENTITY=human. red-first reads
+# the task from TASK_ID to honour an [NB] marker.
+gate-agent-scope: ## An agent-authored change set touches no protected path and no existing test assertion (FR-055)
+	pnpm run gate-agent-scope
+
+gate-red-first: ## An agent-authored change set has a test that fails on the base revision (FR-056)
+	pnpm run gate-red-first
 
 # Runner targets (012 T049/T050, contracts/make-targets.md's "Runner targets" table). Not
 # composed into `ci` above: the contract's own `ci` composition list omits them, and

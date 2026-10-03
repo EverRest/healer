@@ -20,7 +20,7 @@ import type { ReasonCode } from '../domain/reason-code.js';
 
 /** `record` publishes `PolicyDecisionRecorded` — a missing correlation scope is a caller error,
  *  the same rule every other outbox-publishing write in this package follows. */
-function assertCorrelated(): void {
+export function assertCorrelated(): void {
   if (currentCorrelationId() === undefined) {
     throw new Error(
       'EvaluateAndBind publishes PolicyDecisionRecorded: call it inside a correlated scope (withCorrelation)',
@@ -50,6 +50,79 @@ function toDomain(row: DecisionRow): RecordedDecision {
     ceilingApplied: row.ceilingApplied,
     evaluatedAt: row.evaluatedAt,
   };
+}
+
+/** The insert plus its outbox event, inside the caller's transaction — what `record` does, and what
+ *  `PrismaBudgetRepository.bindCharged` does under its serialization lock so the charge and the
+ *  decision that declares it commit together (T060). Callers `assertCorrelated()` first. */
+export async function recordDecisionInTx(
+  tx: Prisma.TransactionClient,
+  where: TenantScoped<NewRecordedDecision>,
+): Promise<RecordedDecision> {
+  const { tenantId } = where;
+  const created = await tx.policyDecision.create({
+    data: {
+      id: where.id,
+      tenantId,
+      issueId: where.binding.issueId ?? null,
+      workflowRunId: where.binding.workflowRunId ?? null,
+      workflowState: where.binding.workflowState ?? null,
+      actionKey: where.actionKey,
+      targetRef: where.targetRef ?? null,
+      fingerprint: where.fingerprint ?? null,
+      proposalDigest: where.proposalDigest,
+      decisionInput: where.decisionInput as unknown as Prisma.InputJsonValue,
+      rulesetVersion: where.decision.rulesetVersion,
+      matchedRuleKeys: [...where.decision.matchedRuleKeys],
+      outcome: where.decision.outcome,
+      reasonCodes: [...where.decision.reasonCodes],
+      ceilingApplied: where.decision.ceilingApplied,
+      budgetState: where.budgetState as unknown as Prisma.InputJsonValue,
+      evaluatedAt: where.decision.evaluatedAt,
+      requestKey: where.requestKey ?? null,
+    },
+  });
+  await enqueue(
+    new PrismaOutboxTransaction(tx),
+    policyDecisionRecordedEvent(tenantId, {
+      decisionId: where.id,
+      actionKey: where.actionKey,
+      outcome: where.decision.outcome,
+      rulesetVersion: where.decision.rulesetVersion,
+      reasonCodes: where.decision.reasonCodes,
+      ...(where.binding.issueId !== undefined ? { issueId: where.binding.issueId } : {}),
+    }),
+  );
+  return toDomain(created);
+}
+
+/** The live (not invalidated) allowed decision already minted for this charged step, if any — what
+ *  makes `EvaluateAndBind` idempotent for a step that declares a cost (T060). Only a decision
+ *  bound to a run *and* a state with a request key can be matched; anything else is a new
+ *  request. The partial unique index in migration 20261003110000 backstops this lookup. */
+export async function findLiveChargedDecision(
+  tx: Prisma.TransactionClient,
+  where: TenantScoped<NewRecordedDecision>,
+): Promise<RecordedDecision | null> {
+  const { workflowRunId, workflowState } = where.binding;
+  if (
+    where.requestKey === undefined ||
+    workflowRunId === undefined ||
+    workflowState === undefined
+  ) {
+    return null;
+  }
+  const row = await tx.policyDecision.findFirst({
+    where: {
+      tenantId: where.tenantId,
+      workflowRunId,
+      workflowState,
+      requestKey: where.requestKey,
+      outcome: 'allow',
+      invalidatedReason: null,
+    },
+  });
+  return row === null ? null : toDomain(row);
 }
 
 /** Every column `findById`/`list` read back (data-model.md `policy.policy_decision`) — a
@@ -132,43 +205,7 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
 
   async record(where: TenantScoped<NewRecordedDecision>): Promise<RecordedDecision> {
     assertCorrelated();
-    const { tenantId } = where;
-    const event = policyDecisionRecordedEvent(tenantId, {
-      decisionId: where.id,
-      actionKey: where.actionKey,
-      outcome: where.decision.outcome,
-      rulesetVersion: where.decision.rulesetVersion,
-      reasonCodes: where.decision.reasonCodes,
-      ...(where.binding.issueId !== undefined ? { issueId: where.binding.issueId } : {}),
-    });
-
-    const row = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.policyDecision.create({
-        data: {
-          id: where.id,
-          tenantId,
-          issueId: where.binding.issueId ?? null,
-          workflowRunId: where.binding.workflowRunId ?? null,
-          workflowState: where.binding.workflowState ?? null,
-          actionKey: where.actionKey,
-          targetRef: where.targetRef ?? null,
-          fingerprint: where.fingerprint ?? null,
-          proposalDigest: where.proposalDigest,
-          decisionInput: where.decisionInput as unknown as Prisma.InputJsonValue,
-          rulesetVersion: where.decision.rulesetVersion,
-          matchedRuleKeys: [...where.decision.matchedRuleKeys],
-          outcome: where.decision.outcome,
-          reasonCodes: [...where.decision.reasonCodes],
-          ceilingApplied: where.decision.ceilingApplied,
-          budgetState: where.budgetState as unknown as Prisma.InputJsonValue,
-          evaluatedAt: where.decision.evaluatedAt,
-        },
-      });
-      await enqueue(new PrismaOutboxTransaction(tx), event);
-      return created;
-    });
-
-    return toDomain(row);
+    return this.prisma.$transaction((tx) => recordDecisionInTx(tx, where));
   }
 
   async consume(where: TenantScoped<ConsumeDecisionInput>): Promise<void> {
@@ -192,6 +229,19 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
         data: { consumedAt: new Date() },
       });
     });
+  }
+
+  /** T077: unconsumed allows for the issue whose `workflow_run` is terminal. Only
+   *  `invalidated_reason` changes, which the append-only trigger permits from null. */
+  async invalidateForTerminalRuns(where: TenantScoped<{ issueId: string }>): Promise<number> {
+    return this.prisma.$executeRaw`
+      UPDATE "policy"."policy_decision" pd
+      SET invalidated_reason = 'run_terminal'
+      WHERE pd.tenant_id = ${where.tenantId}::uuid AND pd.issue_id = ${where.issueId}::uuid
+        AND pd.outcome = 'allow' AND pd.consumed_at IS NULL AND pd.invalidated_reason IS NULL
+        AND EXISTS (SELECT 1 FROM "workflow"."workflow_run" wr
+                    WHERE wr.tenant_id = pd.tenant_id AND wr.id = pd.workflow_run_id
+                      AND wr.terminal_state IS NOT NULL)`;
   }
 
   async findById(where: TenantScoped<{ id: string }>): Promise<StoredDecision | null> {

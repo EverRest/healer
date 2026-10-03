@@ -39,13 +39,20 @@ const HUMAN_AUTHORED_STRENGTH = 65;
 const FIXTURE_CONFIDENCE = 100;
 const FIXTURE_ACTOR = 'fixture';
 
-const NODE_LAYER = { component: 'code', repository: 'code', deployment_unit: 'runtime' };
+const NODE_LAYER = {
+  component: 'code',
+  repository: 'code',
+  endpoint: 'code',
+  deployment_unit: 'runtime',
+};
 const EDGE_LAYER = {
   contains: 'code',
   built_from: 'code',
   depends_on: 'code',
+  implements: 'code',
   deploys: 'runtime',
   calls: 'runtime',
+  exposes: 'runtime',
 };
 
 async function createNode(prisma, tenantId, spec) {
@@ -95,6 +102,16 @@ async function createNode(prisma, tenantId, spec) {
         vcs: spec.vcs,
         projectRef: spec.projectRef,
         defaultBranch: spec.defaultBranch,
+      },
+    });
+  } else if (spec.nodeKind === 'endpoint') {
+    await prisma.endpointAttr.create({
+      data: {
+        nodeId: id,
+        tenantId,
+        protocol: spec.protocol,
+        method: spec.method ?? null,
+        pathTemplate: spec.pathTemplate ?? null,
       },
     });
   }
@@ -155,6 +172,7 @@ async function loadFixture(prisma, fixture) {
   await prisma.componentAttr.deleteMany({ where: { tenantId } });
   await prisma.deploymentUnitAttr.deleteMany({ where: { tenantId } });
   await prisma.repositoryAttr.deleteMany({ where: { tenantId } });
+  await prisma.endpointAttr.deleteMany({ where: { tenantId } });
   await prisma.graphNode.deleteMany({ where: { tenantId } });
   await prisma.graphVersion.deleteMany({ where: { tenantId } });
 
@@ -189,7 +207,7 @@ export function monolithFixture() {
         nodeKind: 'component',
         name: 'api',
         componentType: 'service',
-        characteristics: ['user-facing'],
+        characteristics: ['user_facing'],
       },
       {
         nodeKind: 'component',
@@ -201,7 +219,7 @@ export function monolithFixture() {
         nodeKind: 'component',
         name: 'frontend',
         componentType: 'frontend',
-        characteristics: ['user-facing'],
+        characteristics: ['user_facing'],
       },
       {
         nodeKind: 'deployment_unit',
@@ -217,6 +235,13 @@ export function monolithFixture() {
         projectRef: 'design-partner/monorepo',
         defaultBranch: 'main',
       },
+      {
+        nodeKind: 'endpoint',
+        name: 'api-route',
+        protocol: 'http',
+        method: 'GET',
+        pathTemplate: '/api',
+      },
     ],
     edges: [
       { from: 'api', to: 'worker', edgeType: 'contains' },
@@ -227,6 +252,8 @@ export function monolithFixture() {
       { from: 'api', to: 'monorepo', edgeType: 'built_from' },
       { from: 'worker', to: 'monorepo', edgeType: 'built_from' },
       { from: 'frontend', to: 'monorepo', edgeType: 'built_from' },
+      { from: 'api-route', to: 'api', edgeType: 'implements' },
+      { from: 'monolith-app', to: 'api-route', edgeType: 'exposes' },
     ],
   };
 }
@@ -290,6 +317,13 @@ export function microservicesFixture() {
         projectRef: 'design-partner/shipping',
         defaultBranch: 'main',
       },
+      {
+        nodeKind: 'endpoint',
+        name: 'orders-route',
+        protocol: 'http',
+        method: 'GET',
+        pathTemplate: '/orders',
+      },
     ],
     edges: [
       { from: 'orders', to: 'orders-du', edgeType: 'deploys' },
@@ -301,6 +335,8 @@ export function microservicesFixture() {
       { from: 'shipping', to: 'shipping-repo', edgeType: 'built_from' },
       { from: 'orders', to: 'payments', edgeType: 'calls' },
       { from: 'orders', to: 'shipping', edgeType: 'depends_on' },
+      { from: 'orders-route', to: 'orders', edgeType: 'implements' },
+      { from: 'orders-du', to: 'orders-route', edgeType: 'exposes' },
     ],
   };
 }
@@ -316,13 +352,13 @@ export function serverlessFixture() {
         nodeKind: 'component',
         name: 'send-email-fn',
         componentType: 'service',
-        characteristics: ['event-driven'],
+        characteristics: ['event_driven'],
       },
       {
         nodeKind: 'component',
         name: 'resize-image-fn',
         componentType: 'service',
-        characteristics: ['event-driven'],
+        characteristics: ['event_driven'],
       },
       {
         nodeKind: 'deployment_unit',
@@ -352,6 +388,13 @@ export function serverlessFixture() {
         projectRef: 'design-partner/serverless-workloads',
         defaultBranch: 'main',
       },
+      {
+        nodeKind: 'endpoint',
+        name: 'checkout-route',
+        protocol: 'http',
+        method: 'POST',
+        pathTemplate: '/checkout',
+      },
     ],
     edges: [
       { from: 'checkout-api', to: 'checkout-container', edgeType: 'deploys' },
@@ -361,6 +404,8 @@ export function serverlessFixture() {
       { from: 'send-email-fn', to: 'serverless-workloads', edgeType: 'built_from' },
       { from: 'resize-image-fn', to: 'serverless-workloads', edgeType: 'built_from' },
       { from: 'checkout-api', to: 'send-email-fn', edgeType: 'calls' },
+      { from: 'checkout-route', to: 'checkout-api', edgeType: 'implements' },
+      { from: 'checkout-container', to: 'checkout-route', edgeType: 'exposes' },
     ],
   };
 }

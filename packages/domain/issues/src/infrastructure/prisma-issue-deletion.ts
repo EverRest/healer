@@ -276,6 +276,21 @@ async function deleteDerivedRows(
       target_id = ${id}::uuid
       OR target_id IN (SELECT e.id FROM "evidence"."evidence" e
                        WHERE e.tenant_id = ${t}::uuid AND e.issue_id = ${id}::uuid))`;
+  // 002: a budget degradation step is recorded once, by a mark naming its evidence. When that
+  // evidence goes with the issue, the mark must go too — otherwise the step reads as recorded and
+  // never is again. A tenant-scope mark is deleted only because its evidence was this issue's: the
+  // step is derived from consumption, so the next evaluation in that scope records it afresh,
+  // attached to an issue that still exists. Per-issue marks and per-issue limit overrides name the
+  // issue directly. Before the evidence goes, or the subquery finds nothing.
+  await tx.$executeRaw`
+    DELETE FROM "policy"."budget_degradation_mark"
+    WHERE tenant_id = ${t}::uuid AND (
+      (scope_type = 'issue' AND scope_id = ${id}::uuid)
+      OR evidence_id IN (SELECT e.id FROM "evidence"."evidence" e
+                         WHERE e.tenant_id = ${t}::uuid AND e.issue_id = ${id}::uuid))`;
+  await tx.$executeRaw`
+    DELETE FROM "policy"."budget_limit"
+    WHERE tenant_id = ${t}::uuid AND scope_type = 'issue' AND scope_id = ${id}::uuid`;
   await tx.$executeRaw`
     DELETE FROM "evidence"."evidence_link"
     WHERE tenant_id = ${t}::uuid AND evidence_id IN (

@@ -173,9 +173,37 @@ flaky on this shared development machine after five genuine, independent fixes; 
 not to block this release on it, full investigation and fix options in `QUESTIONS.md`. Real CI
 (GitHub Actions, agreed as the immediate next step) may settle whether it reproduces elsewhere.
 
-Next: **002 phases 4–7** (autonomy grants, reversible-action governance, budgets, approvals) and
-**a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR — the first CI/CD
-pipeline this repo will have). 012 phase 13
+**002 policy-and-autonomy phase 4 (US2) landed 2026-10-01** (VERSION 0.48.0): T034–T047, autonomy
+granted in increments the customer controls, and the ceiling un-exceedable by construction. The
+ceiling enforced twice independently — `GrantAutonomy`'s own check and a new DB trigger on
+`autonomy_grant` for a row written around the command entirely, both backstopped by `evaluate()`'s
+own clamp (already built in phase 2) — proven even against the documented `healer.privileged_write`
+bypass. `autonomy.level` resolved from real grants scoped by component/environment/issue kind,
+never caller-supplied, re-read on every evaluation so a revocation reaches the next guarded step
+with no push mechanism. `autonomy_epoch`'s write side, `checkAutonomyEpoch` (the
+`STALE_AUTONOMY_EPOCH` redemption check phase 7's `ResolveApproval` will call), and a revocation
+sweep that resolves stale approvals and invalidates their decisions atomically — callback delivery
+left as a port with no implementation, since no Prisma-backed delivery or sweep scheduler exists
+anywhere in this repository yet. `GET/POST /autonomy/grants`, `DELETE /autonomy/grants/{grantId}`,
+fully isolation-tested. Found and fixed before merge: a circular DI-token import between two
+controller files, invisible to `typecheck` (only a real app boot catches a NestJS cycle). Rebased
+onto master as 012 phase 6 landed in parallel — `createApiModule`'s two new required parameters
+needed combining by hand across every e2e test file that boots the real app, checked call site by
+call site this time rather than waiting for a full e2e run to find the one that got missed (012's
+own 0.47.0 entry already hit exactly that gap once).
+
+**004 architecture-graph phases 4–5 landed 2026-10-02** (VERSION 0.51.0): T036–T052. Every edge
+carries its provenance and a derived confidence (merge under a row lock, race proved through
+`pg_stat_activity`), `GET /graph/nodes`, three continuous checks, and one model for any architecture:
+structural separations as edges, a single-authority vocabulary, `GetSystemContext` with no style
+discriminator, and a `gate-architecture-agnostic` that fails outside `packages/integrations/**`.
+Phase 3 (discovery and confirmation, T018–T035) is still on unmerged branches, so the new guarantees
+have their readers in continuous checks, not yet in a write path. Open decisions: `QUESTIONS.md`,
+"Decisions waiting on Pavlo — 004", items 3–6.
+
+Next: **merge 004 phase 3** (discovery and confirmation, T018–T035 — built, on unmerged branches), then 004 phases 6–7 (blast radius, drift); and **002 phase 5** (reversible-action governance — blocked on 010's catalogue; phases 6–7 landed
+in 0.50.0) and the consumers phases 6–7 left unbuilt (T058b, T066b, the sweep/tick scheduler of C-90) and **a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR —
+the first CI/CD pipeline this repo will have). 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
 (installing a GitHub App, branch protection, `CODEOWNERS`); T084–T087 need no live GitHub
 interaction and can start on request. Stage 0 S0-1 still blocks realistic sizing of v1 and does not

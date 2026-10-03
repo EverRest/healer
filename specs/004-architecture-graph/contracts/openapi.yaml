@@ -129,6 +129,13 @@ components:
         state: { type: string, enum: [proposed, confirmed, rejected, stale] }
         lifecycleState: { type: string, enum: [active, unobserved, unresolved, possibly_removed] }
         provenance: { $ref: '#/components/schemas/Provenance' }
+        discoveryRunId:
+          {
+            type: string,
+            format: uuid,
+            nullable: true,
+            description: 'the discovery run that produced it (FR-006); null for a human-authored node',
+          }
         attributes:
           type: object
           additionalProperties: true
@@ -158,6 +165,11 @@ components:
         layer: { type: string, enum: [code, runtime, product] }
         state: { type: string, enum: [proposed, confirmed, rejected, stale] }
         observationCount: { type: integer }
+        provenanceUnresolved:
+          {
+            type: boolean,
+            description: 'true when no edge_provenance row is visible at the version read; provenance then shows only the stored edge columns and no source',
+          }
         lastObservedAt: { type: string, format: date-time, nullable: true }
         provenance: { $ref: '#/components/schemas/Provenance' }
     ClosureMember:

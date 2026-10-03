@@ -8,6 +8,12 @@ import type { ActionClass } from './action-class.js';
 // Named as individually visible constants, not one opaque table literal — R-15's future
 // `gate-ceiling` check reads this file's *diff*, and a diff against a named constant is legible
 // in a way a diff against a table entry is not.
+//
+// Raising a level here (or giving a class one) needs a citation to a committed
+// `threshold_derivation` artifact — one line per class, anywhere in this file:
+//   // derivation[<action_class>]: <run-id>      (resolves to docs/derivations/<run-id>.json)
+// `gate-ceiling` checks the diff for it (FR-008a, R-15). This function takes no configuration: the
+// citation governs the edit, not the evaluation.
 export type AutonomyLevel = 0 | 1 | 2 | 3 | 4 | 5;
 
 export type Ceiling =

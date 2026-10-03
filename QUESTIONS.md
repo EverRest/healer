@@ -8,6 +8,12 @@ spec docs).
 [decisions.md](docs/decisions.md) (C-43..C-47); this file keeps only the pointer plus what's still
 genuinely undecided, since several other docs point back at this file by name for the reasoning.
 
+**Decision session 2026-10-02** — a full walkthrough of every open item in this file with Pavlo,
+one by one. Resolved items are individually tagged below with their decisions.md pointer
+(C-72..C-90); everything left untagged is still genuinely open or still genuinely blocked (waiting
+on 010's catalogue, a hosting target, real auth, S0-1's incident data, Phase 13's diff
+infrastructure, or similar) — not re-litigated, just confirmed still accurate.
+
 ## 012 T032, T029, T035, T031, phase 13 — resolved
 
 See [decisions.md](docs/decisions.md) C-43 (`gate-architecture-agnostic` own-stack check), C-44
@@ -474,7 +480,7 @@ introduced, distinct from the already-documented flaky Docker test above:
   `PrismaPolicyActionRepository` imports and instances in the correct position, matching the pattern
   every other real-Postgres e2e file in this app already uses. Verified: 11/11 tests pass afterward,
   and a full `e2e` project run found no other file with the same gap.
-- **Separately discovered, not fixed**: `@healer/domain-policy` is imported by `apps/api/src/main.ts`
+- **Fixed 2026-10-02, see [decisions.md](docs/decisions.md) C-89**: `@healer/domain-policy` is imported by `apps/api/src/main.ts`
   (and by several e2e test files) but is not declared in `apps/api/package.json`'s `dependencies` or
   `apps/api/tsconfig.json`'s project `references` — it resolves today only via pnpm's workspace
   hoisting, not an explicit dependency edge. Works, but is exactly the "phantom dependency" pnpm's
@@ -740,7 +746,7 @@ shared database — a schema change past that point is always a new migration fi
 **Resolved and confirmed 2026-09-27**: see [decisions.md](docs/decisions.md) C-49. Kept as-is,
 over merging unit+e2e coverage and over a lower (arbitrary) floor.
 
-## 001 T012 — the issue state graph has no `stale -> investigating` edge yet
+## 001 T012 — the issue state graph has no `stale -> investigating` edge yet — resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-72
 
 Not decided, and deliberately not invented ahead of the task that should decide it.
 `state-machine.ts`'s graph is exactly what data-model.md's diagram draws: the only reopen edge is
@@ -1115,7 +1121,7 @@ of this (re-confirmed via `git stash`: fails identically on the pre-T019 tree).
   `issue-repository.e2e.test.ts` concurrency flake — unrelated (it now also passed cleanly in one
   of the runs during this task, consistent with its documented intermittency).
 
-## 001 T024 — where does a totally-unidentifiable parse failure's "evidence" attach?
+## 001 T024 — where does a totally-unidentifiable parse failure's "evidence" attach? — resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-73
 
 Not decided, genuinely open, flagged rather than guessed at.
 
@@ -1302,7 +1308,7 @@ test that proves it holds a transaction open exactly as `recordOccurrence` does.
 that lock order:** a future writer of `issue_event` that inserts the event without touching the
 `issue` row first would not be waited on.
 
-**Progress is `issue_event.received_at` only.** Evidence recorded and audit entries written do not
+**Progress is `issue_event.received_at` only. Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-77.** Evidence recorded and audit entries written do not
 count, so a long investigation that changes no state and receives no signals can be swept. That
 follows the spec's wording ("no signals and no progress") read as issue-level facts; if an
 investigation that is still collecting evidence should keep an issue alive, that needs its own
@@ -1345,7 +1351,7 @@ append-only table while it is on. Keep the callback to the destructive statement
 `maintenance` queue runs two at a time, with retries — each listed the same cited record and each
 published `EvidenceDetached`. A second call is a no-op that returns the row.
 
-**Open — cited evidence keeps its excerpt forever.** Detached is not purged. `data-model.md`'s
+**Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-78 — cited evidence keeps its excerpt forever.** Detached is not purged. `data-model.md`'s
 diagram ends `detached --expires_at--> purged`, which cannot happen for a record a link still
 names, and `evidence` rows cannot be updated to blank the excerpt. If "retention" is meant to bound
 how long customer text is held even when a conclusion cites it, that needs a privileged excerpt scrub
@@ -1599,7 +1605,7 @@ before the first write. This relies, like T051, on every writer of the `issue` r
 before writing. Ids are lower-cased in `merge` (an upper-case spelling of the same id used to give
 `NotFoundError` because one id counted as two); `unmerge` takes a single id and needs no folding.
 
-**OPEN — a signal whose fingerprint belongs to a merged issue.** Merging X frees X's slot in the
+**Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-74** — a signal whose fingerprint belongs to a merged issue. Merging X frees X's slot in the
 unique open-fingerprint index (`merged` is excluded), and `findOpenByFingerprint` no longer finds X.
 So the next signal with X's fingerprint **opens a fresh issue X′ instead of attaching to the survivor
 Y** — which is exactly the duplication a merge is meant to end. Worse, unmerging X back into an _open_
@@ -1609,14 +1615,14 @@ real fix is a product call I did not make: route signals of a merged fingerprint
 (which changes `ingestSignal`, the counts on Y, and what an unmerge would owe X) or leave it and
 accept X′. Until then a merge only hides X; it does not absorb X's future.
 
-**Audit trail — no `audit_entry` written.** Same reasoning as T042: `action` must be a registered
+**Audit trail — no `audit_entry` written. Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-76.** Same reasoning as T042: `action` must be a registered
 `policy_action.action_key` and 002 does not exist. The `issue_event` (`cause = human`, `actor_ref`,
 `reason`, append-only) already answers who, when and why. **Inconsistent with the T052 branch**, which
 writes an audit entry with the placeholder `evidence.retention_purge`; if that stands, adding
 `issue.merge` / `issue.unmerge` is one `tx.auditEntry.create` in each function in
 `prisma-issue-merge.ts`. I did not want a second unregistered key in an append-only table.
 
-**OPEN — the survivor's own record of the merge.** The `merged` event is written on X only (the
+**Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-75** — the survivor's own record of the merge. The `merged` event is written on X only (the
 `correlate` precedent). Y's timeline, evidence graph and audit show nothing, and
 `projectIssueRelationships(Y, …)` reads `merged_into` only as a subject, so `GET /issues/{Y}` cannot
 list what was merged into it. Timeline left unchanged as instructed; whether Y should show "X was
@@ -1863,12 +1869,9 @@ mapping — passed and are regression cover, not red).
 - (b) Retention-purge `audit_entry` rows for evidence purged before the deletion survive (target =
   evidence id, constant reason); `audit_entry.reason` is free text in general; `agent_run.correlation_id`
   is kept and links surviving rows and already-delivered events to the deleted issue's work.
-- (c) The `removed` state is now effectively dead: still a legal `transition()` target, but no caller
-  enters it (deletion deletes the row), so the `removed` checks in `merge.ts` / `prisma-issue-merge.ts`
-  and invariant (B) of the merged-state migration never fire in practice. Whether to drop the state from
-  the graph is a spec decision.
-- (d) Refusing to delete a survivor with merged children, and (new) an issue that is itself merged, are
-  product calls; the alternative is to unmerge inside the deletion.
+- (c) The `removed` state is now effectively dead — **resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-79: drop it from the graph.**
+- (d) Refusing to delete a survivor with merged children, and (new) an issue that is itself merged —
+  **resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-80: refuse, require explicit unmerge first.**
 - (e) Delivered outbox events, BullMQ jobs still holding a signal, and backups cannot be recalled.
 
 ## Decisions waiting on Pavlo — phase 8 integration (index; the detail is in the named sections)
@@ -1876,26 +1879,12 @@ mapping — passed and are regression cover, not red).
 Nothing below blocks the work already done; each has a default in place and a cost if the default is
 wrong. Ordered by how much a wrong default costs.
 
-1. **A merge hides an issue but does not absorb its future signals.** A signal whose fingerprint
-   belongs to a merged issue opens a *new* issue instead of attaching to the survivor, and the
-   survivor's timeline / graph / `GET /issues/{id}` show nothing about what was merged into it.
-   Fixing it changes ingestion's fingerprint lookup — a batch of its own. (`001 T049/T050`.)
-2. **Cited evidence keeps its excerpt forever.** Retention detaches it but cannot purge it; whether
-   a cited record should lose its text at expiry (a privileged scrub) is a decision about what
-   FR-009's "support" requires. (`001 T052`.)
-3. **A signal on a `stale` issue does not un-stale it.** The state graph has no edge out of `stale`,
-   and `findOpenByFingerprint` counts it as open. (`001 T051`.)
-4. **Nothing schedules the staleness sweep or evidence retention.** Both are routed in `apps/worker`
-   and tested, but no code enqueues them: they need a tenant enumerator and a repeatable schedule
-   (012's territory; a new pattern, so an ADR first). Until then both are correct and read by
-   nothing. (`001 T051`, `001 T052`.)
-5. **Audit action keys are invented placeholders.** `issue.close`, `evidence.retention_purge` and the
-   merge path's absence of any audit entry are three different answers to the same gap: 002's closed
-   `policy_action.action_key` list does not exist. Merge/unmerge writes no `audit_entry` at all,
-   unlike close and purge. (`001 T057`, `001 T052`, `001 T049/T050`.)
-6. **`@ApiOkResponse` is the first swagger decorator in `apps/api`.** It documents the
-   `Idempotent-Replay` header; the dependency is already installed, but the rule is "new pattern ->
-   ADR first". Keep it and write the ADR, or revert the decorator. (`001 T057`.)
+1. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-74, C-75.** A merge hides an issue but does not absorb its future signals. (`001 T049/T050`.)
+2. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-78.** Cited evidence keeps its excerpt forever. (`001 T052`.)
+3. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-72.** A signal on a `stale` issue does not un-stale it. (`001 T051`.)
+4. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-90** (elevated to its own tracked item, not re-deferred piecemeal). Nothing schedules the staleness sweep or evidence retention. (`001 T051`, `001 T052`.)
+5. **Partially resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-76** closes the merge/unmerge half (writes an unregistered-key `audit_entry`, same tradeoff as close/purge). `issue.close`/`evidence.retention_purge` registration against 002's real `policy_action` list is still open — left as-is on purpose (see 2026-10-02 walkthrough item 6): routing 001's mutating actions through the policy gate is bigger than registering a key, not decided here.
+6. **Resolved 2026-10-02 — [decisions.md](docs/decisions.md) C-81: no separate ADR needed**, ADR 0012 already covers it. (`001 T057`.)
 7. **The human actor is a caller-asserted `X-Actor-Id` header** (free-form, can be `system` or
    `ingestion`), the same trust level as `X-Tenant-Id`: the auth layer carries only a tenant id.
    Real identity needs authentication, which does not exist. (`001 T057`.)
@@ -1916,7 +1905,7 @@ wrong. Ordered by how much a wrong default costs.
    `recordOccurrence` does ~7 round trips per signal with the row locked for 4 of them — folding the
    SELECT and event INSERT into one statement would cut the lock hold 3-4x, a source change for the
    owner of ingestion, not made here.
-10. **Deleting a survivor, or an issue that is itself merged, is refused**, and a deletion writes no
+10. **Confirmed 2026-10-02 — [decisions.md](docs/decisions.md) C-80.** Deleting a survivor, or an issue that is itself merged, is refused, and a deletion writes no
     `audit_entry` (the immutable tombstone is the record). Cheap alternatives: unmerge inside the
     deletion; an entry targeting the tombstone id (the fourth answer to item 5). A link from a conclusion
     the deletion cannot attribute to an issue is deleted with the evidence — unknowable until 006's
@@ -2076,7 +2065,7 @@ entry in the closed list. Fixing this in-run (folded into batch 7) rather than d
 thing currently keeping the full e2e suite from being green, the fix is mechanical and
 precedent-following (not a new design decision), and 002 is what broke the gate.
 
-## 002 batch 7 — two spec-vs-code disagreements found while wiring the HTTP surface
+## 002 batch 7 — two spec-vs-code disagreements found while wiring the HTTP surface — item 1 resolved 2026-10-02 ([decisions.md](docs/decisions.md) C-83), item 2 still open (waits on Phases 5-7)
 
 Per AGENTS.md ("if a document and the code disagree, say so and ask which is stale") — both
 independently confirmed by review, not fixed in code this run:
@@ -2109,7 +2098,7 @@ run — reconciling a spec doc against a shape that's still evolving (Phase 4-7 
 phases land, than incrementally per-batch. Whoever does that pass should start from this entry and
 from `decisionInputSchema`'s actual code, not from the yaml.
 
-## 002 — final whole-branch review: three spec deviations never formally logged
+## 002 — final whole-branch review: three spec deviations never formally logged — all three resolved 2026-10-02 ([decisions.md](docs/decisions.md) C-84, C-85, C-86 — item 1's original prediction turned out wrong, see C-86)
 
 Surfaced by the final review across the whole T001–T033 diff; each was mentioned in a batch
 hand-back but never got its own QUESTIONS.md entry — recording now per AGENTS.md ("if a document
@@ -2144,7 +2133,7 @@ Not elevated to "Decisions waiting on Pavlo" yet — (1) is settled (Phase 4's p
 are real open questions but don't block T001-T033's own scope; flagging here so whoever builds
 Phase 4/8/10 sees them before assuming either reading.
 
-## 002 — forward risk for Phase 5: `cooldownBounds` has no versioning, replay may not reproduce it
+## 002 — forward risk for Phase 5: `cooldownBounds` has no versioning, replay may not reproduce it — resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-82
 
 Batch 3 invented a `cooldownBounds` shape on `ResolvedRuleset` ahead of T054 (`action_limit`,
 Phase 5). `action_limit` as specified in `data-model.md` is a plain mutable table — no version
@@ -2157,7 +2146,7 @@ depended on a cooldown/rate-limit predicate cannot actually replay identically a
 table, or bounds embedded in the stored `decision_input` at decision time) rather than discovering
 it after replay already silently drifts.
 
-## 002 batch 9 — the ceiling is enforced for `actionClass`, not yet for `hasTestedUndo`/`autonomy.level`
+## 002 batch 9 — the ceiling is enforced for `actionClass`, not yet for `hasTestedUndo`/`autonomy.level` — the `autonomy.level` half landed with Phase 4 (0.48.0, `resolveRulesetAndEvaluate`); `hasTestedUndo` still genuinely blocked on 010's catalogue, not resolved
 
 Batch 9 fixed `actionClass` being caller-supplied and unverified (C1(b) — the ceiling could be
 defeated by claiming a lower class). Both re-review passes independently flagged, correctly, that
@@ -2174,7 +2163,7 @@ un-exceedable" guarantee — it closed the `actionClass` half. The other two rem
 hence unverified, until T039/T048 land. Any code comment claiming the ceiling is fully
 un-defeatable before then is overclaiming and should be corrected to name what's actually closed.
 
-## 002 batch 9 (round 3 re-review) — instant *literal* values still parse timezone-dependently
+## 002 batch 9 (round 3 re-review) — instant *literal* values still parse timezone-dependently — fixed 2026-10-02, see [decisions.md](docs/decisions.md) C-88 (`domain/predicates/instant-literal.ts`)
 
 Batch 9 tightened `evaluatedAt` (the evaluation instant) to require an offset-qualified ISO string
 (`z.string().datetime({offset:true})`), closing a replay-determinism risk (FR-002/SC-002: the same
@@ -2349,7 +2338,7 @@ rather than reading the code alone. Results:
   task **T040** — not yet implemented). Flagging here so it isn't lost by the time T040's owner looks
   for what it's supposed to catch.
 
-**Escalated — added to the Pavlo index below, not decided here:**
+**Escalated — added to the Pavlo index below. Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87:**
 - `graph_edge` has no `actor_ref` or `observation_ref` column at all (unlike `graph_node`, which has
   both), so a directly human-authored or human-confirmed edge — one that doesn't arrive through
   discovery's `edge_provenance` — has nowhere to record who asserted it or what it's based on. This
@@ -2367,7 +2356,7 @@ rather than reading the code alone. Results:
 
 ## Decisions waiting on Pavlo — 004 (index; detail in the named sections above)
 
-1. **Can a human directly author or confirm a `graph_edge` with no discovery observation behind it?**
+1. **Resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87.** Can a human directly author or confirm a `graph_edge` with no discovery observation behind it?
    Today the schema has no column to record that on the edge itself, and `research.md` (R-04a) and
    `data-model.md` disagree on whether `edge_provenance` should carry versioning and a human actor
    reference. See "Review of T002/T005–T011" above. Not blocking — nothing in T001–T017 needs this
@@ -2376,6 +2365,30 @@ rather than reading the code alone. Results:
    `domain/architecture`~~ — **resolved**, see "Review of T016/T017" below: both independent reviews
    found the same gap and a real fix existed (`domain/architecture` derives from `boundary-contract`
    instead of duplicating, since the dependency already runs that direction). No longer open.
+3. **`graph_fact` evidence has no home for a discovery run that is not about an issue.**
+   `evidence.issue_id` is `NOT NULL` (001), while FR-027/`PersistGraphFacts` (T035) writes one
+   `graph_fact` row per discovery shape and discovery runs are tenant-scoped, not issue-scoped.
+   `check:graph-provenance` (T040) now requires `observation_ref` to resolve to an `evidence` row of
+   the same tenant, so whoever builds T035 must either relax `issue_id` for `graph_fact` or pick a
+   per-tenant holder issue — a schema decision, not mine to take from T036-T041. Not blocking T036-T041
+   (the merge path takes already-formed observations).
+4. **Direction resolved 2026-10-02, see [decisions.md](docs/decisions.md) C-87 (R-04a is right; `edge_provenance` gains `actor_ref`/`observation_ref` and a `valid_from`/`valid_to` range in the first phase that needs a human-authored edge). The interim rule below stays until then, then is replaced by an exact version filter.** Pinned graph reads and `edge_provenance` — the R-04a vs data-model.md disagreement, decided
+   interim. R-04a says `edge_provenance` carries a validity range; data-model.md and the
+   migrations say it does not, so a provenance row has no version of its own. Interim rule (do not
+   treat as settled): a read pinned to `graphVersion` v returns only `edge_provenance` rows with
+   `recorded_at <=` that version's minted time (`graph_version.created_at`), and shows class,
+   strength, confidence and observation of the strongest of those rows (a max of stored values,
+   never a recompute from configuration). Cost: the pin follows wall-clock minting time rather
+   than a stored version number, so a row backfilled with an old `recorded_at` would appear in a
+   past version. Owner of the decision: whoever settles R-04a (a `valid_from_version` on
+   `edge_provenance` would make this exact). Unpinned reads show all rows.
+5. **What does `exposes` connect?** No spec or doc defines its endpoint kinds. Phase 5 (T046) encoded
+   `component | deployment_unit -> endpoint`; confirm or narrow it. Not blocking — one table entry in
+   `structural-edges.ts`. See "004 T036-T052 — judgment calls", Split B.
+6. **Where may architecture-specific logic live: "adapters and discovery" (FR-020) or only
+   `packages/integrations/**` (T050, graph-contract §3)?** The gate follows T050 and additionally
+   exempts directories named `adapters/`/`discovery/`. Pick one and amend the other text. Not
+   blocking. See "004 T036-T052 — judgment calls", T049-T050.
 
 ## 004 T012–T015 — judgment calls
 
@@ -3284,3 +3297,662 @@ done). Judgment calls, roughly in the order a reviewer would hit them:
    of them individually afterward against the same live Postgres — every one passes. Not re-fixing
    the runner-image test a sixth time, consistent with the standing decision; flagging the fresh
    evidence rather than silently re-running until it got lucky.
+## 002 Phase 4 (T034-T047) — autonomy grants, ceiling, revocation, epoch, sweep
+
+Implemented on `worktree-002-policy`, building on Phases 1-3 (already on master, VERSION 0.46.0).
+Not yet committed — awaiting explicit go-ahead per standing instructions (never commit without
+being asked). Judgment calls made along the way, flagged rather than blocking on them:
+
+- **T035's "check constraint" is a trigger, not a CHECK.** Postgres `CHECK` constraints cannot
+  reference another table, and the ceiling depends on `policy_action.action_class`, resolved via
+  `autonomy_grant.action_key` — the same substitute the T003 append-only trigger already uses for
+  a constraint plain SQL can't express. New migration `20261003060000_autonomy_grant_ceiling`
+  (the existing `policy_core` migration is committed/shared and must never be edited per
+  `prisma-migrations.md`). Respects the same `healer.privileged_write` bypass every other
+  append-only trigger does, deliberately — quickstart 9 needs a documented way to "write an
+  over-ceiling row anyway" to prove the second mechanism (`evaluate()`'s clamp) still holds.
+
+- **`reversible_remediation` grants are refused unconditionally today, at every level including
+  0.** No attestation source exists (010's catalogue isn't built), and `hasTestedUndo` has no
+  honest answer other than `false` — the same reading `policy-evaluation.controller.ts`'s
+  `GET /policy/actions` already gives. This is enforced three ways that all had to agree: the
+  command (`grantAutonomy` calls `ACTION_CEILING(class, false)`), the DB trigger (no branch for
+  that class at all), and `gate-ceiling` (deliberately excludes that class from its drift check,
+  since the trigger is *more* conservative than `ceiling.ts`'s attested answer, not a copy of it —
+  comparing them would fail the gate for a difference that's correct by design).
+
+- **`autonomy.level` is now resolved from real grants, never trusted from the caller** — the same
+  move batch 9 made for `action.actionClass` (`resolveRulesetAndEvaluate` now takes
+  `autonomyGrants: ReadOnlyAutonomyGrantRepository` and overwrites `decisionInput.autonomy.level`
+  before `evaluate()` runs). This is a required dependency on `EvaluateAndBindRepos` and
+  `ExplainDecisionRepos`, same as `actions` — every existing test fixture needed a
+  `FakeAutonomyGrantRepo` resolving to the fixture's own default level (2), so no existing test's
+  *outcome* changed, only its repo list grew by one entry. Not a corner cut: leaving
+  `autonomy.level` caller-trusted would be exactly the bypass batch 9 closed for `actionClass`.
+
+- **T044's "redeem" has no command to attach to.** `ResolveApproval` is Phase 7 (T074), out of
+  scope. Added `checkAutonomyEpoch` (`domain/check-autonomy-epoch.ts`) — the small, reusable
+  redemption-time check `STALE_AUTONOMY_EPOCH` (already reserved in `@healer/shared`'s
+  `ErrorCode` union, unused until now) exists for. Phase 7 calls this directly rather than
+  reinventing the comparison; T044's own test exercises it against a hand-built
+  `approval_request` row (the table exists from Phase 1; the lifecycle commands don't yet).
+
+- **T045's sweep does not deliver a real callback.** `packages/workflow/src/callbacks.ts` is pure
+  domain logic with no Prisma-backed delivery anywhere in this repo yet, and no scheduler exists
+  to run any sweep periodically (001's staleness sweep has the identical, already-flagged gap).
+  `sweepRevokedApprovals` takes an `ApprovalCallbackPort` (defined here, in `domain/`) with no
+  concrete production implementation shipped in this batch — a caller wires a real one once 012
+  builds the mechanism. What the sweep *does* guarantee now, atomically: the `approval_request`
+  moves to `revoked` and the `policy_decision` it was issued for gets
+  `invalidated_reason = 'epoch_bump'`, in one transaction, directly via `PrismaApprovalRequestRepository`
+  (mirrors `PrismaAutonomyGrantRepository.revoke()` touching `autonomy_grant` + `autonomy_epoch`
+  together rather than round-tripping through a second repository's interface).
+
+- **`gate-ceiling` is two different things wearing one name** (make-targets.md's own phrasing):
+  the SC-004 *data* check (this batch, T038) and the FR-008a *diff* check (Phase 9, T086/T087,
+  out of scope). Built the data half as a static, DB-free comparison between `ceiling.ts`'s
+  constants and the T035 trigger's hardcoded `CASE` — not a live query against `autonomy_grant`,
+  because a live query is exactly what `check:ceiling` (continuous reconciliation,
+  `scripts/checks/ceiling.mjs`, same convention as `check:policy-coverage`) already owns, and
+  `make ci`'s other gates (`gate-data-model`, `db-check`) are all DB-free by the same convention
+  (the live-DB half of schema verification lives in an e2e test, not a Makefile gate). Extend this
+  gate with the diff check when Phase 9 lands, don't duplicate it.
+
+- **`AutonomyGrantsController` and `PolicyEvaluationController` had a circular import** (each
+  needed the other's DI token). Fixed by moving `AUTONOMY_GRANT_REPOSITORY` into the shared
+  `policy-http.ts` (which every `/policy/*`/`/autonomy/*` controller already imports from, never
+  the reverse) — found because NestJS's bootstrap failure on a real cycle crashes the whole
+  worker process with a native stack trace instead of a catchable error, which only the e2e test
+  actually booting the app (not a unit test) could have caught.
+
+- **`POST /autonomy/grants` isolation test carries its marker in `environment`** — the only
+  free-text field the grant DTO accepts, mirroring `POST /policy/rulesets`'s own use of `ruleKey`
+  for the same purpose (`assertTenantScopedEnqueue`'s contract needs *some* field to embed a
+  marker in).
+
+## 002 Phase 6 (T056–T069) — judgment calls (budgets)
+
+Implemented on `worktree-agent-a78aab9e73c3f9d7c` (commits `c0ca8b9`…`f43166d` plus the docs commit),
+migration prefix `20261003090000_budget_limit_bounds`. `budget_limit`, `budget_degradation_mark` and
+the `budget_degradation` evidence type already existed from T002/001, so the migration adds only the
+T088 bounds, the scope/period CHECK and a unique key. No question blocks; the calls below are
+decided, recorded here so a reviewer can overrule them.
+
+**Not built, and why** — both are consumers this release has no code for, and both were ticked in
+`tasks.md` with the gap named in the note:
+
+- **T058's "the workflow suspends resumably".** Policy refuses: the AI step's decision is a `DENY(BUDGET_EXHAUSTED)`
+  (a recorded decision, not an exception), the issue gets an evidence record naming what completed,
+  and the same step proceeds once the limit is raised or the window rolls (tested). What moves the
+  *run* to a suspended state is the guarded-step handler that reads that decision, which belongs to
+  012's workflow definitions (006/008) and does not exist. The reader of the refusal is
+  `consumeDecision`, which already refuses a non-allow decision (R-14) — so an AI step cannot run
+  past it — but nothing turns the refusal into `needs_human`/suspended yet.
+- **T066's hand-off to a human with evidence, hypotheses and reasons for rejection.** The evaluator
+  denies with `ATTEMPT_CAP_REACHED` at the cap; assembling the hand-off package is the escalating
+  workflow's job (006/009), not policy's.
+
+**Judgment calls**
+
+1. **`agent_run.cost` cannot be shown to be measured today** — it has no provenance column and
+   nothing writes `agent_run` yet (012 T059's write path and T061/T094, "measured, never estimated",
+   are deferred). `check:budget-reconcile` therefore cannot *prove* measurement; it refuses the
+   forms of estimate it can see (a finished run with tokens and no cost, a negative cost, a run
+   that cost more than its own step declared) and its header says so. Adding the real reconciliation
+   against provider usage belongs with 012 T094, in the same check.
+2. **R-11 was wrong about not needing a lock.** "The ex-ante check is what makes it safe" fails under
+   READ COMMITTED (two concurrent steps both read 90 and both pass `90 + 10 <= 100`; reproduced —
+   without the lock 17 of 20 charges against a limit of 10 were allowed). `research.md` R-11 now says so. The
+   charge is the **declared maximum of an allowed step, carried by its persisted `policy_decision`**
+   (`budget_state.reservedSpend`), an *open charge* replaced by the actual cost once a *finished*
+   `agent_run` references the decision. No reservation table, no counter; resolve-and-persist run
+   under one lock.
+3. **An advisory lock (`pg_advisory_xact_lock`), not `FOR UPDATE`.** There is no row guaranteed to
+   exist to lock: a tenant that never configured a budget runs on the fail-closed defaults and has no
+   `budget_limit` row, and policy tables carry no FK to `tenant.tenant`. Per-tenant, held for the
+   resolve-and-persist transaction only, **bounded** (`lock_timeout` 5 s, then a retryable
+   `BudgetContentionError`/429; ADR 0015 reconciles it with 008 R-16 and ADR 0003); a step that
+   declares no cost takes no lock (tested).
+4. **A leaked charge, and its release.** A decision whose step never runs (worker died, step
+   cancelled) stays charged at its declared maximum — fail-closed, an over-count. Review: that must
+   not lock an issue out forever. `releaseAbandonedCharges` invalidates allowed, never-consumed,
+   never-run decisions older than `ABANDONED_CHARGE_TTL_MS` (2 h) with the new
+   `invalidated_reason = 'charge_abandoned'` — a closed list now declared once (`INVALIDATED_REASONS`,
+   with a test that data-model.md and openapi.yaml agree). **No production caller schedules it**
+   (no scheduler exists; the same gap as the approval sweep). **Limit**: a *consumed* decision cannot
+   be invalidated (the terminal XOR CHECK), so a step that started and never finished keeps its
+   charge until the run writer finalises the `agent_run`.
+5. **The declared maximum is the caller's.** An AI step declaring 0 charges nothing (and takes no
+   lock), so an under-declaring caller delays the refusal by one step. The actual cost still lands
+   in `agent_run` and the next evaluation reads it; `check:budget-reconcile` reports any run that
+   cost more than its declaration, which is the reader of this guarantee.
+6. **The evaluator takes one `(consumed, limit)` pair, but a step must fit every budget** (per-issue
+   and tenant day and month, spend and time). The pair handed to it is the most constrained one
+   (`bindingBudget`, ties broken per-issue, day, month, spend before time) and the binding scope is
+   persisted in `budget_state.binding`. When time binds, the declared maximum handed to the predicate
+   is 0 (no one declares a time forecast); the declared *spend* is still reserved
+   (`reservedSpend`).
+7. **Units and a reading of "elapsed".** 012's `tenant_budget.time_limit` states no unit; it is read
+   as milliseconds (matching `budget_limit.time_limit_ms`). `workflow_run` elapsed is to `updated_at`
+   when terminal and to the evaluation instant while live, **minus the time the run was parked**
+   (review H1: one slow approver must not exhaust an issue's time budget). Parked = from a
+   transition into a state named `awaiting_*` (or `needs_human`) until the next transition, derived
+   from `workflow_transition`. 012 has not named its waiting states, so the prefix is policy's one
+   declaration of the convention; a workflow that names them otherwise is charged for waiting
+   (conservative). Nothing produces such states yet either. The time bounds fit an `INTEGER`: 4 h / 24 h /
+   20 days. Every bound and default (T088) is a starting value pending the stage-0 benchmark.
+8. **The pinned period key is `LEAST(own start, workflow start)`.** Pinning to the workflow's start
+   alone (the first version) dropped the spend of an agent run that *predates* its workflow
+   (classified at ingest, say) from both windows when it crossed a day boundary: the scan pruned it
+   on its own `started_at` while pinning moved it to the later window. `check:budget-reconcile`
+   found this on its first run against a plant I had written to be realistic — the independent
+   recomputation doing its job. Agent runs join workflow runs on `correlation_id`, which 012 does
+   not make unique per run; the earliest start among runs sharing it is used.
+9. **Exhaustion is step `n + 1`**, recorded like any other step (entry `ai_steps_refused`), and a
+   refusal records it for the scope that refused even when consumed is still below the limit (nine
+   of ten spent, a step declaring two: nothing more can run, so the budget is exhausted for every
+   purpose that matters). A refusal before any threshold was crossed records only exhaustion;
+   steps nothing reached are not claimed. `BudgetExhausted` is therefore published once per scope and
+   period, `BudgetDegraded` once per step.
+10. **Degradation marks lag by one evaluation, and need an issue.** The standing a mark records is
+    the budget as resolved *before* the evaluation's own charge, so the evaluation that crosses a
+    threshold is marked by the next one. Evidence is per issue (001), so a tenant-scope step is
+    attached to the first issue whose evaluation sees it; an evaluation with no issue records
+    nothing rather than inventing one. Both are self-healing: the step is derived, so the next
+    evaluation records whatever is missing (tested by the jump-over-steps case).
+11. **Policy writes the evidence row directly** (in the mark's transaction, like `recordAuditEntry`
+    writes `audit_entry`) rather than through 001's repository — no domain package depends on
+    another, and a separate repository transaction could not be atomic with the mark. The evidence
+    id is a deterministic function of the mark's key, and `EvidenceRecorded` is mirrored locally so
+    the timeline's feed still hears of the record. `expires_at` is a 400-day placeholder.
+12. **The escalation attempt count is `workflow_transition` rows into `escalating` — and nothing
+    produces that state.** The cap predicate is built and tested against a quantity no workflow
+    increments yet (T066b, not built; un-ticked). Review: the cap applies to an *escalating*
+    proposal only (new optional `escalation.escalating` on the closed `DecisionInput`, a structural
+    statement by the calling feature; nothing sets it yet), so a cap of 0 stops escalation and
+    nothing else, and it has its own reason code `ESCALATION_CAP_REACHED` (distinct from the
+    per-action `ATTEMPT_CAP_REACHED`; a new value on the `policy_reason_code` enum, migration
+    `20261003110000`, whose down-script cannot remove it). 012/006 own
+    the state graph and have not named an escalation state; `ESCALATION_TO_STATE` is the one place
+    policy names it. A workflow that names it differently is simply not counted — change the
+    constant, not the callers. The cap is the tightest `budget_limit.escalation_attempt_cap` that
+    applies (012's `tenant_budget` has none), default 2 (fail closed), and is persisted in
+    `budget_state` so a replay re-applies it (`replayDecision` takes an optional `budgetState`).
+13. **`PUT /budgets` merges over the limit *in force*.** The contract makes only `scopeType` and
+    `period` required, so an omitted field keeps what is in force — the stored row, else 012's
+    `tenant_budget`, else the fail-closed default; never "unbounded", and never reverting an
+    inherited limit to a default (review #5). The merge happens inside the transaction that writes,
+    under a per-tenant configuration lock, so concurrent partial writes are both kept, and the
+    *merged* result is bounded. Soft thresholds outside 1–99, or more than 5, are 422 — never
+    silently dropped (`BUDGET_BOUNDS.maxSoftThresholds`, CHECK-agreed). A NULL threshold column is
+    reported as what is enforced (the default), not `[]`. 012 `tenant_budget` values that were
+    replaced by a fail-closed value (unknown degradation entry, out-of-range threshold) come back as
+    `warnings` on the resolved budget / `GET /budgets/state` and are logged. A refused write is not
+    audited (recorded, not built). `scope_id` NULL means "every issue" for the per-issue limit; an issue-specific
+    override row is honoured by resolution but has no API yet. `GET /budgets/state` gained optional
+    `period` (tenant day or month, default day) and `workflowRunId` (pins the period key); the
+    contract yaml says so.
+14. **Every evaluation now overwrites `budget.{consumed, limit, degradationStep}` and
+    `escalation.attemptCount`** from the aggregate, like `autonomy.level` and `actionClass` before
+    them (**the dry run now takes an optional `issueId`/`workflowRunId` query so it resolves the same
+    binding as the enforcing path**, review I4 — tested: an over-budget issue is deny in both; the
+    caller's budget figures are ignored and documented as such in evaluation.md) (same
+    required-dependency move: `budgets` on `EvaluateAndBindRepos` and
+    `ExplainDecisionRepos`). Two existing e2e tests changed their *input plumbing*, and one its
+    expectation: with nothing configured the per-issue default (2) binds, tighter than the 100 the
+    test's input claimed (`policy-decision-repository.e2e.test.ts`). The dry-run endpoint resolves
+    tenant-level figures only (it carries no issue).
+15. **Where `check:budget-reconcile` is wired into `make ci`:** every budget e2e scenario
+    (`budget-enforcement`, `budget-flood`) ends by running `findBudgetDiscrepancies` over what it
+    left behind, and `scripts/checks/budget-reconcile.e2e.test.ts` runs it over a deliberately
+    awkward tenant (midnight straddle, in-flight, landed, terminal and live runs) and proves a
+    disagreement, an unpriced run and an over-declared run are each reported — all under `make
+    test-e2e`. There is no separate Makefile target, matching `check:ceiling` and
+    `check:policy-coverage`, which are production monitors with their e2e tests as the CI reader.
+16. **Test plumbing.** The shared e2e harness lives in `test/infrastructure/` because
+    `@healer/prisma-client` is lint-restricted to `infrastructure/**` and the harness constructs the
+    client; `test/tenant-isolation.ts`'s `assertTenantIsolated` gained an optional `queryFor` so a
+    route that names its resource in the query string (`/budgets/state`) can use it. The flood test
+    is in `HEAVY_E2E` (≈9 s alone, serialized behind the charge lock).
+17. **`createApiModule` gained two trailing parameters** (`budgets`, `budgetLimits`); every call
+    site was updated by hand (ingest ×1 of 2 — the second, a 503 test, already passed fewer
+    arguments than the signature and still does, runners, load, issues, issue-close-and-views,
+    policy, autonomy-grants, `main.e2e`, `openapi.ts`, `main.ts`). The implementer of approvals
+    (T070–T076) will have appended parameters too: merge by keeping both, then regenerate
+    `apps/api/openapi.json` (`pnpm run generate:openapi`) rather than merging it by hand. Also appended
+    here: `policy.update_budget` in `SEED_POLICY_ACTIONS` and `scripts/db-seed.mjs`, and
+    `budget-flood.e2e.test.ts` in `HEAVY_E2E`.
+
+
+### Review round on the budgets work — outcomes and judgment calls
+
+Two independent reviews (code-reviewer, silent-failure-hunter), fixed in follow-up commits on the same
+branch; migration prefix `20261003110000_budget_hardening` (a reason-code enum value and
+`policy_decision.request_key` with a partial unique index). Items 1–15 above are amended in place where
+they changed.
+
+- **Idempotent charge.** A charged step carries `request_key` (the request with resolved fields and
+  the instant removed); under the lock a retry of the same `(tenant, run, state, request)` returns the
+  live allowed decision. Only a step bound to a run *and* a state can be deduplicated; a decision that
+  charged nothing is not (a retried deny is harmless). A deny is not deduplicated either, so a retry
+  after the budget was raised is evaluated afresh — deliberate.
+- **Failure after commit.** `markDegradation` failing is logged (`repos.log`, structured, tenant-tagged)
+  and swallowed: the next evaluation records the missing step (it is derived). The autonomy epoch is
+  read *before* anything is charged, so a revocation during the lock wait is not hidden and its failure
+  cannot strand a committed decision.
+- **Binding is validated inside the charge transaction.** An unknown, malformed or other-tenant issue
+  or workflow run is `NotFoundError` (404) before any charge commits — for evaluation, dry run and
+  `GET /budgets/state` alike. An *enforcing* evaluation also refuses an `evaluatedAt` more than 5 min
+  from the database clock (`EvaluationInstantError`, 422); a read is not bound, because a dry run
+  replays history. The bound is a repository option (`maxEvaluationSkewMs`, `Infinity` disables); the
+  e2e tests that evaluate at fixed historical instants pass `Infinity`, production wiring takes the
+  default, and a dedicated test proves the default refuses.
+- **Existing e2e tests changed** because bindings are now validated: they seed the issue and workflow
+  run they bind (`policy-decision-repository`, `autonomy-grant-resolution`).
+- **Issue deletion** now deletes the issue-scope marks, issue-scope limit overrides and the marks
+  whose evidence went with the issue (001's `prisma-issue-deletion.ts`, one statement pair). A
+  tenant-scope step whose evidence was the deleted issue's is recorded afresh by the next evaluation,
+  attached to an issue that exists.
+- **`completedAgentRuns`** is capped at 50 and says `completedAgentRunsTruncated: true` past it.
+- **`check:budget-reconcile`**: recomputes parked-aware time; flags a run whose `policy_decision_id`
+  names no decision, another tenant's decision, or a non-allow; takes `tenantIds` so a shared test
+  database's deliberate plants do not fail an unrelated assertion.
+- **ESCALATION state / T058b / T066b** un-ticked and split; T060 and T069 notes corrected (no
+  scheduled production caller for the release command or the reconcile).
+- **Not done, recorded.** (a) Exhaustion evidence can become false later (a limit raised after the
+  record): the record is a statement *at that step*, with the figures and period key it carries. (b)
+  An evaluation with no issue binds records no degradation step (evidence is per issue); the next one
+  with an issue does. (c) The finished-cost pin (by `correlation_id`) and the open-charge pin (by
+  `workflow_run_id`) can disagree when a decision's agent run lands under a different workflow run;
+  the reconcile compares each side against the same JS definition, so it would show the drift, but they
+  are not unified. (d) `check:budget-reconcile` does not iterate keys present only on the SQL side
+  (it walks the keys the raw rows imply). (e) A refused `PUT /budgets` is not audited. (f) A
+  `require_approval` decision reserves no charge: when approvals redeems it nothing is charged
+  ex ante — Phase 7 must either charge at redemption or declare approvals cost-free; approvals did
+  not add a charge. (g) `bindingBudget` breaks an exact spend/time ratio tie by a fixed order, not by
+  which dimension is closer to refusing in absolute terms.
+- **ADR 0015** records the lock decision and indexes it in docs/README.md; research R-11 is rewritten
+  as one consolidated decision rather than a decision plus an appended correction.
+
+## 002 Phase 7 (T070–T076) — judgment calls (approvals)
+
+Decided, not asked. Branch `worktree-002-phase6-7-budgets-approvals` (implementer B).
+
+- **No migration.** `approval_request` (unique `decision_id`, index `(tenant_id, state, expires_at)`)
+  already existed from T002 and already fits. `data-model.md` gained implementation notes only.
+- **"Redeem" is `ResolveApproval`.** There is no executor to redeem against yet, so the human's
+  click is the redemption point and `checkAutonomyEpoch` runs there, inside the transaction, under
+  the row lock (`assertRedeemable`: not pending / lapsed → `APPROVAL_NOT_PENDING`, then stale epoch
+  → `STALE_AUTONOMY_EPOCH`). An approval granted and *then* revoked is covered by R-07 mechanism 1
+  (the executor re-evaluates; nothing is carried across the wait), not by a second "redeem"
+  command. **Open, spec-silent:** how an `approved` request turns the executor's re-evaluation into
+  an `ALLOW` — `REQUIRE_APPROVAL` decisions are (correctly) unconsumable and nothing in 002 mints
+  an `ALLOW` from an approval. That belongs to whoever builds the first executor (008/010); not
+  invented here.
+- **The summary is built, never supplied.** `RequestApproval` takes a decision id and evidence ids,
+  nothing else; `buildApprovalSummary` reads the stored decision and every free-string slot must fit
+  the identifier alphabet (no whitespace). Consequence worth knowing: a decision whose `targetRef`
+  (etc.) holds a sentence is *refused* (`ApprovalSummaryNotStructuralError`), loudly, instead of
+  rendered. The rule `note` (data-model says "shown in the approval summary") is **not** included:
+  T070's list does not name it and it is tenant-authored free text; add it through the same closed
+  schema if wanted.
+- **"Against which rule set version"** = the decision's own immutable `ruleset_version`, written
+  into the resolve `audit_entry` reason and returned as `rulesetVersion`. Not "the version published
+  at click time" — the approver saw, and approved, what that version decided.
+- **Projection pulls the run's deadline earlier.** `expires_at = min(requested, run.deadline_at)`
+  and `workflow_run.deadline_at` is set to it, so the tick that fires the expiry exists by
+  construction. No expiry requested and no run deadline → refused (nothing would fire it).
+- **Run effects are direct writes to 012's tables.** 012's machine has no persisted stepper and no
+  `awaiting_approval`/`needs_human` definition in this repo, so parking (`awaiting`, `deadline_at`,
+  a `workflow_callback` row of kind `approval`, token generated and discarded — a human resolves
+  through the authenticated API) and the lapse (`state = needs_human`, `terminal_state`, a
+  `workflow_transition` with cause `timeout`) are written in the same transaction by
+  `approval-run-effects.ts`. Callback delivery for resolve/expire is in-transaction (consume the
+  row, repeats count). (A port for the T045 sweep was added here and later removed — see the review follow-up below.)
+- **A lapse is a recorded `DENY`, not an evaluation.** `deny` + `APPROVAL_EXPIRED`, no matched
+  rules, the original decision's input/digest/ruleset version; the original is invalidated with
+  `approval_expired`. It cannot replay (no input maps to a rule-less deny), so `check:decision-replay`
+  skips decisions of exactly that shape (`reason_codes ∋ APPROVAL_EXPIRED` and no matched rule keys).
+  `POST /policy/decisions/{id}/replay` on a lapse decision will therefore report non-identical;
+  left alone (an explicit read of an explicit fact).
+- **Sweep `revoke()` now takes the row lock** (T045 code, `FOR UPDATE` via the shared
+  `lockApproval`). Without it the sweep's read-then-write could overwrite an approval a human
+  committed an instant earlier — same bug class as resolve vs expire. One-line semantic change.
+- **Tick body, not a scheduler.** `expireDueApprovals` is the per-tenant body of the
+  `deadline_at` tick; no scheduler exists anywhere in this repository to call it (the same gap as
+  001's staleness sweep and T045's sweep). It is idempotent and one failing request does not block
+  the rest.
+- **`check:stale-approvals` wiring (T076).** `npm run check:stale-approvals` runs against the live
+  DB like its four siblings (not in `make ci`: CI has no production database). What `make ci`
+  *does* run is `approval-lifecycle.e2e.test.ts` (inside `make test-e2e`), which seeds each
+  violation shape — overdue, unfireable (no/short run deadline), orphaned (terminal run) — and
+  asserts the query reports it, and seeds healthy/expired requests and asserts it does not;
+  mutation-checked. Honest gap: nothing schedules the live run yet.
+- **Races proven, not slept.** Resolve vs expire: a held `FOR UPDATE` on the approval row, both
+  contenders polled into `pg_stat_activity` lock waits, then released; exactly one wins (5 repeats).
+  Removing `FOR UPDATE` makes both win. Residual: `autonomy_epoch` is read `FOR SHARE`, which only
+  serialises against a revocation when the row exists; a tenant's *first-ever* revocation inserts it
+  and cannot be blocked. The window is the length of one resolve transaction and the outcome is the
+  same as a revocation landing a millisecond later.
+- **Error codes.** `APPROVAL_NOT_PENDING` is a contract-level name; `@healer/shared`'s closed
+  `ErrorCode` has no such member and `ApprovalNotPendingError` (T045) carries `PRECONDITION_FAILED`.
+  The HTTP controller maps it and `STALE_AUTONOMY_EPOCH` to `409`; the shared list was not touched.
+  `APPROVAL_EXPIRED` and `STALE_AUTONOMY_EPOCH` are referenced from their one authority
+  (`REASON_CODES`, `ERROR_CODES`), not redeclared.
+- **Registry.** Three audit actions (`policy.request_approval`, `policy.resolve_approval`,
+  `policy.expire_approval`, `mutating: false`, same reasoning as publish/grant/revoke) added to
+  `SEED_POLICY_ACTIONS` **and** the hand-synced `scripts/db-seed.mjs` copy, or
+  `check:policy-coverage` would flag every approval audit entry as unregistered.
+- **`createApiModule` gained a 14th parameter (`approvals`).** All ten call sites were edited by
+  hand. One of them (`ingest.e2e.test.ts`, the 503 test) had been missing the 13th (`autonomyGrants`)
+  since Phase 4 — e2e tests are outside `tsc`'s `include`, so nothing flagged it; both are passed now.
+- **Duplication kept small on purpose:** the lapse decision's `INSERT` repeats `record()`'s column
+  list instead of refactoring `PrismaPolicyDecisionRepository` (another implementer is in this
+  package); fold the two together once Phase 6 lands.
+- **T032 extended** in `apps/api/policy.e2e.test.ts`: approval read, list and resolve are 404
+  cross-tenant (mutation-checked: dropping `tenantId` from `findById` fails it; resolve is also
+  protected independently by the tenant-scoped row lock). Endpoint behaviour is
+  `apps/api/approvals.e2e.test.ts`.
+
+### 002 Phase 7 — review follow-up (two independent reviews of the branch)
+
+Fixed (item numbers are the coordinator's):
+
+1. **One approval per run, callback bound to its approval.** *Refuse*, not return-existing, when the
+   locked run already has a pending request or awaits something other than an approval
+   (`ApprovalAlreadyPendingError`); a repeat for the **same decision** still returns the existing
+   request (idempotency). A run whose marker belongs to a *resolved* approval may be re-parked
+   (resolve clears `awaiting`). Binding needed a **migration
+   `20261003100000_approval_callback_binding`** (with `down.sql`): nullable unique
+   `workflow.workflow_callback.approval_id`, no FK so 012 does not depend on 002. It adds a column to
+   012's table from 002's branch — flag for 012's owner. Delivery is by that key in resolve, expire
+   and revoke.
+2. `request()` idempotency read is `findFirst({decisionId, tenantId})`. Not separately
+   mutation-testable (the run lock already 404s a foreign run first); a one-line correctness fix.
+3. `RequestApproval` takes `evaluateAndBind`'s `autonomyEpoch`, records it, and refuses
+   `STALE_AUTONOMY_EPOCH` if no longer current; refuses a consumed/invalidated decision; refuses
+   `evidenceIds: []` (the approver "sees the evidence").
+4. `ResolveApproval` locks the run (after the approval, same order as expire) and refuses a terminal
+   run with `ApprovalRunTerminalError` (409). **`rejected` means:** the original decision is
+   invalidated with the new reason `approval_rejected` (data-model + openapi.yaml enum extended;
+   `invalidated_reason` is free text in the DB, so no migration for that), the callback is
+   delivered, and the run goes to terminal `needs_human` with a `human`-cause transition.
+   **Approve** delivers the callback and clears `awaiting`; the run's state is left for its stepper.
+5. `deliverApprovalCallback` throws `NotFoundError` when nothing matches; the surrounding
+   transaction rolls back.
+6. `expireDueApprovals` and `sweepRevokedApprovals` skip only `ApprovalNotPendingError`.
+7. Sweep `revoke()` now delivers the callback, moves the run to `needs_human` (cause `policy`) and
+   audits (`policy.revoke_approval`, registered in both seed lists) in the revoke's transaction. The
+   `ApprovalCallbackPort` and its Prisma implementation were **deleted** (nothing uses an
+   out-of-transaction port any more); `sweepRevokedApprovals` lost its `callback` parameter. **Not
+   done:** no outbox event on revoke — the contract's event table has no `ApprovalRevoked`, and
+   inventing one is a spec change.
+8. `check:stale-approvals` also reports: a run `awaiting` an approval with no pending request; a
+   pending request with no unconsumed `approval` callback; a request whose run does not exist
+   (explicit message). Seeded-violation tests for each.
+9. `check:decision-replay` exempts a lapse only if `deny` + exactly `['APPROVAL_EXPIRED']` + no
+   matched rules **and** an `expired` request on the same run **and** an original decision with
+   `approval_expired` and the same digest. A forged lapse-shaped row is flagged (tested).
+10. `findDue` returns `{id, expiresAt}` only. `list()` parses per row and omits a malformed row with
+    a structured error log (id + failing paths, never content); `findById` still raises for that
+    row. Judgment: an *omitted* row is invisible to the caller except in logs — the alternative (an
+    error entry in the list response) changes the contract shape. Revisit if the approver UI needs
+    it.
+11. Typed `PRECONDITION_FAILED` from `buildApprovalSummary`. **Clock:** resolve/expire still take
+    `now` from the caller rather than DB `now()` under the lock — deliberate: the injected instant
+    is what makes the lapse/race tests deterministic, and a DB clock would not remove skew between
+    the tick host and the human's request anyway.
+
+Recorded, not coded (coordinator's calls):
+
+- **C1: nothing schedules `expireDueApprovals`, `sweepRevokedApprovals` or
+  `check:stale-approvals`.** The mechanisms are built and tested; no production caller runs them, so
+  an approval that lapses today stays `pending` until something calls the tick. T072, T073 and T076
+  are ticked on the strength of the tested mechanism — **that tick should be reconsidered**;
+  tasks.md carries the note. No scheduler was invented.
+- **M4:** the decision-invalidating `updateMany` can match zero rows (already consumed or
+  invalidated); silent by design (same posture as `consume()`); no warning added.
+- **M5:** `Idempotency-Key` is validated for shape but not stored (the repo-wide known gap, 001
+  T057); retries are safe only because each mutation is itself idempotent or guarded.
+- **M6:** `check:policy-coverage` keys on `policy_action.mutating`
+  (`pa.mutating = true AND pd.id IS NULL`). The approval audit actions are `mutating:false`
+  deliberately: they are admin/control writes, not guarded actions; flipping them to `true` would
+  make the check flag every approval audit entry (each links a non-`allow`, non-consumed decision)
+  as a missing consumed ALLOW. Left as is.
+
+## Decisions waiting on Pavlo — 002 phases 6–7 (index; detail in "002 Phase 6 (T056–T069)" and "002 Phase 7 (T070–T076)" above)
+
+1. Nothing in 002 turns an `approved` request into an `ALLOW`, and a `require_approval` decision
+   reserves no budget charge — so an approved step that runs without re-evaluation could overshoot
+   a budget. Which spec owns the redemption path (008/010), and does redemption re-charge?
+2. Nothing schedules `expireDueApprovals`, the revocation sweep, `releaseAbandonedCharges`,
+   `check:stale-approvals` or `check:budget-reconcile` in production — T072/T073/T076 are ticked as
+   mechanisms with that gap named. Fold into C-90 (tenant enumerator + repeatable schedule), or
+   un-tick until it lands?
+3. T058b and T066b are un-ticked: who owns the workflow suspension on `BUDGET_EXHAUSTED`, the
+   producer of the `escalating` state and the hand-off package (006/008/012)?
+4. Approval migration `20261003100000` adds a column to 012's `workflow_callback` table — does 012's
+   owner accept that, or should the binding move?
+5. `agent_run.cost` has no provenance column and nothing writes `agent_run` yet, so
+   `check:budget-reconcile` cannot prove a cost was measured, only refuse visible estimates.
+
+## 002 Phase 6–7 — `make ci` result on this machine (coordinator)
+
+`make ci` was run three times on the merged tree. Run 1 found a real defect (the data-model drift test
+tripping on backticks in C-84's note); run 2 found a real merge defect (A's evaluation-skew bound vs
+B's fixed-instant fixtures) — both fixed. Run 3 failed `apps/api/runners.e2e.test.ts` on a 120 s timeout
+under load and it passed alone (11/11). `apps/runner/runner-image.e2e.test.ts` "genuinely drains an
+in-flight heartbeat" is **red intermittently and also on an unmodified master checkout** on this
+machine (docker `inspect` returns an empty exit code): nothing under `apps/runner` or its dependencies
+changed in this batch (the only lockfile diff is master's own 0.49.0 `@healer/domain-policy` entry).
+It passed in run 3 and fails when run alone; the cause is not established — treat as a pre-existing
+012 T050 environmental failure, not caused by 002 phases 6–7.
+
+## 004 T036-T052 — judgment calls
+
+### Split B (T042-T048, T051, T052 — Phase 5 / US3)
+
+- **No migration.** `component_attr`, `deployment_unit_attr`, `repository_attr`, `endpoint_attr` and
+  their enums already exist from T002, and `characteristics` is `text[]`. T044/T045 are domain
+  types + validators + a repository; T046 is endpoint-kind rules over existing edges.
+- **One authority for the closed lists = `packages/domain/architecture/src/domain/graph-vocabulary.ts`.**
+  The Prisma enums are the database mirror; `graph-vocabulary.test.ts` parses `prisma/schema.prisma`
+  and fails when they differ (that test is the reader). `boundary-contract` keeps these as plain
+  strings (zero workspace deps, ADR 0001) — unchanged.
+- **Characteristics vocabulary is a value, not an env var or table.** `parseCharacteristicVocabulary(raw)`
+  validates a config-supplied list (snake_case, unique, non-empty; throws at start-up);
+  `DEFAULT_CHARACTERISTICS` is data-model's six plus `event_driven`. Nothing wires per-tenant or
+  env-driven extension yet — that composition-root wiring belongs with the API/discovery work (no
+  `shared/config` or `apps/api` edit here, both off-limits to this split).
+- **T004's fixtures used `user-facing`/`event-driven`, not in data-model's `user_facing` list.**
+  T048's all-fixtures-validate test was red on exactly that; fixtures now use `user_facing` /
+  `event_driven`. T047 itself was already satisfied by T004's loader (three fixtures); no
+  `external`-component fixture was added because T004's e2e asserts every component is `built_from`
+  a repository, which an `external` component (T051) deliberately is not.
+- **`exposes` endpoint rule is not specified anywhere.** Chose `component | deployment_unit ->
+  endpoint` (a unit or component that serves an endpoint). `implements` is `endpoint -> component`
+  (data-model). `calls`, `depends_on`, `serves_feature` are left unconstrained by this task.
+- **Readers (which guarantee has a production consumer).**
+  - *Wired:* `check:graph-structure` (`scripts/checks/graph-structure.mjs`, `pnpm run
+    check:graph-structure`, own file, own package.json line — not in Split A's check files) calls
+    `listEdgeEndpointViolations` and `listNaturalKeyCollisions` for every tenant and fails on any
+    result. Covers T046's endpoint-kind rules and T052's collisions.
+  - *Pending Phase 3 (no write path exists on master):* the confirmation write path calling
+    `validateEdge` and `validateComponentAttr` before writing; the discovery/draft step calling
+    `placeDeploymentUnit` (T051 has no production caller today) and `detectNaturalKeyCollisions`
+    for the human disambiguation; the composition root calling `parseCharacteristicVocabulary`
+    (T044). Not a DB trigger: T046 is "no migration".
+- **"External component" = `graph_node.node_kind = 'component'` with `component_type = 'external'`**
+  (plus characteristic `third_party`), not `node_kind = 'external'` (which is a separate kind in the
+  schema, meant for external systems). `placeDeploymentUnit` reuses the unit's natural key for the
+  component; its `deploys` edge endpoints are `{ kind, naturalKey }` pairs (`component` ->
+  `deployment_unit`), so from/to are distinguishable and `validateEdge` is asserted on the
+  placement's own output rather than hard-coded kinds (review M5). It throws on an empty unit key
+  or name or an empty matched key (pass `null` for "no match").
+- **Collision definition (T052, tightened after review):** two or more DISTINCT component ids
+  sharing a canonical key (`trim().toLowerCase()`; candidates keep the key as written). Scope tag
+  `cross_repository` (2+ repositories across the group), `same_repository`, or `unrepositoried`
+  (some member has no repository and the group spans at most one). Entries are merged by
+  `componentId` first, so one component listed once per repository never collides with itself.
+  Output is candidates only; there is no merge function. The repository only considers open,
+  non-rejected components and edges.
+- **Kind-attribute validation:** optional text fields accept `undefined | null | non-blank string`
+  (trimmed); any other type is a validation error, never silently null; whitespace-only required
+  text is rejected. `validateEdge` is a total, fail-closed table over `EdgeType` (`calls`,
+  `depends_on`, `serves_feature` are explicitly `'unconstrained'`); unknown types are refused.
+- **Attribute writes require a live node:** `assertNode` demands the node be open
+  (`valid_to_version = 2147483647`) and not `rejected`, else not-found. Reads are not so filtered.
+- **Fixtures gained one `endpoint` each** (`api-route`, `orders-route`, `checkout-route`), with an
+  `implements` and an `exposes` edge, so every structural edge type is exercised by the query set;
+  T004's invariants (every component built_from and deployed) are unaffected because endpoints are
+  not components.
+### T049-T050
+
+- **`GetSystemContext` and `GET /graph/nodes` share one unpinned version scope**
+  (`infrastructure/graph-version-scope.ts`: current version, validity window, the `OPEN_VERSION`
+  sentinel). The context is unpinned only (the envelope states the version); a pin is YAGNI until
+  006/008 ask. `PrismaGraphReadRepository.resolve` was touched only to call the helper.
+- **Rejected elements are left out of `SystemContext`**, unlike `GET /graph/nodes`, which shows
+  every state: an agent handed context should not reason about a component a human rejected.
+  `proposed`/`stale` stay, with `state` shown (FR-016); the state type cannot hold `rejected`.
+  Edges appear only when both endpoints are among the three node lists.
+- **Coverage is context-scoped**, not graph-wide, so it can differ from `GET /graph/nodes`.
+  `excludedEdges` counts the open, non-rejected edges dropped for an endpoint that is rejected,
+  closed or of another kind (edges to `endpoint` nodes make it nonzero in every fixture).
+  `check:graph-structure` fails on an open edge whose endpoint is rejected or closed — that
+  case is a defect, the endpoint-kind case is not.
+- **The architecture-agnostic rule is "no style term outside `packages/integrations/**`", not
+  "no style branch".** A branch-line heuristic was bypassed by aliases, object dispatch,
+  `.includes()` and multi-line conditions, so the gate flags any banned term in comment-stripped,
+  identifier-split code (camelCase, acronyms, `_`/`-`, plurals) across every JS/TS source file in
+  `packages/**` and `apps/**`, minus declarations and tests. Strings are scanned (comments are
+  not). Residual weakness: it is textual — a style spelled by concatenation or held in config data
+  is invisible to it — and the term list is a vocabulary, not a proof. It fails closed if a scan
+  root yields no files and reports the scanned count. No real file outside the integrations
+  adapters names a style today; breaking the exemption makes the real tree fail.
+- **Open spec mismatch (for Pavlo, item 6 below):** FR-020 allows architecture-specific logic in
+  "adapters and discovery"; T050 and `graph-contract.md` exempt only `packages/integrations/**`.
+  The gate follows T050, except that a directory literally named `adapters/` or `discovery/`
+  stays exempt for style terms (the original 012 T032 behaviour, kept so its tests stay green);
+  `infrastructure/` is exempt for our own stack only.
+
+### Split A (T036-T041, US2: provenance merge, derived confidence, checks, node reads)
+
+- **Human provenance does not enter the merge path (R-04a vs data-model.md).** Followed
+  `data-model.md` and migrations T002/T011: `edge_provenance` has no validity range and no
+  `actor_ref`; humans author `graph_node`/`graph_edge` directly. Enforced by type:
+  `EdgeObservation.provenance` is `MachineProvenanceClass` (the closed list minus the two human
+  classes, derived by `Exclude`, so there is still one authority), proven by a `@ts-expect-error`
+  test. `check:graph-provenance` reports a human-class *edge* as a violation because nothing can
+  name its actor (item 1 of the decisions list stays open).
+- **The max-maintenance trigger is lossy under a race, so the merge locks the edge row.** Measured
+  in a scratch container: a held-open writer inserts a strength-50 `edge_provenance` row; a second
+  writer's 40 row, computed from a statement snapshot that cannot see the first, overwrites the
+  edge back to 40 with no error. The merge does `SELECT ... FOR UPDATE` on the open edge row
+  before any insert (READ COMMITTED, no SERIALIZABLE needed). Proven by
+  `graph-edge-merge-race.e2e.test.ts` (holder transaction polled via `pg_stat_activity`, 10
+  trials) and mutation-checked: with the lock removed the same test fails every trial (10 of 10) with
+  "expected 40 to be 50". A first draft that founded the edge with `INSERT ... ON CONFLICT` BEFORE
+  locking passed the race test with the lock removed, because the conflict check itself waits on
+  the other writer's row - so the lock now comes first and the founding insert only when absent.
+- **`ON CONFLICT ... WHERE valid_to_version = <bind param>` fails with 42P10 after five
+  executions** (Postgres switches to a generic plan and cannot infer the partial unique index from
+  a parameter). The `2147483647` sentinel is a literal in that SQL. Noted in the repository.
+- **Replay key: unique `(tenant_id, edge_id, observation_ref)` on `edge_provenance`.** Jobs may run
+  twice; without it a replay double-counts `observation_count`. Added to the one T038/T039
+  migration (`20261003070000_graph_confidence_config`, prefix free on this tree's master), with
+  the T039 per-tenant config table `architecture.confidence_config` (`tenant_id` PK, `config`
+  jsonb of overridden knobs). `data-model.md` updated in the same commit.
+- **Confidence volume term uses `observationCount`, not R-15's "distinct observation days".** The
+  dependency observation carries a count and a window, not a day set. Integer-only: the
+  `log2` is `floor(log2(1+n))` by bit length (no `Math.log2`, so it is byte-reproducible),
+  times a per-tenant scale, capped. A volume of 1 is capped at `singleObservationCap` (default
+  40). `base` covers the five machine classes only (R-15's human rows are not reachable here).
+  An invalid tenant override throws rather than falling back to the default.
+- **Edge `provenance` follows the strongest `edge_provenance` row** (class and ordinal agree), and
+  `observation_count`/`last_observed_at` are accumulated by the merge in the same transaction;
+  `strength`/`confidence` stay the trigger's job (one authority, no duplicate app-side max).
+- **`check:edge-strength-max` only checks open edge rows** (`valid_to_version = 2147483647`): the
+  trigger deliberately never touches a closed row, so a closed edge legitimately stops tracking
+  later provenance. An edge with no provenance rows is `check:graph-provenance`'s finding.
+- **`GET /graph/nodes` returns the open rows unless `graphVersion` is given**, and states
+  `graphVersion` (max minted version, or 0 before any). `attributes` (Split B's attribute tables)
+  is not in the node response. `discoveryRunId` was added to the contract's `Node` schema
+  (FR-006 asks for "the producing run"; the contract had no field for it). Edge detail is returned
+  inline on `GET /graph/nodes/{nodeId}` with every contributing source.
+- **Filters validate against the schema's own Prisma enums** (`GraphNodeKind`, `GraphLayer`,
+  `GraphElementState`) in the repository, not a hand-kept list at the HTTP edge; a bad value is 400.
+- **`apps/api/ingest.e2e.test.ts`'s second `createApiModule` call already omitted
+  `autonomyGrants`** on master (tests outside `src/` are not type-checked); both missing slots are
+  now filled with no-op repositories.
+- **Environment:** Docker Desktop was not running at start; it was started (`open -a Docker`) to run
+  the e2e suites. No docker prune was run.
+
+#### Split A, review round (fixes to the above)
+
+- **Confidence is derived from the edge's aggregate after the lock** (`edge.observation_count +
+  this observation`, latest `lastObservedAt`), not one row's own count. Fifty single observations
+  of one edge now clear `singleObservationCap`. Each `edge_provenance` row stores the confidence
+  it was derived with; the edge keeps the MAX of them.
+- **The reference instant is input, not wall clock** (`EdgeObservation.observedUntil`, the end of
+  the run's observation window). No default; a retried job stores the same confidence. Validation:
+  `observationCount` a safe integer >= 1, both instants valid Dates, `lastObservedAt` no later than
+  `observedUntil` plus a named 5-minute skew (`MAX_CLOCK_SKEW_MS`). The check is against the
+  window, not `Date.now()`, so it is deterministic on retry.
+- **Replay with a different payload throws `ObservationReplayMismatchError`** (provenance, adapter
+  key/version, run id compared; confidence and counts deliberately not, because confidence is
+  derived). **L2, recorded:** the replay key is per `edge_id`, so it relies on an upstream re-run
+  reusing the same `graph_fact` evidence id for the same observation; a re-run that mints new
+  evidence ids would be recorded as new observations and double-count volume.
+- **M6, recorded for confirmation:** the edge keeps the MAX of the confidences written at each
+  observation, so staleness never lowers an edge's stored confidence; a stale edge is surfaced
+  through `last_observed_at` / `lifecycle_state` (data-model.md "never recomputed on a schedule").
+  This reads R-15 as "staleness is evaluated at write time against the window", which is what the
+  spec says; if R-15 meant a stale edge should lose confidence on a later quiet run, that needs a
+  new write (a fresh observation row) rather than a recompute.
+- **`edge_provenance` stores `observation_count` and `last_observed_at`** (amended migration
+  `20261003070000_graph_confidence_config` in place: it was unpushed and mine; `down.sql` and
+  data-model.md amended with it). `check:edge-strength-max` now also compares SUM(count),
+  MAX(last_observed_at) and the strongest row's class.
+- **Pinned reads (interim, see decisions item 4).** Version resolution: unpinned reads use the
+  tenant's current version; **current version 0 with nodes present** (nothing minted yet) reads the
+  open rows (`valid_to_version = 2147483647`) and states `graphVersion: 0`. An explicit
+  `graphVersion` must be a minted version: 0, a future version, an unminted gap or an int32
+  overflow is a 400 (the caller's mistake), not an empty graph. `minStrength` outside 0-32767 is
+  a 400. Each read is one RepeatableRead transaction.
+- **Edge view:** class, strength, confidence and observation shown come from ONE row, the
+  strongest (ties: earliest recorded, then id; one shared compare function and the same order in
+  SQL). Consequence: the displayed confidence can be lower than the edge's stored confidence
+  (the MAX over rows, which traversal uses) when a weaker-class row had higher volume; both are
+  inspectable through `contributingSources`. An edge with no visible provenance row carries
+  `provenanceUnresolved: true` (added to the contract's `Edge`).
+- **Config errors name the tenant**; `base` must be a plain object. `check:graph-provenance` also
+  flags human-class and observation-less `edge_provenance` rows. Both checks print how many rows
+  they checked.
+
+## 002 Phase 8 polish + T083/T086/T087 (0.52.0)
+
+Judgment calls made without asking:
+
+1. **Citation form and digest** for FR-008a are mine: `// derivation[<class>]: <run-id>` in `ceiling.ts`,
+   resolved to `docs/derivations/<run-id>.json`; digest = sha256 of key-sorted JSON without the
+   `artifactDigest` field. 011 owns the exporter and has not built it — it must use the same
+   function (`artifactDigestOf`, `scripts/gates/ceiling.mjs`) or move the definition. The gate checks
+   the file is complete, names the cited run and matches its own digest; it does **not** re-check the
+   run facts (split scope, completion, denominator ≥ 20) — the row's constraints and 011's
+   reconciliation own those. Is that the right split?
+2. `run_terminal` is a new member of the closed `invalidated_reason` list (plain text column, no
+   migration). `onIssueStateChanged` ignores the event payload's `toState` and asks `workflow_run`
+   whether the run is terminal — structural, so redelivery is a no-op. Nothing dispatches events to it
+   yet (same gap as the sweeps).
+3. T083's check is generic: "no level only because the undo is unattested" — so it also fires for any
+   future class gated the same way, not just `reversible_remediation`.
+4. T081 not ticked. Phase 6/7 scenarios 13–19 and 24–29 map to `approval-lifecycle`,
+   `apps/api/approvals`, `autonomy-grant-resolution`, `budget-enforcement/-degradation/-flood/-hardening`
+   and `apps/api/budgets` e2e files (144 of 145 passed in one parallel run; the failure,
+   `apps/api/approvals` "resolves with the human…" 404, passed 2/2 alone — load-dependent, not
+   diagnosed). Scenario 29 (cooldown) needs `action_limit`, which is Phase 5 (T085): only the pure
+   evaluator side is covered.
+5. This batch was built on top of the unmerged `worktree-002-phase6-7-budgets-approvals` branch
+   (0.50.0), because phases 6–7 already existed there — see the hand-off note.
+
