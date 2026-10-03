@@ -30,6 +30,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const ISSUE_ID_COLUMNS = [
   'agent.agent_run.issue_id',
   'architecture.drift_finding.issue_id',
+  'context.context_snapshot.issue_id',
   'evidence.evidence.issue_id',
   'issue.issue_event.issue_id',
   'issue.issue_relationship.issue_id',
@@ -291,6 +292,22 @@ async function deleteDerivedRows(
   await tx.$executeRaw`
     DELETE FROM "policy"."budget_limit"
     WHERE tenant_id = ${t}::uuid AND scope_type = 'issue' AND scope_id = ${id}::uuid`;
+  // 003: a snapshot is the issue's own content (items view its evidence, passes name its runs), and
+  // every foreign key into it is RESTRICT — so children first, before the evidence and the runs go.
+  // The append-only rules on these tables step aside under this transaction's privileged write.
+  await tx.$executeRaw`
+    DELETE FROM "context"."context_item" WHERE tenant_id = ${t}::uuid AND snapshot_id IN (
+      SELECT s.id FROM "context"."context_snapshot" s WHERE s.tenant_id = ${t}::uuid AND s.issue_id = ${id}::uuid)`;
+  await tx.$executeRaw`
+    DELETE FROM "context"."source_outcome" WHERE tenant_id = ${t}::uuid AND pass_id IN (
+      SELECT p.id FROM "context"."collection_pass" p
+      JOIN "context"."context_snapshot" s ON s.id = p.snapshot_id AND s.tenant_id = p.tenant_id
+      WHERE s.tenant_id = ${t}::uuid AND s.issue_id = ${id}::uuid)`;
+  await tx.$executeRaw`
+    DELETE FROM "context"."collection_pass" WHERE tenant_id = ${t}::uuid AND snapshot_id IN (
+      SELECT s.id FROM "context"."context_snapshot" s WHERE s.tenant_id = ${t}::uuid AND s.issue_id = ${id}::uuid)`;
+  await tx.$executeRaw`
+    DELETE FROM "context"."context_snapshot" WHERE tenant_id = ${t}::uuid AND issue_id = ${id}::uuid`;
   await tx.$executeRaw`
     DELETE FROM "evidence"."evidence_link"
     WHERE tenant_id = ${t}::uuid AND evidence_id IN (

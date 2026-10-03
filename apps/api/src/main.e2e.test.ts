@@ -1,3 +1,4 @@
+import type { BoundaryRejectionRepository } from '@healer/domain-context';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -73,6 +74,10 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented in this test')),
   findByName: () => Promise.resolve(null),
 };
+const noopBoundaryRejections: BoundaryRejectionRepository = {
+  record: () => Promise.reject(new Error('not implemented in this test')),
+  list: () => Promise.reject(new Error('not implemented in this test')),
+};
 const noopGraphReads: GraphReadRepository = {
   listNodes: () => Promise.reject(new Error('not implemented in this test')),
   getNode: () => Promise.reject(new Error('not implemented in this test')),
@@ -139,6 +144,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopBudgetLimits,
       noopApprovals,
       noopGraphReads,
+      noopBoundaryRejections,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

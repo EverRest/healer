@@ -3289,3 +3289,101 @@ Judgment calls made without asking:
 5. This batch was built on top of the unmerged `worktree-002-phase6-7-budgets-approvals` branch
    (0.50.0), because phases 6–7 already existed there — see the hand-off note.
 
+
+## 003 phases 1–3 — append-only vs. lifecycle columns
+
+T004 asks for database rules rejecting `UPDATE` and `DELETE` on `context_snapshot`,
+`collection_pass`, `source_outcome`, `boundary_rejection` and the three ruleset tables, and it is
+built literally (`20261004000000_context_core`: the shared `reject_mutation_unless_privileged()` /
+`reject_truncate_unless_privileged()` triggers, as `edge_provenance` does). `data-model.md` also
+lists columns that are *set after insert*, which a pure append-only table cannot update:
+
+- `context_snapshot.finalised_at` ("set once"; state `collecting → finalised`),
+- `collection_pass.completed_at` and `collection_pass.outcome` ("set by the result batch or by the
+  deadline tick"; state `dispatched → completed | partial | deadline_expired`).
+
+Until decided, the schema declares them as required-at-insert columns (`finalised_at NOT NULL`,
+`completed_at` nullable, `outcome` NOT NULL), so a row can only be written already settled. That
+cannot express "dispatched, no result yet" — which FR-025 and the deadline tick (T044) need. Options:
+
+1. Narrow the trigger like `evidence`'s: allow only `completed_at` null → set and `outcome` set once
+   on `collection_pass`, and `finalised_at` null → set once on `context_snapshot` (make it nullable).
+2. Keep pure append-only and model the lifecycle as new rows (a `pass_settlement` row per pass, the
+   snapshot's finalisation as the snapshot row of the *next* state) — the invariant "no row in a
+   finalised snapshot is updated" holds by construction.
+3. Keep the columns, update them only under `healer.privileged_write` (an audited bypass) — weakest.
+
+Not solved here. Also chosen without asking: `predecessor_id`, `gap_evidence_id` and
+`context_item.component_id` carry no FK (Prisma cannot express an optional composite
+`(x_id, tenant_id)` reference; same-tenant is the repository's job, and a CHECK ties
+`gap_evidence_id` to `status <> 'collected'`); `boundary_rejection.runner_id`/`pass_id` carry no FK
+on purpose (a payload from an unknown runner or pass must still be recorded, FR-025).
+
+
+## 003 phases 1–3 — decisions made while building (VERSION 0.55.0)
+
+Built T001–T032. Judgement calls, each reversible:
+
+1. **Excerpts ride beside the shape, not in it.** The closed shape set (012) has no excerpt field, yet
+   US1 requires a bounded redacted excerpt. The result item is an envelope `{ evidence, collectorKey,
+   observedAt, excerpt?{text ≤ 500, truncated}, redactionDominated, redactionRulesetVersion, localRef? }`;
+   `evidence` is exactly 012's closed union. A cross-spec item for 012: confirm the envelope, or add
+   `excerpt` to the shapes.
+2. **`collection_gap` widened** with optional enum/id/count fields (`collectorKey`, `reasonCode`,
+   `detector`, `itemClass`, `localRef`, `observedAt`…). In a collection batch `what`/`why` must be a
+   collector/item-class name and a closed reason code, so prose cannot ride a gap.
+3. **Free text is default-deny.** R-07a's `free_text_span` is implemented as a template-vocabulary
+   allowlist; an excerpt containing any other word is *dropped whole* (item kept with its structural
+   shape, `redactionDominated: true`, original in the plane-local ledger) rather than withholding the
+   whole item. Whole-item withholding is for unrecognised formats and detectors marked "remove the
+   whole item". Interpretation of R-07a/R-08; vocabulary is data to tune from S0-1.
+4. **Ruleset distribution.** Published definition (`REDACTION_RULESETS`) lives in boundary-contract,
+   detectors in the runner image keyed by name; unknown version ⇒ withhold everything.
+   `redaction_ruleset` table sync is not built (no reader yet).
+5. **Runner may not depend on control-plane packages** (image is built scoped to boundary-contract +
+   shared). So `CollectorInvocation`/`invocationFor` live in the runner; ports return `unknown` and
+   collectors parse with their own schema. Integration skeletons implement `ContextSourceAdapter`.
+6. **Gaps in the shapes:** `config_key_ref` has no change-indicator field (none crosses);
+   `source_file` can emit paths only — FR-011's "content for named files" has no shape (no content crosses).
+7. **T007 "post"**: the HTTP endpoint is T046; ingress is covered at `acceptResultBatch` level
+   (BOUNDARY_SCHEMA_REJECTED, 422 mapping lands with the controller).
+8. **T010** asserts non-assignability against 002 `DecisionInput`, `string`, `number` and directive
+   parameter types; the planner/ranker/dedup parameters do not exist yet (T068/T084).
+9. **Audit action** `context.collect_pass` (read_only, non-mutating) registered so
+   `check:policy-coverage` does not flag it; the pass summary is canonical JSON in `reason`.
+10. **Collectors built:** loki_logs, otel_traces, config_flags, gitlab_commits, source_file. The other
+    four report `not_attempted/capability_unavailable` until their phase. Serial loop in
+    `collectPass`; pool and timeouts are T034. `empty_result` is not yet produced (T058).
+11. **T032** scans sources and `docker/docker-compose.yml`; `.env.example` was not read (rule: no env files).
+12. Ledger is JSON files (0600) under `RUNNER_LEDGER_DIR`; not yet wired into runner `main.ts` (T035).
+
+### 003 phases 1–3 — after the deep review (fixes made; items left for a decision)
+
+Fixed with a failing test first (unit/e2e): non-ASCII and fullwidth text in excerpts, forged
+placeholders, name-like vocabulary, card/IP/phone/`client_secret` format gaps, structural-field
+default-deny (span names, edges, author handles → stable pseudonym), `NODE_FRAME` backtracking,
+microsecond timestamps, `collectPass` contract (per-item schema gap, no orphan items, central
+`maxItemsPerCollector`, one ledger entry per withheld record, `pruneExpired` at pass start),
+`safePath` record keys, `contractVersion`/`passId` bounds, `since` 422, directive validation
+(pass 0 pair, relative `source_file` paths, label-only component/environment, window/duplicates/
+ceilings), `secret-scan` (PEM header assembled), 001 erasure and retention purge reaching `context.*`.
+`isoTimestamp` in collectors now rejects offsets `Date` cannot parse.
+
+**Left for a decision (not built):**
+
+1. **001 cannot persist `stack_frame`, `config_key_ref` (and `pull_request_ref`, `knowledge_ref`).**
+   `KIND_TO_EVIDENCE_TYPE` and the `evidence.evidence_type` enum lack them, so T036 cannot turn a batch
+   item into Evidence. Needs a 001 change (enum migration + mapping) or an explicit mapping onto an
+   existing type; no task owns it. Blocks Phase 4.
+2. **Append-only vs lifecycle columns** (section above) — unchanged.
+3. **Result batch cross-checks** (`evidence.kind` ↔ `collectorKey`, `sourceOutcomes` ↔ `items`, optional
+   envelope fields on `collection_gap`, `contractVersion` equality) — belongs with `IngestResultBatch`
+   (T036), where the plan is available to check against.
+4. **`@healer/domain-context` has a devDependency on `@healer/domain-policy`** (type assertions in
+   `untrusted.test.ts`). First domain→domain edge; test-only, but ADR-worthy if it becomes a
+   runtime one.
+5. **Vocabulary is data to tune.** Default-deny now withholds span names/edges and drops excerpts that
+   use words outside `vocabulary.ts`; real applications will need their domain words added (S0-1).
+6. `data-model.md`'s appended implementation notes should be folded into the tables above them on the
+   next schema change (consolidate, don't append).
+7. VERSION renumbered 0.55.0 (master is at 0.54.0); resolve the changelog position at merge.

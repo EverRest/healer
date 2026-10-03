@@ -17,6 +17,10 @@ import {
 } from '@healer/domain-issues';
 import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import {
+  PrismaBoundaryRejectionRepository,
+  type BoundaryRejectionRepository,
+} from '@healer/domain-context';
+import {
   PrismaEvidenceGraphRepository,
   PrismaEvidenceRepository,
   type EvidenceGraphRepository,
@@ -66,6 +70,10 @@ import {
   PolicyEvaluationController,
 } from './policy/policy-evaluation.controller.js';
 import { GRAPH_READ_REPOSITORY, GraphNodesController } from './graph/graph-nodes.controller.js';
+import {
+  BOUNDARY_REJECTION_REPOSITORY,
+  BoundaryRejectionsController,
+} from './context/boundary-rejections.controller.js';
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
@@ -134,6 +142,7 @@ export function createApiModule(
   budgetLimits: BudgetLimitRepository,
   approvals: ApprovalLifecycleRepository,
   graphReads: GraphReadRepository,
+  boundaryRejections: BoundaryRejectionRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -148,6 +157,7 @@ export function createApiModule(
       BudgetsController,
       ApprovalsController,
       GraphNodesController,
+      BoundaryRejectionsController,
     ],
     providers: [
       { provide: HEALTH_META, useValue: meta },
@@ -167,6 +177,7 @@ export function createApiModule(
       { provide: BUDGET_LIMIT_REPOSITORY, useValue: budgetLimits },
       { provide: APPROVAL_LIFECYCLE_REPOSITORY, useValue: approvals },
       { provide: GRAPH_READ_REPOSITORY, useValue: graphReads },
+      { provide: BOUNDARY_REJECTION_REPOSITORY, useValue: boundaryRejections },
     ],
   })
   class ApiModule {}
@@ -202,6 +213,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaBudgetLimitRepository(prisma),
     new PrismaApprovalLifecycleRepository(prisma),
     new PrismaGraphReadRepository(prisma),
+    new PrismaBoundaryRejectionRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

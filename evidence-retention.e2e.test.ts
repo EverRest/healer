@@ -69,6 +69,39 @@ describe('PrismaEvidenceRetentionRepository (001 T052, R-04, FR-009)', () => {
     );
   }
 
+  /** 003: a snapshot over the issue with one `context_item` viewing `evidenceId` (RESTRICT key). */
+  async function viewedByContextItem(evidenceId: string): Promise<{ snapshotId: string }> {
+    const snapshotId = randomUUID();
+    const passId = randomUUID();
+    const runId = randomUUID();
+    await query(
+      pg,
+      `insert into "workflow"."workflow_run"
+         (id, tenant_id, issue_id, definition_key, definition_version, state, correlation_id, updated_at)
+       values ('${runId}', '${TENANT_ID}', '${ISSUE_ID}', 'investigate', 1, 'collecting', '${randomUUID()}', now());
+       insert into "context"."context_snapshot"
+         (id, tenant_id, issue_id, version, collected_at, window_from, window_to, plan_digest,
+          collection_ruleset_version, ranking_ruleset_version, redaction_ruleset_version,
+          normalisation_ruleset_version, contract_version, runner_id, runner_image_version,
+          completeness, budget_state, finalised_at)
+       values ('${snapshotId}', '${TENANT_ID}', '${ISSUE_ID}', (select coalesce(max(version), 0) + 1 from "context"."context_snapshot" where issue_id = '${ISSUE_ID}'),
+               now(), now(), now(), 'd', 1, 1, 1, 1, 1, '${randomUUID()}', '0.53.0', '{}', 'within', now());
+       insert into "context"."collection_pass"
+         (id, tenant_id, snapshot_id, pass_ordinal, plan_digest, requested_plan, resolved_plan,
+          requested_by_step, workflow_run_id, callback_id, dispatched_at, outcome)
+       values ('${passId}', '${TENANT_ID}', '${snapshotId}', 0, 'd', '{}', '{}', 'system', '${runId}', '${randomUUID()}', now(), 'completed');
+       insert into "context"."context_item"
+         (id, tenant_id, snapshot_id, pass_id, evidence_id, item_class, collector_key, dedup_key,
+          occurrence_count, first_observed_at, last_observed_at, component_attribution,
+          relevance_score, ranking_terms, inclusion_state, redaction_dominated)
+       values ('${randomUUID()}', '${TENANT_ID}', '${snapshotId}', '${passId}', '${evidenceId}',
+               'error_signature', 'loki_logs', 'k-${randomUUID()}', 1, now(), now(), 'resolved', 1, '[]', 'included', false)`,
+    );
+    return { snapshotId };
+  }
+  const itemCount = async (evidenceId: string): Promise<string> =>
+    query(pg, `select count(*) from "context"."context_item" where evidence_id = '${evidenceId}'`);
+
   const rowCount = async (id: string): Promise<string> =>
     query(pg, `select count(*) from "evidence"."evidence" where id = '${id}'`);
 
@@ -153,6 +186,33 @@ describe('PrismaEvidenceRetentionRepository (001 T052, R-04, FR-009)', () => {
         `select count(*) from "evidence"."evidence_link" where evidence_id = '${id}'`,
       ),
     ).toBe('1');
+  });
+
+  it('purges expired evidence a context item merely views — the view goes, the snapshot stays (003)', async () => {
+    const id = await evidence(EXPIRED);
+    const { snapshotId } = await viewedByContextItem(id);
+
+    expect(await retention.purge(scope(CONTEXT, { id, now: NOW }))).toBe(true);
+
+    expect(await rowCount(id)).toBe('0');
+    expect(await itemCount(id)).toBe('0');
+    expect(
+      await query(
+        pg,
+        `select count(*) from "context"."context_snapshot" where id = '${snapshotId}'`,
+      ),
+    ).toBe('1');
+  });
+
+  it('still refuses cited evidence, and keeps its context item (003)', async () => {
+    const id = await evidence(EXPIRED);
+    await viewedByContextItem(id);
+    await cite(id);
+
+    expect(await retention.purge(scope(CONTEXT, { id, now: NOW }))).toBe(false);
+
+    expect(await rowCount(id)).toBe('1');
+    expect(await itemCount(id)).toBe('1');
   });
 
   it('refuses to purge evidence that has not expired', async () => {

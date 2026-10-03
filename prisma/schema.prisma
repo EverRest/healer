@@ -14,7 +14,7 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   extensions = [vector, pg_trgm]
-  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events", "architecture", "policy"]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events", "architecture", "policy", "context"]
 }
 
 // ─────────────────────────────── workflow execution ───────────────────────────────
@@ -39,8 +39,9 @@ model WorkflowRun {
   /// Set once. A terminal run never transitions again.
   terminalState     String?   @map("terminal_state")
 
-  transitions WorkflowTransition[]
-  callbacks   WorkflowCallback[]
+  transitions      WorkflowTransition[]
+  callbacks        WorkflowCallback[]
+  collectionPasses CollectionPass[]
 
   // Backs WorkflowTransition's composite FK (runId, tenantId) — id alone is already
   // unique via @id, but Postgres requires a unique constraint on exactly the referenced
@@ -419,10 +420,11 @@ model Issue {
   // (001 T011, R-01) — a foreign key, not a plain int a caller could invent.
   ruleset NormalisationRuleset @relation(fields: [rulesetVersion], references: [version], onDelete: Restrict)
 
-  events          IssueEvent[]
-  relationships   IssueRelationship[] @relation("IssueRelationshipSubject")
-  relatedFrom     IssueRelationship[] @relation("IssueRelationshipOther")
-  evidenceRecords Evidence[]
+  events           IssueEvent[]
+  relationships    IssueRelationship[] @relation("IssueRelationshipSubject")
+  relatedFrom      IssueRelationship[] @relation("IssueRelationshipOther")
+  evidenceRecords  Evidence[]
+  contextSnapshots ContextSnapshot[]
 
   // Backs the composite FKs from IssueRelationship, IssueEvent and Evidence — id alone is
   // already unique via @id, but Postgres requires a unique constraint on exactly the referenced
@@ -635,7 +637,8 @@ model Evidence {
   /// Retention — shorter than issue retention.
   expiresAt        DateTime     @map("expires_at") @db.Timestamptz(6)
 
-  links EvidenceLink[]
+  links        EvidenceLink[]
+  contextItems ContextItem[]
 
   // Composite FK against Issue's (id, tenantId) (FR-048) — resolves the question logged in
   // QUESTIONS.md: `evidence` stays its own package (different lifetime, different mutability),
@@ -1754,4 +1757,307 @@ model DriftFinding {
   @@index([tenantId, issueId])
   @@map("drift_finding")
   @@schema("architecture")
+}
+
+// ───────────────────────────── context resolution (003) ─────────────────────────────
+// The enums below up to FollowUpReason mirror `@healer/boundary-contract`'s closed lists, which are
+// the one authority; `enum-sync.test.ts` fails if either side drifts. There is deliberately no table
+// of withheld items here: that ledger lives in the runner, and the control plane must be structurally
+// unable to dereference a withheld item (R-08, FR-009).
+
+enum CollectorKey {
+  loki_logs
+  otel_traces
+  prometheus_metrics
+  grafana_alerts
+  gitlab_commits
+  gitlab_merge_requests
+  gitlab_deployments
+  config_flags
+  source_file
+
+  @@map("collector_key")
+  @@schema("context")
+}
+
+enum ItemClass {
+  error_signature
+  stack_frame
+  trace_shape
+  metric_delta
+  deploy_ref
+  commit_ref
+  test_result
+  file_path
+  pull_request_ref
+  config_key_ref
+  knowledge_ref
+  tool_output_summary
+
+  @@map("item_class")
+  @@schema("context")
+}
+
+enum SourceStatus {
+  collected
+  partial
+  unavailable
+  timed_out
+  withheld
+  not_attempted
+
+  @@map("source_status")
+  @@schema("context")
+}
+
+enum GapReasonCode {
+  source_unreachable
+  auth_revoked
+  timeout
+  retention_exceeded
+  capability_unavailable
+  budget_exhausted
+  redaction_withheld
+  schema_rejected
+  empty_result
+
+  @@map("gap_reason_code")
+  @@schema("context")
+}
+
+enum FollowUpReason {
+  inspect_stack_frame_source
+  widen_time_window
+  probe_missing_source
+
+  @@map("follow_up_reason")
+  @@schema("context")
+}
+
+enum ContextBudgetState {
+  within
+  degraded
+  budget_limited
+
+  @@map("context_budget_state")
+  @@schema("context")
+}
+
+enum ComponentAttribution {
+  resolved
+  fallback
+  unknown
+
+  @@map("component_attribution")
+  @@schema("context")
+}
+
+enum InclusionState {
+  included
+  excluded
+
+  @@map("inclusion_state")
+  @@schema("context")
+}
+
+enum PassOutcome {
+  completed
+  partial
+  deadline_expired
+  runner_unavailable
+
+  @@map("pass_outcome")
+  @@schema("context")
+}
+
+/// Append-only (T004). `finalisedAt` is data-model.md's "set once" column, which a pure
+/// append-only table cannot update — see QUESTIONS.md "003 phases 1–3".
+model ContextSnapshot {
+  id                          String             @id @db.Uuid
+  tenantId                    String             @map("tenant_id") @db.Uuid
+  issueId                     String             @map("issue_id") @db.Uuid
+  version                     Int
+  /// The snapshot this one supersedes. No FK: Prisma cannot express an optional composite
+  /// `(predecessor_id, tenant_id)` reference, and the repository writes it from the same tenant.
+  predecessorId               String?            @map("predecessor_id") @db.Uuid
+  collectedAt                 DateTime           @map("collected_at") @db.Timestamptz(6)
+  windowFrom                  DateTime           @map("window_from") @db.Timestamptz(6)
+  windowTo                    DateTime           @map("window_to") @db.Timestamptz(6)
+  planDigest                  String             @map("plan_digest")
+  collectionRulesetVersion    Int                @map("collection_ruleset_version")
+  rankingRulesetVersion       Int                @map("ranking_ruleset_version")
+  redactionRulesetVersion     Int                @map("redaction_ruleset_version")
+  normalisationRulesetVersion Int                @map("normalisation_ruleset_version")
+  contractVersion             Int                @map("contract_version")
+  runnerId                    String             @map("runner_id") @db.Uuid
+  runnerImageVersion          String             @map("runner_image_version")
+  completeness                Json
+  inclusionCutScore           Int?               @map("inclusion_cut_score")
+  budgetState                 ContextBudgetState @map("budget_state")
+  finalisedAt                 DateTime           @map("finalised_at") @db.Timestamptz(6)
+
+  issue  Issue            @relation(fields: [issueId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  passes CollectionPass[]
+  items  ContextItem[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, issueId, version])
+  @@index([tenantId, issueId, version(sort: Desc)])
+  @@map("context_snapshot")
+  @@schema("context")
+}
+
+/// Append-only (T004): one dispatch to the runner; the initial pass is ordinal 0.
+model CollectionPass {
+  id              String          @id @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  snapshotId      String          @map("snapshot_id") @db.Uuid
+  passOrdinal     Int             @map("pass_ordinal")
+  planDigest      String          @map("plan_digest")
+  requestedPlan   Json            @map("requested_plan")
+  resolvedPlan    Json            @map("resolved_plan")
+  /// `system` for ordinal 0; the requesting step for a follow-up.
+  requestedByStep String          @map("requested_by_step")
+  requestReason   FollowUpReason? @map("request_reason")
+  workflowRunId   String          @map("workflow_run_id") @db.Uuid
+  /// 012 `workflow_callback`, kind `runner_result`. No FK: that table is keyed by token, not id.
+  callbackId      String          @map("callback_id") @db.Uuid
+  dispatchedAt    DateTime        @map("dispatched_at") @db.Timestamptz(6)
+  completedAt     DateTime?       @map("completed_at") @db.Timestamptz(6)
+  outcome         PassOutcome
+
+  snapshot ContextSnapshot @relation(fields: [snapshotId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  run      WorkflowRun     @relation(fields: [workflowRunId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  outcomes SourceOutcome[]
+  items    ContextItem[]
+
+  @@unique([id, tenantId])
+  @@unique([snapshotId, passOrdinal])
+  @@index([tenantId, snapshotId])
+  @@map("collection_pass")
+  @@schema("context")
+}
+
+/// Append-only (T004): one row per collector per pass — "what did we not get" (FR-014).
+/// `gap_evidence_id` is null exactly when `status = collected` (CHECK in the migration; no FK for
+/// the same optional-composite reason as `ContextSnapshot.predecessorId`).
+model SourceOutcome {
+  id            String         @id @db.Uuid
+  tenantId      String         @map("tenant_id") @db.Uuid
+  passId        String         @map("pass_id") @db.Uuid
+  collectorKey  CollectorKey   @map("collector_key")
+  status        SourceStatus
+  reasonCode    GapReasonCode? @map("reason_code")
+  itemCount     Int            @map("item_count")
+  truncated     Boolean
+  durationMs    Int            @map("duration_ms")
+  gapEvidenceId String?        @map("gap_evidence_id") @db.Uuid
+
+  pass CollectionPass @relation(fields: [passId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@index([tenantId, passId])
+  @@map("source_outcome")
+  @@schema("context")
+}
+
+/// The ranking/inclusion view over an evidence record — it does not duplicate the fact (FR-012).
+model ContextItem {
+  id                   String               @id @db.Uuid
+  tenantId             String               @map("tenant_id") @db.Uuid
+  snapshotId           String               @map("snapshot_id") @db.Uuid
+  passId               String               @map("pass_id") @db.Uuid
+  evidenceId           String               @map("evidence_id") @db.Uuid
+  itemClass            ItemClass            @map("item_class")
+  collectorKey         CollectorKey         @map("collector_key")
+  dedupKey             String               @map("dedup_key")
+  occurrenceCount      BigInt               @map("occurrence_count")
+  firstObservedAt      DateTime             @map("first_observed_at") @db.Timestamptz(6)
+  lastObservedAt       DateTime             @map("last_observed_at") @db.Timestamptz(6)
+  /// 004 `graph_node`; null with `componentAttribution = fallback`. No FK (optional composite).
+  componentId          String?              @map("component_id") @db.Uuid
+  componentAttribution ComponentAttribution @map("component_attribution")
+  relevanceScore       Int                  @map("relevance_score")
+  rankingTerms         Json                 @map("ranking_terms")
+  inclusionState       InclusionState       @map("inclusion_state")
+  redactionDominated   Boolean              @map("redaction_dominated")
+
+  snapshot ContextSnapshot @relation(fields: [snapshotId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  pass     CollectionPass  @relation(fields: [passId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  evidence Evidence        @relation(fields: [evidenceId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  @@unique([snapshotId, dedupKey])
+  @@index([tenantId, snapshotId])
+  // The index is the total order (R-09): stable by construction, never by database return order.
+  @@index([snapshotId, inclusionState, relevanceScore(sort: Desc), lastObservedAt, evidenceId])
+  @@map("context_item")
+  @@schema("context")
+}
+
+/// Immutable and global (T004, FR-004): a change is a new version, never an edit.
+model CollectionRuleset {
+  version     Int      @id
+  rules       Json
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+  note        String?
+
+  @@map("collection_ruleset")
+  @@schema("context")
+}
+
+/// Immutable and global (T004, FR-019): integer weights, `[{ term, weight }]`.
+model RankingRuleset {
+  version     Int      @id
+  terms       Json
+  publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+  note        String?
+
+  @@map("ranking_ruleset")
+  @@schema("context")
+}
+
+/// Immutable and global (T004). Applied only in the execution plane (FR-008); the control plane
+/// keeps the definition so a snapshot's redaction is explicable, never the detections.
+model RedactionRuleset {
+  version               Int      @id
+  detectors             Json
+  publishedAt           DateTime @default(now()) @map("published_at") @db.Timestamptz(6)
+  note                  String?
+  runnerMinImageVersion String   @map("runner_min_image_version")
+
+  @@map("redaction_ruleset")
+  @@schema("context")
+}
+
+/// Global, not tenant-scoped: which collectors exist is a product fact (R-12). `plane` is always
+/// `execution` (CHECK in the migration).
+model CollectorRegistration {
+  collectorKey       CollectorKey @id @map("collector_key")
+  itemClasses        ItemClass[]  @map("item_classes")
+  parameterSchema    Json         @map("parameter_schema")
+  defaultTimeoutMs   Int          @map("default_timeout_ms")
+  requiredCapability String       @map("required_capability")
+  plane              String       @default("execution")
+  introducedAt       DateTime     @default(now()) @map("introduced_at") @db.Timestamptz(6)
+
+  @@map("collector_registration")
+  @@schema("context")
+}
+
+/// Append-only (T004). **No payload content is stored** (R-13): the table has no column that could
+/// hold it — only paths, a digest and a size. `runner_id` and `pass_id` carry no FK on purpose: a
+/// payload from an unknown runner or for an unknown pass is exactly what must still be recorded.
+model BoundaryRejection {
+  id               String   @id @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  runnerId         String   @map("runner_id") @db.Uuid
+  passId           String?  @map("pass_id") @db.Uuid
+  contractVersion  Int      @map("contract_version")
+  schemaErrorPaths String[] @map("schema_error_paths")
+  payloadDigest    String   @map("payload_digest")
+  byteSize         Int      @map("byte_size")
+  receivedAt       DateTime @map("received_at") @db.Timestamptz(6)
+
+  @@index([tenantId, receivedAt])
+  @@map("boundary_rejection")
+  @@schema("context")
 }

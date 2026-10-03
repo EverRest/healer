@@ -210,3 +210,32 @@ evidence:         (owned by 001) linked ──source unavailable──▶ detach
 - A collection pass in flight has either a pending `workflow_callback` or a `deadline_at` on its
   run — the stuck-run invariant of 012, which is what keeps FR-025 from producing a run that waits
   forever.
+
+## Implementation notes (phases 1–3)
+
+Built as `prisma/migrations/20261004000000_context_core` (schema `context` in `schema.prisma`).
+
+- **Enums mirror the boundary lists.** `collector_key`, `item_class`, `source_status`,
+  `gap_reason_code` and `follow_up_reason` are mirrors of the closed lists in
+  `packages/boundary-contract/src/collection.ts`, the one authority; `enum-sync.test.ts` fails if
+  either side drifts. `budget_state` is `context_budget_state`; `component_attribution`,
+  `inclusion_state` and `pass_outcome` are as listed above. `request_reason` is the
+  `follow_up_reason` enum, not free text.
+- **Global tables.** `collector_registration` and the three ruleset tables carry no `tenant_id`
+  (product facts, not tenant configuration); `collector_registration.plane` has a CHECK
+  `= 'execution'`, synced from `COLLECTOR_REGISTRY` by `syncCollectorRegistry`.
+- **Append-only.** Triggers on the seven tables listed for T004 (UPDATE/DELETE and TRUNCATE).
+  `finalised_at`, `completed_at` and `outcome` are therefore insert-time columns for now — see
+  QUESTIONS.md "003 phases 1–3 — append-only vs. lifecycle columns".
+- **Foreign keys.** `(issue_id, tenant_id)` → `issue`, `(snapshot_id, tenant_id)`,
+  `(pass_id, tenant_id)`, `(workflow_run_id, tenant_id)` → `workflow_run` and
+  `(evidence_id, tenant_id)` → `evidence` are composite, so a row naming another tenant's record is
+  unrepresentable. Not FKs: `predecessor_id`, `gap_evidence_id`, `component_id` (optional
+  composites), `callback_id`, and `boundary_rejection.runner_id` / `pass_id` (a rejection of an
+  unknown runner or pass must still be recorded).
+- **`source_outcome`** has a CHECK: `gap_evidence_id IS NULL` exactly when `status = 'collected'`.
+- **`boundary_rejection`** holds only the columns listed above; `check:no-payload-at-rest` fails if
+  any other column appears, a digest is not sha256 hex, or a path is not structural text
+  (`/^[A-Za-z0-9_.<>$#-]{1,200}$/`). Unparseable JSON is recorded with the path `$#invalid_json`.
+- No `withholding_ledger` exists in the control-plane schema (a test asserts the word's absence).
+

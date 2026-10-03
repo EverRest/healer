@@ -21,11 +21,11 @@ boundary nobody knows is there.
 
 ## Phase 1: Setup
 
-- [ ] T001 Packages `packages/domain/context` (control plane) and the `apps/runner/src/collection` module (execution plane) with their entry surfaces (012 FR-001)
-- [ ] T002 [P] Prisma models for schema `context` per [data-model.md](data-model.md) — `context_snapshot`, `collection_pass`, `source_outcome`, `context_item`, `collection_ruleset`, `ranking_ruleset`, `redaction_ruleset`, `collector_registration`, `boundary_rejection`; first migration
-- [ ] T003 [P] The plane-local `withholding_ledger` inside the runner, on the customer's storage and their retention; **never replicated to the control plane** and absent from the control-plane schema (R-08, FR-009)
-- [ ] T004 [P] Database rules rejecting `UPDATE` and `DELETE` on `context_snapshot`, `collection_pass`, `source_outcome`, `boundary_rejection` and the three ruleset tables (FR-022)
-- [ ] T005 [P] `packages/integrations/{loki,prometheus,grafana,otel,gitlab,config-flags}` adapter skeletons — the constitution's v1 set and nothing beyond it; a source the design partner does not operate is absent from the plan, not a failing collector (spec assumptions)
+- [x] T001 Packages `packages/domain/context` (control plane) and the `apps/runner/src/collection` module (execution plane) with their entry surfaces (012 FR-001)
+- [x] T002 [P] Prisma models for schema `context` per [data-model.md](data-model.md) — `context_snapshot`, `collection_pass`, `source_outcome`, `context_item`, `collection_ruleset`, `ranking_ruleset`, `redaction_ruleset`, `collector_registration`, `boundary_rejection`; first migration
+- [x] T003 [P] The plane-local `withholding_ledger` inside the runner, on the customer's storage and their retention; **never replicated to the control plane** and absent from the control-plane schema (R-08, FR-009)
+- [x] T004 [P] Database rules rejecting `UPDATE` and `DELETE` on `context_snapshot`, `collection_pass`, `source_outcome`, `boundary_rejection` and the three ruleset tables (FR-022)
+- [x] T005 [P] `packages/integrations/{loki,prometheus,grafana,otel,gitlab,config-flags}` adapter skeletons — the constitution's v1 set and nothing beyond it; a source the design partner does not operate is absent from the plan, not a failing collector (spec assumptions)
 
 ---
 
@@ -34,16 +34,16 @@ boundary nobody knows is there.
 **Purpose**: one boundary schema validated twice, and a type that makes collected text unable to
 reach a decision.
 
-- [ ] T006 `packages/boundary-contract` extended with the `collection_plan` directive and result-batch shapes of [contracts/collection-plan.md](contracts/collection-plan.md); it conforms to 012's closed evidence shape set and **adds nothing to it** (R-02, R-03, 012 T040)
-- [ ] T007 **Test first**: post a result batch carrying a free-form string field → `422 BOUNDARY_SCHEMA_REJECTED` at ingress, and the same payload refused at egress on the runner before it is sent (FR-010, SC-002, quickstart 33)
-- [ ] T008 Egress validation on the runner and independent ingress validation in the control plane, both executing the **one** schema package — two executions, one definition (R-02, FR-010)
-- [ ] T009 `Untrusted<string>` branded type for every excerpt; the planner, the ranker and the dedup key builder have no parameter that accepts it (FR-021, R-11)
-- [ ] T010 **Test first**: pass a collected excerpt into 002's `DecisionInput`, into a ranking term and into a tool argument → none compiles, because no accepting parameter exists (FR-021, quickstart 26, 002 FR-003)
-- [ ] T011 `domain/collector-registry.ts` and `collector_registration`: declared collectors with their parameter schemas, item classes, default timeout and required capability; `collectorKey` is an **enum over the registry, never a string** (FR-005, R-12)
-- [ ] T012 `domain/gap-reasons.ts`: the closed reason-code set — `source_unreachable`, `auth_revoked`, `timeout`, `retention_exceeded`, `capability_unavailable`, `budget_exhausted`, `redaction_withheld`, `schema_rejected`, `empty_result` (R-07, contracts/collection-plan.md)
-- [ ] T013 [P] Tenant scoping on every repository method and every collector invocation; a query built without `TenantContext` fails to type-check (FR-023, 012 T010)
-- [ ] T014 [P] Outbox publishers for the events in [contracts/collection-plan.md](contracts/collection-plan.md) (012 T012)
-- [ ] T015 [P] One audit entry per collection pass recording the plan, the ruleset versions, the per-source outcomes, the transmitted and withheld counts and the contract version (FR-027, quickstart 47)
+- [x] T006 `packages/boundary-contract` extended with the `collection_plan` directive and result-batch shapes of [contracts/collection-plan.md](contracts/collection-plan.md); it conforms to 012's closed evidence shape set and **adds nothing to it** (R-02, R-03, 012 T040)
+- [x] T007 **Test first**: post a result batch carrying a free-form string field → `422 BOUNDARY_SCHEMA_REJECTED` at ingress, and the same payload refused at egress on the runner before it is sent (FR-010, SC-002, quickstart 33) **Built at the ingress-function level** (`acceptResultBatch` → `BOUNDARY_SCHEMA_REJECTED`/422 error); the HTTP route is T046.
+- [x] T008 Egress validation on the runner and independent ingress validation in the control plane, both executing the **one** schema package — two executions, one definition (R-02, FR-010)
+- [x] T009 `Untrusted<string>` branded type for every excerpt; the planner, the ranker and the dedup key builder have no parameter that accepts it (FR-021, R-11)
+- [x] T010 **Test first**: pass a collected excerpt into 002's `DecisionInput`, into a ranking term and into a tool argument → none compiles, because no accepting parameter exists (FR-021, quickstart 26, 002 FR-003)
+- [x] T011 `domain/collector-registry.ts` and `collector_registration`: declared collectors with their parameter schemas, item classes, default timeout and required capability; `collectorKey` is an **enum over the registry, never a string** (FR-005, R-12) **Registry and `collector_registration` sync built; no reader yet** — `GET /context/collectors` is T077.
+- [x] T012 `domain/gap-reasons.ts`: the closed reason-code set — `source_unreachable`, `auth_revoked`, `timeout`, `retention_exceeded`, `capability_unavailable`, `budget_exhausted`, `redaction_withheld`, `schema_rejected`, `empty_result` (R-07, contracts/collection-plan.md)
+- [x] T013 [P] Tenant scoping on every repository method and every collector invocation; a query built without `TenantContext` fails to type-check (FR-023, 012 T010)
+- [x] T014 [P] Outbox publishers for the events in [contracts/collection-plan.md](contracts/collection-plan.md) (012 T012)
+- [x] T015 [P] One audit entry per collection pass recording the plan, the ruleset versions, the per-source outcomes, the transmitted and withheld counts and the contract version (FR-027, quickstart 47) **Audit builder built, not yet persisted** — written with the pass by `IngestResultBatch` (T036).
 
 **Checkpoint**: the boundary is defined once and enforced on both sides; collected text cannot reach a predicate.
 
@@ -55,23 +55,23 @@ reach a decision.
 
 **Independent test**: quickstart 3, 4, 5, 6, 7, 8, 9, 33, 34, 35, 43, 46
 
-- [ ] T016 **Test first**: `make context-marker-corpus` — seed logs, traces and config with known PII markers and secrets, run a full collection, inspect **every crossed byte** → 0 markers present (FR-007, SC-001, quickstart 3)
-- [ ] T017 `redaction_ruleset` as immutable versioned detectors published in the control plane and applied **only** in the execution plane; the version is recorded on the snapshot and on every item it touched (FR-008, data-model)
-- [ ] T018 The redactor in `apps/runner/src/collection/redaction` implementing T016 against the published ruleset version (FR-008)
-- [ ] T019 **Test first**: a log format the redaction ruleset does not recognise → the item is **withheld** with a `collection_gap` carrying `redaction_withheld`, and is never truncated and sent (FR-009, SC-003, quickstart 7, 012 R-05)
-- [ ] T020 `withholding-ledger.ts` implementing T019: the original stays plane-local under a fresh UUID and what crosses is `{ localRef, itemClass, reasonCode, collectorKey, observedAt }` — no excerpt, no locator we can follow, no truncated remnant (FR-009, R-08)
-- [ ] T021 **Test first**: take a `localRef` from a withheld gap and try to resolve it from the control plane → **no path exists**; the control plane holds a reference it is structurally unable to dereference (R-08, quickstart 8)
-- [ ] T022 `make runner-resolve-ref <uuid>`: the resolution path for a human **inside the customer's network**, against the plane-local ledger only (FR-009, R-08, quickstart 8)
-- [ ] T023 [P] **Test first**: collect configuration and feature flags → key names, value types and change indicators only; no value contents cross in any form (FR-007, quickstart 4)
-- [ ] T024 [P] `config_flags` collector implementing T023, emitting `config_key_ref` — its own declared shape, never `tool_output_summary` (C-20, contracts/collection-plan.md crosswalk)
-- [ ] T025 [P] **Test first**: run a full collection over a repository → file paths, symbol names and line numbers only; no file content crosses in bulk (FR-011, quickstart 5)
-- [ ] T026 `source_file` collector reachable **only** as a follow-up pass, so named-file retrieval inherits the cap, the schema validation and the audit entry rather than being a second mechanism (FR-011, R-12, quickstart 6)
-- [ ] T027 [P] **Test**: an excerpt that survives redaction carrying no remaining signal is **kept** with its structured derivatives and `redactionDominated: true`, not withheld — so a reader knows to look locally rather than concluding there was nothing there (R-08, quickstart 9)
-- [ ] T028 [P] **Test**: a 40 MB heap dump → a bounded redacted excerpt plus a plane-local reference; the full payload never crosses and never inlines (FR-013, quickstart 43, 001 FR-011)
-- [ ] T029 `QuarantineRejection`: `boundary_rejection` rows carrying contract version, runner identifier, schema error paths, payload digest and byte size — **the payload is not stored anywhere** (FR-010, R-13, quickstart 34)
-- [ ] T030 [P] `GET /boundary-rejections` — rejections and their counts visible to the tenant (FR-010, quickstart 35)
-- [ ] T031 [P] `check:no-payload-at-rest` — no `boundary_rejection` row carries payload content (R-13)
-- [ ] T032 [P] **Test**: search control-plane configuration for a credential to any customer observability, repository, configuration or deployment system → none exists (FR-002, quickstart 46)
+- [x] T016 **Test first**: `make context-marker-corpus` — seed logs, traces and config with known PII markers and secrets, run a full collection, inspect **every crossed byte** → 0 markers present (FR-007, SC-001, quickstart 3)
+- [x] T017 `redaction_ruleset` as immutable versioned detectors published in the control plane and applied **only** in the execution plane; the version is recorded on the snapshot and on every item it touched (FR-008, data-model) **Definition and runner-side application built; the control-plane `redaction_ruleset` table is not populated** (no reader until a snapshot records it, T040).
+- [x] T018 The redactor in `apps/runner/src/collection/redaction` implementing T016 against the published ruleset version (FR-008)
+- [x] T019 **Test first**: a log format the redaction ruleset does not recognise → the item is **withheld** with a `collection_gap` carrying `redaction_withheld`, and is never truncated and sent (FR-009, SC-003, quickstart 7, 012 R-05)
+- [x] T020 `withholding-ledger.ts` implementing T019: the original stays plane-local under a fresh UUID and what crosses is `{ localRef, itemClass, reasonCode, collectorKey, observedAt }` — no excerpt, no locator we can follow, no truncated remnant (FR-009, R-08)
+- [x] T021 **Test first**: take a `localRef` from a withheld gap and try to resolve it from the control plane → **no path exists**; the control plane holds a reference it is structurally unable to dereference (R-08, quickstart 8)
+- [x] T022 `make runner-resolve-ref <uuid>`: the resolution path for a human **inside the customer's network**, against the plane-local ledger only (FR-009, R-08, quickstart 8)
+- [x] T023 [P] **Test first**: collect configuration and feature flags → key names, value types and change indicators only; no value contents cross in any form (FR-007, quickstart 4)
+- [x] T024 [P] `config_flags` collector implementing T023, emitting `config_key_ref` — its own declared shape, never `tool_output_summary` (C-20, contracts/collection-plan.md crosswalk)
+- [x] T025 [P] **Test first**: run a full collection over a repository → file paths, symbol names and line numbers only; no file content crosses in bulk (FR-011, quickstart 5)
+- [x] T026 `source_file` collector reachable **only** as a follow-up pass, so named-file retrieval inherits the cap, the schema validation and the audit entry rather than being a second mechanism (FR-011, R-12, quickstart 6)
+- [x] T027 [P] **Test**: an excerpt that survives redaction carrying no remaining signal is **kept** with its structured derivatives and `redactionDominated: true`, not withheld — so a reader knows to look locally rather than concluding there was nothing there (R-08, quickstart 9)
+- [x] T028 [P] **Test**: a 40 MB heap dump → a bounded redacted excerpt plus a plane-local reference; the full payload never crosses and never inlines (FR-013, quickstart 43, 001 FR-011)
+- [x] T029 `QuarantineRejection`: `boundary_rejection` rows carrying contract version, runner identifier, schema error paths, payload digest and byte size — **the payload is not stored anywhere** (FR-010, R-13, quickstart 34)
+- [x] T030 [P] `GET /boundary-rejections` — rejections and their counts visible to the tenant (FR-010, quickstart 35)
+- [x] T031 [P] `check:no-payload-at-rest` — no `boundary_rejection` row carries payload content (R-13)
+- [x] T032 [P] **Test**: search control-plane configuration for a credential to any customer observability, repository, configuration or deployment system → none exists (FR-002, quickstart 46)
 
 **Checkpoint**: the hybrid split has bought what it was built to buy. This is the phase the procurement conversation depends on.
 

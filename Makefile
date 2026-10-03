@@ -9,7 +9,7 @@
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-ceiling gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-agent-scope gate-red-first gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics
+	gate-agent-scope gate-red-first gate-coverage-completeness runner-contract-test runner-compat-test runner-build runner-diagnostics runner-resolve-ref context-marker-corpus
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -133,3 +133,16 @@ runner-build: ## Build apps/runner's image, tag healer-runner:<version>, refuse 
 
 runner-diagnostics: ## Signal a running runner (SIGUSR2) and print its support diagnostic bundle (FR-024)
 	pnpm run runner-diagnostics
+
+context-marker-corpus: ## Seeded PII/secret markers through a full collection — 0 may cross the boundary (003 SC-001)
+	pnpm run context-marker-corpus
+
+# `make runner-resolve-ref <uuid>` — the uuid is read as a second goal, so it needs a no-op target
+# of its own; scoped to this goal so a mistyped target elsewhere still fails loudly.
+ifeq ($(firstword $(MAKECMDGOALS)),runner-resolve-ref)
+RESOLVE_REF_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+$(eval $(RESOLVE_REF_ARGS):;@:)
+endif
+
+runner-resolve-ref: ## Resolve a withheld item's localRef against the runner's plane-local ledger, inside the customer's network (003 FR-009)
+	pnpm run runner-resolve-ref $(or $(RESOLVE_REF_ARGS),$(REF))

@@ -95,6 +95,18 @@ Stage-0 review. Still no code.
   Added `observableLocation`, `ThresholdDerivation`, `Derivation artifact`, `Clamp`, `Split`, `split_scope`,
   and a do-not-use row for "masking rejection threshold".
 
+## 0.55.0 — 2026-10-03
+
+003 phases 1–3 (T001–T032): the control/execution boundary for context collection.
+
+- Boundary contract extended with the `collection_plan` directive and result batch; one schema,
+  validated at egress on the runner and independently at ingress; rejections are stored as digest +
+  schema paths only, never payload (`check:no-payload-at-rest`).
+- Runner redaction (ruleset v1), default-deny free text, plane-local withholding ledger and
+  `make runner-resolve-ref`; `make context-marker-corpus` proves 0 seeded markers cross.
+- `Untrusted` excerpt type with no accepting parameter; collector registry; `context` schema with
+  append-only rules; `GET /boundary-rejections`.
+
 ## 0.54.0 — 2026-10-03
 
 Review fixes for three batches that had landed without the two-reviewer pass: 002 phase 4 (0.48.0),

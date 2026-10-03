@@ -25,6 +25,7 @@ import {
   revokeAutonomy,
 } from '@healer/domain-policy';
 import { PrismaGraphReadRepository } from '@healer/domain-architecture';
+import { PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import { PrismaClient } from '@healer/prisma-client';
 import { TenantContext, newCorrelationId, withCorrelation } from '@healer/shared';
 import { applySqlFile, startPostgres, type StartedPostgres } from '../../test/containers.js';
@@ -83,6 +84,7 @@ describe('/approvals (002 T075)', () => {
       new PrismaBudgetLimitRepository(prisma),
       new PrismaApprovalLifecycleRepository(prisma),
       new PrismaGraphReadRepository(prisma),
+      new PrismaBoundaryRejectionRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

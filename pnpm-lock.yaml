@@ -72,6 +72,9 @@ importers:
       '@healer/boundary-contract':
         specifier: workspace:*
         version: link:../../packages/boundary-contract
+      '@healer/domain-context':
+        specifier: workspace:*
+        version: link:../../packages/domain/context
       '@healer/domain-evidence':
         specifier: workspace:*
         version: link:../../packages/domain/evidence
@@ -179,7 +182,27 @@ importers:
 
   packages/domain/change: {}
 
-  packages/domain/context: {}
+  packages/domain/context:
+    dependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../../boundary-contract
+      '@healer/events':
+        specifier: workspace:*
+        version: link:../../events
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../../prisma-client
+      '@healer/shared':
+        specifier: workspace:*
+        version: link:../../shared
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@healer/domain-policy':
+        specifier: workspace:*
+        version: link:../policy
 
   packages/domain/diagnosis: {}
 
@@ -249,6 +272,9 @@ importers:
 
   packages/integrations:
     dependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../boundary-contract
       '@healer/domain-architecture':
         specifier: workspace:*
         version: link:../domain/architecture

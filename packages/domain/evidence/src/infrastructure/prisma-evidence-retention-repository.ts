@@ -70,6 +70,20 @@ export class PrismaEvidenceRetentionRepository
   async purge(where: TenantScoped<{ readonly id: string; readonly now: Date }>): Promise<boolean> {
     try {
       return await withPrivilegedWrite(this.prisma, async (tx) => {
+        // 003: a `context_item` is a ranking view over its evidence and duplicates no fact, and the
+        // snapshot outlives the evidence (001 retention) — so an expired, uncited record takes its
+        // view with it instead of being blocked forever by the RESTRICT key (which would otherwise
+        // keep the record re-listed by `findExpired` and starve the sweep).
+        await tx.$executeRaw`
+          DELETE FROM "context"."context_item" ci
+          USING "evidence"."evidence" e
+          WHERE ci.evidence_id = e.id AND ci.tenant_id = e.tenant_id
+            AND e.id = ${where.id}::uuid AND e.tenant_id = ${where.tenantId}::uuid
+            AND e.expires_at <= ${where.now}::timestamptz
+            AND NOT EXISTS (
+              SELECT 1 FROM "evidence"."evidence_link" l
+              WHERE l.evidence_id = e.id AND l.tenant_id = e.tenant_id
+            )`;
         const deleted = await tx.$executeRaw`
           DELETE FROM "evidence"."evidence" e
           WHERE e.id = ${where.id}::uuid AND e.tenant_id = ${where.tenantId}::uuid

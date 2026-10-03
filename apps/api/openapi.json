@@ -650,6 +650,33 @@
         "responses": { "200": { "description": "" } },
         "tags": ["GraphNodes"]
       }
+    },
+    "/api/v1/boundary-rejections": {
+      "get": {
+        "operationId": "BoundaryRejectionsController_list",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "since",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "runnerId",
+            "required": false,
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "200": { "description": "" } },
+        "tags": ["BoundaryRejections"]
+      }
     }
   },
   "info": {

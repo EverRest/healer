@@ -34,6 +34,7 @@
     "deps-check": "node scripts/gates/deps-check.mjs",
     "check:evidence-coverage": "node --env-file=.env scripts/checks/evidence-coverage.mjs",
     "check:append-only": "node --env-file=.env scripts/checks/append-only.mjs",
+    "check:no-payload-at-rest": "node --env-file=.env scripts/checks/no-payload-at-rest.mjs",
     "check:expired-evidence": "node --env-file=.env scripts/checks/expired-evidence.mjs",
     "check:decision-replay": "node --env-file=.env scripts/checks/decision-replay.mjs",
     "check:policy-coverage": "node --env-file=.env scripts/checks/policy-coverage.mjs",
@@ -46,7 +47,9 @@
     "runner-contract-test": "vitest run packages/boundary-contract/src/index.test.ts",
     "runner-compat-test": "vitest run packages/boundary-contract/src/handshake.test.ts",
     "runner-build": "node scripts/runner-build.mjs",
-    "runner-diagnostics": "node scripts/runner-diagnostics.mjs"
+    "runner-diagnostics": "node scripts/runner-diagnostics.mjs",
+    "runner-resolve-ref": "node scripts/runner-resolve-ref.mjs",
+    "context-marker-corpus": "vitest run --project unit apps/runner/src/collection/marker-corpus.test.ts"
   },
   "devDependencies": {
     "@healer/domain-architecture": "workspace:*",

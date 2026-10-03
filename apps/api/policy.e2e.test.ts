@@ -29,6 +29,7 @@ import {
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, withCorrelation } from '@healer/shared';
 import { PrismaGraphReadRepository } from '@healer/domain-architecture';
+import { PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import { PrismaClient } from '@healer/prisma-client';
 import {
   assertTenantIsolated,
@@ -176,6 +177,7 @@ describe('/policy (002 T027-T030, T032)', () => {
       new PrismaBudgetLimitRepository(prisma),
       new PrismaApprovalLifecycleRepository(prisma),
       new PrismaGraphReadRepository(prisma),
+      new PrismaBoundaryRejectionRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

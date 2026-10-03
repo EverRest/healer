@@ -1,4 +1,4 @@
-import { RunnerEvidence, type RunnerEvidence as RunnerEvidenceType } from './index.js';
+import { RunnerEvidence, type RunnerEvidence as RunnerEvidenceType } from './shapes.js';
 
 /**
  * Egress (runner) and ingress (control plane) validation (012 T041, FR-022) — two distinct call
