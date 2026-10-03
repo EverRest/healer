@@ -34,6 +34,7 @@ export interface DeploymentUnitAttrValue {
   readonly runtimeKind: DeploymentRuntimeKind;
   readonly runtimeRef: string;
   readonly currentVersion: string | null;
+  readonly lastDeployedAt: string | null;
 }
 export interface RepositoryAttrValue {
   readonly vcs: RepositoryVcs;
@@ -97,17 +98,23 @@ export function validateComponentAttr(
 
 export function validateDeploymentUnitAttr(raw: Raw): AttrValidation<DeploymentUnitAttrValue> {
   const errors: string[] = [];
-  unknownKeys(raw, ['environment', 'runtimeKind', 'runtimeRef', 'currentVersion'], errors);
+  unknownKeys(
+    raw,
+    ['environment', 'runtimeKind', 'runtimeRef', 'currentVersion', 'lastDeployedAt'],
+    errors,
+  );
   if (!nonEmpty(raw.environment)) errors.push('environment is required');
   if (!oneOf(DEPLOYMENT_RUNTIME_KINDS, raw.runtimeKind))
     errors.push(`runtimeKind must be one of ${DEPLOYMENT_RUNTIME_KINDS.join(', ')}`);
   if (!nonEmpty(raw.runtimeRef)) errors.push('runtimeRef is required');
   const currentVersion = optionalText(raw, 'currentVersion', errors);
+  const lastDeployedAt = optionalText(raw, 'lastDeployedAt', errors);
   return finish(errors, {
     environment: raw.environment as string,
     runtimeKind: raw.runtimeKind as DeploymentRuntimeKind,
     runtimeRef: raw.runtimeRef as string,
     currentVersion,
+    lastDeployedAt,
   });
 }
 

@@ -19,7 +19,6 @@ export {
   isDeploymentRuntimeKind,
   isGraphEdgeType,
 } from './domain/closed-vocabularies.js';
-export * from './domain/confidence.js';
 export * from './domain/proposed-payload.js';
 export * from './domain/attribute-normalisation.js';
 export * from './domain/proposal-digest.js';

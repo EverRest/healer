@@ -10,7 +10,7 @@ import {
 } from '../domain/apply-draft-item.js';
 import { GRAPH_CONFIRM_CAPABILITY } from '../domain/capabilities.js';
 import type { ConfirmedNode } from '../domain/confirmed-graph-snapshot.js';
-import { provenanceBaseConfidence } from '../domain/confidence.js';
+import { HUMAN_CONFIDENCE_BASE } from '../domain/edge-confidence.js';
 import type {
   ConfirmDraftItemsInput,
   ConfirmDraftItemsResult,
@@ -322,7 +322,7 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           naturalKey: decision.naturalKey,
           provenance: CONFIRMED_PROVENANCE,
           strength: provenanceStrength(CONFIRMED_PROVENANCE),
-          confidence: provenanceBaseConfidence(CONFIRMED_PROVENANCE),
+          confidence: HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE],
           state: 'confirmed',
           actorRef,
           validFromVersion: version,
@@ -348,7 +348,7 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           layer: decision.layer,
           provenance: CONFIRMED_PROVENANCE,
           strength: provenanceStrength(CONFIRMED_PROVENANCE),
-          confidence: provenanceBaseConfidence(CONFIRMED_PROVENANCE),
+          confidence: HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE],
           state: 'confirmed',
           validFromVersion: version,
           validToVersion: OPEN_VERSION,
@@ -361,7 +361,7 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           edgeId: decision.edgeId,
           provenance: CONFIRMED_PROVENANCE,
           strength: provenanceStrength(CONFIRMED_PROVENANCE),
-          confidence: provenanceBaseConfidence(CONFIRMED_PROVENANCE),
+          confidence: HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE],
           // No adapter produced this row — a human confirmation is the contributing "source"
           // (data-model.md flags `edge_provenance` has no `actor_ref` column; these two string
           // constants are this package's stand-in until that's resolved — see QUESTIONS.md).
@@ -388,7 +388,7 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           name: decision.name,
           provenance: CONFIRMED_PROVENANCE,
           strength: provenanceStrength(CONFIRMED_PROVENANCE),
-          confidence: provenanceBaseConfidence(CONFIRMED_PROVENANCE),
+          confidence: HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE],
           actorRef,
         },
       });

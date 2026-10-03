@@ -11,7 +11,9 @@ import {
   sameAttributes,
 } from './attribute-normalisation.js';
 import type { AdapterConstants, DiscoveryItem, DiscoverySourceStatus } from './discovery-batch.js';
-import { provenanceBaseConfidence } from './confidence.js';
+import { baseConfidence, deriveEdgeConfidence } from './edge-confidence.js';
+import { resolveEdges } from './edge-resolution.js';
+import type { MachineProvenanceClass } from './edge-observation.js';
 import type {
   ConfirmedEdge,
   ConfirmedGraphSnapshot,
@@ -30,6 +32,8 @@ import type {
   ProposedPayload,
 } from './proposed-payload.js';
 
+export { naturalEdgeKey } from './edge-resolution.js';
+
 export interface AcceptedSourceItems {
   readonly sourceKey: string;
   readonly finalStatus: DiscoverySourceStatus;
@@ -43,6 +47,9 @@ export interface BuildDraftItemsInput {
   readonly adapterConstants: Readonly<Record<string, AdapterConstants>>;
   readonly snapshot: ConfirmedGraphSnapshot;
   readonly rejectedDigests: ReadonlySet<string>;
+  /** The confidence reference instant (R-15: "against the observation window, not today") —
+   *  defaults to the real clock so a caller never has to invent one; a test pins it. */
+  readonly now?: Date;
 }
 
 export type DraftItemOp = ProposedPayload['op'];
@@ -94,6 +101,10 @@ export interface CandidateEdge {
   readonly layer: 'code' | 'runtime' | 'product';
   readonly provenance: ProvenanceClass;
   readonly observationRef: string;
+  /** `dependency_observation`'s own volume/recency (004 reconciliation batch (c)) — present only
+   *  when the source item actually carried them; `null` for a `built_from` edge, which has none
+   *  to report (R-15: derive from real fields, never invent them). */
+  readonly observation: { readonly observationCount: number; readonly lastObservedAt: Date } | null;
 }
 
 /** Returns whether the item was actually kept (review fix #8): the rejection filter can no-op
@@ -162,7 +173,7 @@ function toCandidateNode(
  *  names a natural key, never a kind, so it needs the same identity-index resolution a
  *  `dependency_observation` endpoint does (review fix: this used to skip resolution entirely and
  *  propose an edge to a component that might not exist at all — see `resolveBuiltFromEdges`). */
-interface PendingBuiltFromEdge {
+export interface PendingBuiltFromEdge {
   readonly componentNaturalKey: string;
   readonly repository: NodeRef;
   readonly provenance: ProvenanceClass;
@@ -227,114 +238,6 @@ function collectNodeCandidates(
   return { nodes, pendingBuiltFromEdges, collectedKinds };
 }
 
-function buildIdentityIndex(
-  candidateNodes: readonly CandidateNode[],
-  confirmedNodes: readonly ConfirmedNode[],
-): Map<string, Set<DiscoveryNodeKind>> {
-  const index = new Map<string, Set<DiscoveryNodeKind>>();
-  const add = (naturalKey: string, nodeKind: DiscoveryNodeKind) =>
-    index.set(naturalKey, (index.get(naturalKey) ?? new Set<DiscoveryNodeKind>()).add(nodeKind));
-  for (const n of candidateNodes) add(n.ref.naturalKey, n.ref.nodeKind);
-  for (const n of confirmedNodes) add(n.naturalKey, n.nodeKind);
-  return index;
-}
-
-function resolveRef(
-  naturalKey: string,
-  index: Map<string, Set<DiscoveryNodeKind>>,
-): NodeRef | null {
-  const kinds = index.get(naturalKey);
-  return kinds === undefined || kinds.size !== 1 ? null : { nodeKind: [...kinds][0]!, naturalKey };
-}
-
-/** `${fromNaturalKey}>${toNaturalKey}|${edgeType}|${layer}` — the natural-key-only edge key used
- *  when an endpoint never resolved to an id, so there is no `NodeRef` (with a kind) to build
- *  `edgeKey()`'s usual key from. */
-export function naturalEdgeKey(
-  fromNaturalKey: string,
-  toNaturalKey: string,
-  edgeType: string,
-  layer: string,
-): string {
-  return `${fromNaturalKey}>${toNaturalKey}|${edgeType}|${layer}`;
-}
-
-export interface EdgeResolutionResult {
-  readonly edges: CandidateEdge[];
-  /** Review fix (#11): dropped with no count or log before — a `dependency_observation` or
-   *  `built_from` pair whose endpoint resolves to no candidate/confirmed node, or to more than
-   *  one, was silently discarded. Counted here so the caller can log it (this module stays pure). */
-  readonly unresolvedCount: number;
-  /** Natural-key edge keys for every unresolved `dependency_observation` this run (review fix
-   *  #11, #5's sibling concern) — `markRemovedEdges` must not treat "could not resolve" the same
-   *  as "looked and did not see": an ambiguous or missing identity is not a full answer either
-   *  (plan: "absence from a source that did not fully answer is not evidence"). */
-  readonly unresolvedDependencyKeys: ReadonlySet<string>;
-}
-
-/** `dependency_observation` and `built_from` candidate edges — endpoints resolved by natural key
- *  across candidates and confirmed nodes together, in one pass, so a `built_from` endpoint gets
- *  exactly the same resolution a `dependency_observation` endpoint does (review fix #5: it
- *  previously proposed an edge to an unresolved component unconditionally). Zero or more than one
- *  match is "not proposed" — its evidence is still written by the ingestion layer, independent of
- *  this, and it is counted above rather than silently dropped. */
-function resolveEdges(
-  sources: readonly AcceptedSourceItems[],
-  pendingBuiltFromEdges: readonly PendingBuiltFromEdge[],
-  candidateNodes: readonly CandidateNode[],
-  confirmedNodes: readonly ConfirmedNode[],
-  tenantId: string,
-  runId: string,
-): EdgeResolutionResult {
-  const identityIndex = buildIdentityIndex(candidateNodes, confirmedNodes);
-  const edges: CandidateEdge[] = [];
-  let unresolvedCount = 0;
-  const unresolvedDependencyKeys = new Set<string>();
-
-  for (const source of sources) {
-    for (const item of source.items) {
-      if (item.kind !== 'dependency_observation') continue;
-      const from = resolveRef(item.fromNaturalKey, identityIndex);
-      const to = resolveRef(item.toNaturalKey, identityIndex);
-      if (from === null || to === null) {
-        unresolvedCount += 1;
-        unresolvedDependencyKeys.add(
-          naturalEdgeKey(item.fromNaturalKey, item.toNaturalKey, item.edgeType, item.layer),
-        );
-        continue;
-      }
-      edges.push({
-        from,
-        to,
-        edgeType: item.edgeType as GraphEdgeType,
-        layer: item.layer,
-        provenance: item.provenance,
-        observationRef: graphFactId(tenantId, runId, item.kind, item),
-      });
-    }
-  }
-
-  for (const pending of pendingBuiltFromEdges) {
-    // A `built_from` edge is always component -> repository (data-model.md); a natural key that
-    // resolves to some *other* kind is exactly as unresolved as one that resolves to nothing.
-    const from = resolveRef(pending.componentNaturalKey, identityIndex);
-    if (from === null || from.nodeKind !== 'component') {
-      unresolvedCount += 1;
-      continue;
-    }
-    edges.push({
-      from,
-      to: pending.repository,
-      edgeType: 'built_from',
-      layer: 'code',
-      provenance: pending.provenance,
-      observationRef: pending.observationRef,
-    });
-  }
-
-  return { edges, unresolvedCount, unresolvedDependencyKeys };
-}
-
 function diffNodes(
   dedupedNodes: Map<string, CandidateNode>,
   confirmed: readonly ConfirmedNode[],
@@ -349,7 +252,10 @@ function diffNodes(
       current: match === undefined ? null : { name: match.name, attributes: match.attributes },
       provenance: candidate.provenance,
       strength: provenanceStrength(candidate.provenance),
-      confidence: provenanceBaseConfidence(candidate.provenance),
+      // A node candidate carries no observation count/recency (only `dependency_observation`
+      // does — 004 reconciliation batch (c)); the flat provenance base is the real value of the
+      // full R-15 formula with both the volume and staleness terms at zero, not an invented one.
+      confidence: baseConfidence(candidate.provenance),
       observationRef: candidate.observationRef,
     };
     if (match === undefined) {
@@ -381,9 +287,28 @@ function diffNodes(
   }
 }
 
+/** `dependency_observation` carries real volume/recency; `built_from` does not (`observation` is
+ *  `null`) — deriving from a real count when one exists, falling back to the flat provenance base
+ *  when it doesn't, is what "use the fields already present, never invent one" (004 reconciliation
+ *  batch (c)) means for an edge candidate. Provenance here is always a discovery-adapter class,
+ *  never human (`AdapterConstants.provenance`) — never one of the two confirm-only classes the
+ *  merge path's type refuses by construction. */
+function edgeCandidateConfidence(candidate: CandidateEdge, now: Date): number {
+  if (candidate.observation === null) return baseConfidence(candidate.provenance);
+  return deriveEdgeConfidence(
+    {
+      provenance: candidate.provenance as MachineProvenanceClass,
+      observationCount: candidate.observation.observationCount,
+      lastObservedAt: candidate.observation.lastObservedAt,
+    },
+    now,
+  );
+}
+
 function diffEdges(
   dedupedEdges: Map<string, CandidateEdge>,
   confirmed: readonly ConfirmedEdge[],
+  now: Date,
   push: Push,
 ): void {
   const confirmedKeys = new Set(confirmed.map((e) => edgeKey(e.from, e.to, e.edgeType, e.layer)));
@@ -402,7 +327,7 @@ function diffEdges(
       current: null,
       provenance: candidate.provenance,
       strength: provenanceStrength(candidate.provenance),
-      confidence: provenanceBaseConfidence(candidate.provenance),
+      confidence: edgeCandidateConfidence(candidate, now),
       observationRef: candidate.observationRef,
     });
   }
@@ -416,6 +341,7 @@ function diffEdges(
  */
 export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsResult {
   const { tenantId, runId, sources, adapterConstants, snapshot, rejectedDigests } = input;
+  const now = input.now ?? new Date();
 
   const {
     nodes: candidateNodes,
@@ -450,7 +376,7 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
   };
 
   diffNodes(dedupedNodes, snapshot.nodes, push);
-  diffEdges(dedupedEdges, snapshot.edges, push);
+  diffEdges(dedupedEdges, snapshot.edges, now, push);
   markRemovedNodes(
     snapshot.nodes,
     dedupedNodes,

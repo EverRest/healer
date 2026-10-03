@@ -4159,3 +4159,73 @@ the brief).
 3. Ran `pnpm install` + `pnpm exec prisma generate` before the first `make typecheck` — the
    worktree had no generated Prisma client yet; this is routine setup, not a reconciliation
    decision, noted only so the commit history makes sense.
+4. **(d) `check-confirmation-actors`/`check-graph-fact-coverage` out of `make ci`, consistently
+   (Pavlo's d1).** Removed both from the `ci:` recipe and reverted
+   `specs/012-engineering-foundation/contracts/make-targets.md`'s composition block,
+   focused-targets list and gate-semantics table entries for them entirely (not moved to a "not in
+   ci" section — that doc never documented master's three analogous checks,
+   `graph-provenance`/`edge-strength-max`/`graph-structure`, at all; those live only in 004's own
+   `tasks.md`/`data-model.md`). Both targets remain runnable standalone via `make
+   check-confirmation-actors` / `make check-graph-fact-coverage`. Revisit once C-87 (actor_ref on
+   confirmed edges) makes `check-confirmation-actors`/`graph-provenance`-style checks pass cleanly
+   against fixtures - consistency over convenience in the meantime.
+5. (e) lastDeployedAt on deployment units. Added to domain/kind-attributes.ts's
+   DeploymentUnitAttrValue and validateDeploymentUnitAttr's accepted keys (the column already
+   existed - prisma/schema.prisma's DeploymentUnitAttr.lastDeployedAt). Also had to fix the two
+   read-side mappers that construct a DeploymentUnitAttrValue from a DB row
+   (prisma-graph-structure-repository.ts's getDeploymentUnitAttr,
+   prisma-system-context-repository.ts's system-context assembly) - tsc caught both as missing
+   the now-required field; not mentioned in the brief but necessarily part of "the validator now
+   has this field in its list" once it's a required property of the value type.
+6. (f) Natural-key canonical matching. natural-key-collisions.ts's private canonical fold is now
+   exported (the one authority) and node-key.ts's nodeRefKey uses it instead of the raw string -
+   edgeKey inherits it for free since it's built from two nodeRefKey calls. The same exact-match
+   bug existed a second place the brief's two named files don't mention by name: diff-builder.ts's
+   buildIdentityIndex/resolveRef (the dependency_observation/built_from endpoint resolver) indexed
+   nodes by the raw natural key directly, bypassing nodeRefKey entirely - "Checkout" and "checkout"
+   would have landed in two different map entries there even after the node-key.ts fix. Fixed the
+   same way (canonicalise on insert and on lookup). naturalEdgeKey (the key markRemovedEdges uses
+   for "did this exactly fail to resolve this run") canonicalises both sides too, for the same
+   reason.
+7. File-split, not scope creep: extracting buildIdentityIndex/resolveRef/naturalEdgeKey/
+   resolveEdges into a new edge-resolution.ts was needed to keep diff-builder.ts under the
+   400-line lint limit once (f)'s and (c)'s changes both landed in it - same precedent as
+   mark-removed.ts being split out earlier in Phase 3 for the identical reason. The new module
+   takes only type-only imports back from diff-builder.ts (erased at compile time), so there is no
+   runtime circular dependency between the two.
+8. (c) Confidence derivation - exact split chosen. edge-confidence.ts gained HUMAN_CONFIDENCE_BASE
+   (human_confirmed: 90, human_authored: 85, carried over verbatim from the deleted confidence.ts)
+   and a new baseConfidence(provenance, config?) dispatcher (human class -> HUMAN_CONFIDENCE_BASE,
+   machine class -> config.base) - the one replacement for every provenanceBaseConfidence call
+   site that has no real observation to derive from. Three categories of caller, each gets the one
+   that actually fits its data:
+   - Confirmed edges/nodes (prisma-draft-review-repository.ts, provenance is always
+     human_confirmed): HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE] directly (=90) - a human
+     confirming something is itself the evidence, independent of observation volume.
+   - A node candidate (diffNodes) and a mark_removed absence fact (mark-removed.ts, both call
+     sites) and a built_from edge (no dependency_observation to read volume/recency from):
+     baseConfidence(provenance) - the flat value, which is the real R-15 formula with both the
+     volume and staleness terms at zero, not an invented one. The brief's confidence-derivation
+     instruction names only diff-builder.ts lines ~351-352/~404-405, but ComponentCandidate/
+     DeploymentUnitCandidate/RepositoryRef carry no observation-count field at all (unlike
+     DependencyObservation), and deriveEdgeConfidence throws on observationCount < 1 - so applying
+     it to these would have meant inventing a count, which (c) explicitly rules out ("rather than
+     inventing new inputs"). Judgment call: use the one legitimate value (flat base) rather than
+     force a derivation the data cannot support.
+   - An add_edge draft item from a real dependency_observation (diffEdges): deriveEdgeConfidence
+     with the item's own observationCount/lastObservedAt - the one case where real fields exist,
+     exactly as (c) directs. CandidateEdge gained an `observation: { observationCount,
+     lastObservedAt } | null` field (null for built_from) to carry this without inventing anything
+     for the edges that don't have it.
+   - BuildDraftItemsInput gained an optional `now?: Date` (R-15's "observation window end"),
+     defaulting to the real clock - deriveEdgeConfidence needs a reference instant and this is
+     "computed at write time only," never recomputed, so reading the clock once at draft-build
+     time is the correct source, not an invented one.
+   - Tenant-level confidenceConfig override (the architecture.confidence_config table) is NOT
+     threaded into the draft-build path - only DEFAULT_CONFIDENCE_CONFIG. The override is
+     documented (data-model.md) as read "at write time" for T039's merge path specifically; wiring
+     it into the pure, DB-less diff-builder.ts would mean a new DiscoveryRepository method and
+     composition-root wiring, which is Phase 4/5-shaped work the brief did not ask for here. A
+     draft's displayed confidence is an estimate for human review, not the merged graph's real
+     confidence (that one does read the tenant override, via mergeObservation) - flagged here in
+     case this read is wanted later.

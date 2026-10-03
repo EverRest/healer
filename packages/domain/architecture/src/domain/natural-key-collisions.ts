@@ -24,7 +24,10 @@ export interface NaturalKeyCollision {
   readonly candidates: readonly ComponentRepositories[];
 }
 
-const canonical = (key: string): string => key.trim().toLowerCase();
+/** The one authority for "same natural key" (004 reconciliation batch (f)): `node-key.ts`'s
+ *  `nodeRefKey`/`edgeKey` import this rather than re-deriving their own fold, so a key that
+ *  collides here also matches there. */
+export const canonical = (key: string): string => key.trim().toLowerCase();
 
 function scopeOf(group: readonly ComponentRepositories[]): CollisionScope {
   const repositories = new Set(group.flatMap((c) => c.repositoryIds));

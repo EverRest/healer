@@ -60,6 +60,7 @@ export class PrismaGraphStructureRepository implements GraphStructureRepository 
       runtimeKind: row.runtimeKind,
       runtimeRef: row.runtimeRef,
       currentVersion: row.currentVersion,
+      lastDeployedAt: row.lastDeployedAt === null ? null : row.lastDeployedAt.toISOString(),
     };
   }
 

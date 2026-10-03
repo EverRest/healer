@@ -6,7 +6,7 @@ import type {
 } from './diff-builder.js';
 import { naturalEdgeKey } from './diff-builder.js';
 import type { AdapterConstants, DiscoverySourceStatus } from './discovery-batch.js';
-import { provenanceBaseConfidence } from './confidence.js';
+import { baseConfidence } from './edge-confidence.js';
 import type { ConfirmedEdge, ConfirmedNode } from './confirmed-graph-snapshot.js';
 import { graphFactId } from './graph-fact-id.js';
 import { edgeKey, nodeRefKey } from './node-key.js';
@@ -52,7 +52,7 @@ export function markRemovedNodes(
       current: { name: node.name, attributes: node.attributes },
       provenance,
       strength: provenanceStrength(provenance),
-      confidence: provenanceBaseConfidence(provenance),
+      confidence: baseConfidence(provenance),
       observationRef: absenceId,
     });
     if (!kept) continue;
@@ -120,7 +120,7 @@ export function markRemovedEdges(
       current: { from: edge.from, to: edge.to, edgeType: edge.edgeType, layer: edge.layer },
       provenance,
       strength: provenanceStrength(provenance),
-      confidence: provenanceBaseConfidence(provenance),
+      confidence: baseConfidence(provenance),
       observationRef: absenceId,
     });
     if (!kept) continue;

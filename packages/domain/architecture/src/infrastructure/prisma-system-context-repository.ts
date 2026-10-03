@@ -116,6 +116,10 @@ export class PrismaSystemContextRepository implements SystemContextRepository {
                 runtimeKind: r.deploymentUnitAttr.runtimeKind,
                 runtimeRef: r.deploymentUnitAttr.runtimeRef,
                 currentVersion: r.deploymentUnitAttr.currentVersion,
+                lastDeployedAt:
+                  r.deploymentUnitAttr.lastDeployedAt === null
+                    ? null
+                    : r.deploymentUnitAttr.lastDeployedAt.toISOString(),
               },
             ),
           ),

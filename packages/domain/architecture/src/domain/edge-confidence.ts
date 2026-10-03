@@ -1,4 +1,9 @@
-import { assertValidObservation, type MachineProvenanceClass } from './edge-observation.js';
+import {
+  assertValidObservation,
+  type HumanProvenanceClass,
+  type MachineProvenanceClass,
+} from './edge-observation.js';
+import type { ProvenanceClass } from './provenance.js';
 
 /**
  * R-15 (FR-006): `min(100, base + observation_term - staleness_term)`, clamped at 0, every term an
@@ -20,6 +25,36 @@ export interface ConfidenceConfig {
   readonly stalenessCap: number;
   /** Ceiling when volume is 1: one observation is an observation, not a fact. */
   readonly singleObservationCap: number;
+}
+
+/**
+ * The human-class base values R-15's formula never reaches through the merge path (`base` above
+ * is machine-only by construction) but every other write path still needs — a human confirming
+ * something IS the evidence, independent of how many times a bot saw it first, so there is no
+ * observation/staleness term here, only the flat starting point (004 reconciliation batch (c),
+ * replacing the deleted `confidence.ts`'s `CONFIDENCE_PROVENANCE_BASE_V1` for these two classes
+ * — the one surviving authority for a human base value).
+ */
+export const HUMAN_CONFIDENCE_BASE: Readonly<Record<HumanProvenanceClass, number>> = {
+  human_confirmed: 90,
+  human_authored: 85,
+};
+
+const isHumanProvenanceClass = (p: ProvenanceClass): p is HumanProvenanceClass =>
+  p === 'human_confirmed' || p === 'human_authored';
+
+/** The flat provenance-base value for ANY provenance class, human or machine — the one place that
+ *  dispatches between `HUMAN_CONFIDENCE_BASE` and a (possibly tenant-overridden) `config.base`,
+ *  for a caller with no observation count/recency to derive a real R-15 value from (a draft node
+ *  candidate, an absence fact, a `built_from` edge). Never invents an observation; a caller that
+ *  has one uses `deriveEdgeConfidence` instead. */
+export function baseConfidence(
+  provenance: ProvenanceClass,
+  config: ConfidenceConfig = DEFAULT_CONFIDENCE_CONFIG,
+): number {
+  return isHumanProvenanceClass(provenance)
+    ? HUMAN_CONFIDENCE_BASE[provenance]
+    : config.base[provenance];
 }
 
 export const DEFAULT_CONFIDENCE_CONFIG: ConfidenceConfig = {

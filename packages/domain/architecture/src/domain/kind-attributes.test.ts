@@ -112,6 +112,26 @@ describe('T045: the other kind attributes validate their closed lists', () => {
     );
   });
 
+  it('deployment_unit_attr accepts lastDeployedAt — the column exists, the field list was a gap', () => {
+    const base = { environment: 'production', runtimeKind: 'vm', runtimeRef: 'fn-1' } as const;
+    const withTimestamp = validateDeploymentUnitAttr({
+      ...base,
+      lastDeployedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(withTimestamp).toEqual({
+      ok: true,
+      value: {
+        environment: 'production',
+        runtimeKind: 'vm',
+        runtimeRef: 'fn-1',
+        currentVersion: null,
+        lastDeployedAt: '2026-01-01T00:00:00.000Z',
+      },
+    });
+    expect(validateDeploymentUnitAttr({ ...base, lastDeployedAt: null }).ok).toBe(true);
+    expect(validateDeploymentUnitAttr({ ...base, lastDeployedAt: '  ' }).ok).toBe(false);
+  });
+
   it('repository_attr requires vcs, project and branch', () => {
     const ok = { vcs: 'gitlab', projectRef: 'g/p', defaultBranch: 'main' };
     expect(validateRepositoryAttr(ok).ok).toBe(true);
