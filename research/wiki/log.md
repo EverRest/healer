@@ -1,5 +1,21 @@
 # Research wiki — log
 
+## 2026-10-03 — can Healer take tasks from agents, and from a chat channel
+
+Asked whether Healer can be given tasks for agents, since investigating and QA already work as agents.
+Answer, from the repository: the product's agents (006–008) are specified but their packages are empty
+(`packages/agents`, `llm`, `sandbox`, `apps/mcp-server` export nothing); agents that *develop* Healer are
+specified in ADR 0011 and 012 US10, and its phase 13 has not started. The two do not share a framework:
+development agents run as a GitHub Actions job, product agents run through control plane, runner and
+sandbox; they share the gates, policy and the human merge.
+
+Five gaps were found and recorded in `QUESTIONS.md` and 012 T097–T101: the coding agent in the job, how
+work reaches it, picking the next ready task, driving a pull request to green, and the bridge to the
+product pipeline. The owner then specified the intake: one Telegram channel per project (already C-48)
+where tasks, bugs and bot findings are posted and agents report. Written as 012 FR-060..FR-065, SC-023,
+T098/T102–T104 and ADR 0016 (Proposed). The recommendation to require confirmation and to use the Claude
+Code GitHub Action awaits the owner. See [agent-driven-development](agent-driven-development.md).
+
 ## 2026-09-27 — a real concurrency bug, and the deployment gap nobody had named
 
 **001's Phase 3 (US1, deduplication and ingestion) landed complete**, T015 through T026. The load

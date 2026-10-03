@@ -32,7 +32,7 @@ RUN pnpm exec tsc --build apps/runner/tsconfig.json
 # `tsconfig.json`'s own `include: ["src/**/*"]` compiles test files too (needed so `pnpm run
 # typecheck` actually checks them) — strip their compiled output before it ships in an image
 # nothing runs tests from (012 T050 review).
-RUN find apps/runner/dist packages/boundary-contract/dist packages/shared/dist -name '*.test.*' -delete
+RUN find apps/runner/dist packages/boundary-contract/dist packages/shared/dist \( -name '*.test.*' -o -name 'test-support.*' \) -delete
 
 # ---- prod-deps: same scoped filter, production dependencies only ----
 FROM base AS prod-deps

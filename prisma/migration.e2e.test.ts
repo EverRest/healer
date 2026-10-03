@@ -31,6 +31,13 @@ const GLOBAL_TABLES = new Set([
   // 002: a rule belongs to a ruleset, which is tenant-scoped; the rule itself carries no
   // tenant_id and is never read except through its ruleset (data-model.md "policy_rule").
   'policy.policy_rule',
+  // 003: collector_registration is the product-level set of collectors (which exist is a product
+  // fact, R-12) and the three rulesets are immutable versioned product definitions, published to
+  // runners — the same shape as policy_action / normalisation_ruleset (data-model.md).
+  'context.collector_registration',
+  'context.collection_ruleset',
+  'context.ranking_ruleset',
+  'context.redaction_ruleset',
 ]);
 
 function migrationNames(): string[] {
@@ -209,7 +216,7 @@ describe('migrations', () => {
       pg,
       `select coalesce(string_agg(c.relname, ','), '') from pg_class c
        join pg_namespace n on n.oid = c.relnamespace
-       where c.relkind = 'r' and n.nspname in ('workflow','prompt','tenant','runner','agent','architecture')`,
+       where c.relkind = 'r' and n.nspname in ('workflow','prompt','tenant','runner','agent','architecture','context')`,
     );
     expect(remaining).toBe('');
 
@@ -224,5 +231,9 @@ describe('migrations', () => {
       `select count(*) from pg_namespace where nspname = 'architecture'`,
     );
     expect(architectureSchemaStillExists).toBe('0');
+    // Same for "context" (003): its down.sql drops its own schema.
+    expect(await query(pg, `select count(*) from pg_namespace where nspname = 'context'`)).toBe(
+      '0',
+    );
   });
 });

@@ -123,16 +123,17 @@ export class PrismaAutonomyGrantRepository implements AutonomyGrantRepository {
     assertCorrelated();
 
     return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.autonomyGrant.findFirst({
-        where: { id: where.id, tenantId: where.tenantId },
-      });
-      if (existing === null) throw new NotFoundError('autonomy_grant');
-      if (existing.revokedAt !== null) throw new GrantAlreadyRevokedError(where.id);
-
-      const updated = await tx.autonomyGrant.update({
-        where: { id: where.id },
+      // One conditional write rather than read-then-update: under READ COMMITTED two concurrent
+      // revokes both passed a `findFirst` check and both wrote, double-bumping the epoch.
+      const claimed = await tx.autonomyGrant.updateMany({
+        where: { id: where.id, tenantId: where.tenantId, revokedAt: null },
         data: { revokedBy: where.revokedBy, revokedAt: where.revokedAt },
       });
+      const updated = await tx.autonomyGrant.findFirst({
+        where: { id: where.id, tenantId: where.tenantId },
+      });
+      if (updated === null) throw new NotFoundError('autonomy_grant');
+      if (claimed.count === 0) throw new GrantAlreadyRevokedError(where.id);
 
       const epoch = await bumpAutonomyEpochInTx(
         tx,

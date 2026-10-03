@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fixtureRepo, git, write } from '../lib/fixture-repo';
 import { redFirst, taskIsNoBehaviour } from './red-first.mjs';
@@ -111,6 +112,15 @@ describe('gate-red-first (012 T086, FR-056, R-14, quickstart 39)', () => {
     git(dir, ['branch', '-m', 'master', 'trunk']);
     write(dir, 'new.test.mjs', FAILING);
     expect(() => gate()).toThrow(/no base ref/);
+  });
+
+  it('leaves no temp directory behind when the worktree cannot be created', () => {
+    repo();
+    write(dir, 'new.test.mjs', FAILING);
+    const before = readdirSync(tmpdir()).filter((n) => n.startsWith('red-first-')).length;
+    // A merge-base that is not a commit makes `git worktree add` throw.
+    expect(() => gate({ resolveBase: () => 'deadbeef' })).toThrow();
+    expect(readdirSync(tmpdir()).filter((n) => n.startsWith('red-first-')).length).toBe(before);
   });
 
   it('removes its temporary worktree, pass or fail', () => {

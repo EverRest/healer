@@ -17,6 +17,7 @@
   "dependencies": {
     "@healer/boundary-contract": "workspace:*",
     "@healer/domain-architecture": "workspace:*",
+    "@healer/domain-context": "workspace:*",
     "@healer/domain-evidence": "workspace:*",
     "@healer/domain-issues": "workspace:*",
     "@healer/domain-policy": "workspace:*",

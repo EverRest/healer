@@ -458,6 +458,7 @@ paths:
       summary: Inbound payloads refused by the boundary schema — visible to the tenant (FR-010)
       parameters:
         - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: runnerId, in: query, schema: { type: string, format: uuid } }
       responses:
         '200':
           description: OK
@@ -467,3 +468,5 @@ paths:
                 type: object
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/BoundaryRejection' } }
+                  total: { type: integer, description: 'over the whole filter; items is capped' }
+                  countsByRunner: { type: object, additionalProperties: { type: integer } }

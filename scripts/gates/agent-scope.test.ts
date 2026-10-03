@@ -165,6 +165,23 @@ describe('gate-agent-scope (012 T085, FR-055, SC-021, R-15, quickstart 36–38)'
       expect(agentScopeViolations({ cwd: dir, isAgent: true }).join()).toContain('disabled test');
     });
 
+    it.each([
+      "it.only('a'",
+      "it.skipIf(true)('a'",
+      "it.runIf(false)('a'",
+      "it.concurrent.skip('a'",
+    ])('fails on a test narrowed or switched off with %s', (replacement) => {
+      repo();
+      write(dir, TEST_FILE, BASE_TEST.replace("it('a'", replacement));
+      expect(agentScopeViolations({ cwd: dir, isAgent: true }).join()).toContain('disabled test');
+    });
+
+    it('flags a protected non-ASCII path (git would C-quote it)', () => {
+      repo();
+      write(dir, 'scripts/é.mjs', 'x\n');
+      expect(agentScopeViolations({ cwd: dir, isAgent: true }).join()).toContain('scripts/é.mjs');
+    });
+
     it('counts expect.soft( and expectTypeOf( as assertions', () => {
       repo({ 'b.test.ts': 'expect.soft(1).toBe(1);\nexpectTypeOf(x).toBeString();\n' });
       write(dir, 'b.test.ts', '\n');

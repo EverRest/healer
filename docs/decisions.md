@@ -254,6 +254,15 @@ diff infrastructure, the tenant-deployment/secrets story) or is tracked as plain
 replay perf follow-ups) — recorded in `QUESTIONS.md`, not repeated here since no judgment call was
 actually made on any of them.
 
+## Agent intake through the chat channel (2026-10-03)
+
+Proposed, pending the owner's confirmation; see [ADR 0016](adr/0016-chat-channel-agent-intake.md).
+
+| ID | Decision | Consequence |
+|----|----------|-------------|
+| C-91 | **Proposed.** A chat post is classified by structure into a task or a finding. A task becomes a task line or issue after the allowlisted owner confirms a card; a finding enters 001 ingestion as a signal and is never an agent task | Keeps ADR 0011's "one task per pull request" and the constitution's classify-before-patching true for input that arrives as free text. Rejected: a post that directly starts an agent (chat text would be the only control on a model budget); treating bot findings as tasks (skips reproduction and classification). Relaxing the confirmation is a new decision |
+| C-92 | **Proposed.** The agent that runs inside `agent-task.yml` is the Claude Code GitHub Action, authenticated with the GitHub App token of 012 R-16 | 012 names no product on purpose; T089 cannot be built without one. The repository's `AGENTS.md`, `CLAUDE.md`, `.claude/rules` and speckit skills already target it. Swapping it later changes one workflow step, not a gate |
+
 ## Deliberately unset
 
 `false-fix rate`, `30-day revert rate`, `per-incident cost ceiling`, escalation attempt cap —

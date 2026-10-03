@@ -8,7 +8,9 @@ import {
   ceilingTable,
   findCeilingDrift,
   findUnearnedRaises,
+  readTrackedArtifact,
 } from './ceiling.mjs';
+import { fixtureRepo, git, write } from '../lib/fixture-repo';
 
 const CEILING_TS = readFileSync(
   fileURLToPath(new URL('../../packages/domain/policy/src/domain/ceiling.ts', import.meta.url)),
@@ -175,5 +177,21 @@ describe('gate-ceiling diff half (002 T086, FR-008a)', () => {
       /function ACTION_CEILING\(actionClass: ActionClass, hasTestedUndo: boolean\): Ceiling/,
     );
     expect(CEILING_TS).not.toMatch(/process\.env|@healer\/shared|import .*config/);
+  });
+});
+
+describe('readTrackedArtifact (review of 0.52.0: "committed", not merely "on disk")', () => {
+  it('resolves a tracked artifact, a staged one, and refuses an untracked one', () => {
+    const dir = fixtureRepo({ 'docs/derivations/run-1.json': '{"runId":"run-1"}' });
+    expect(readTrackedArtifact(dir, 'run-1')).toBe('{"runId":"run-1"}');
+    write(dir, 'docs/derivations/run-2.json', '{"runId":"run-2"}');
+    expect(readTrackedArtifact(dir, 'run-2')).toBeUndefined(); // on disk, in no commit or index
+    git(dir, ['add', 'docs/derivations/run-2.json']);
+    expect(readTrackedArtifact(dir, 'run-2')).toBe('{"runId":"run-2"}');
+  });
+
+  it('does not let a run id walk out of docs/derivations', () => {
+    const dir = fixtureRepo({ 'secret.json': '{}' });
+    expect(readTrackedArtifact(dir, '../secret')).toBeUndefined();
   });
 });

@@ -33,30 +33,36 @@ export function resolveBaseRevision(cwd = process.cwd()) {
   return execFileSync('git', ['merge-base', baseRef, 'HEAD'], { cwd, encoding: 'utf8' }).trim();
 }
 
+// `-z` throughout: without it git C-quotes a non-ASCII name (`"scripts/\303\251.mjs"`), and a
+// quoted name matches no path pattern and no test-file check.
 function workingTreeChanges(cwd) {
   // Uncommitted changes against HEAD, staged or not — a local `make ci` run on a feature branch
   // with no commits yet (the common case while iterating) must see these, or the gate only ever
   // fires once something has already been committed, which is too late for R-09's "identical
   // locally and in CI".
-  const tracked = execFileSync('git', ['diff', '--name-only', '--no-renames', 'HEAD'], {
+  const tracked = execFileSync('git', ['diff', '-z', '--name-only', '--no-renames', 'HEAD'], {
     cwd,
     encoding: 'utf8',
   });
-  const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
+  const untracked = execFileSync('git', ['ls-files', '-z', '--others', '--exclude-standard'], {
     cwd,
     encoding: 'utf8',
   });
-  return [...tracked.split('\n'), ...untracked.split('\n')];
+  return [...tracked.split('\0'), ...untracked.split('\0')];
 }
 
 export function changedFilesSinceBase(cwd = process.cwd()) {
   // One resolution for the whole gate set: the diff and the gates' base-revision reads cannot
   // disagree about what "the base" is. Throws when there is none (R-10).
   const base = resolveBaseRevision(cwd);
-  const committed = execFileSync('git', ['diff', '--name-only', '--no-renames', `${base}..HEAD`], {
-    cwd,
-    encoding: 'utf8',
-  }).split('\n');
+  const committed = execFileSync(
+    'git',
+    ['diff', '-z', '--name-only', '--no-renames', `${base}..HEAD`],
+    {
+      cwd,
+      encoding: 'utf8',
+    },
+  ).split('\0');
   const all = [...committed, ...workingTreeChanges(cwd)];
-  return [...new Set(all.map((f) => f.trim()).filter(Boolean))];
+  return [...new Set(all.filter(Boolean))];
 }

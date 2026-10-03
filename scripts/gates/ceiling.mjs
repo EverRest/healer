@@ -25,9 +25,9 @@
 // A citation already present at the base does not earn a further raise.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { resolveBaseRef } from '../lib/changed-files.mjs';
+import { resolveBaseRevision } from '../lib/changed-files.mjs';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 import { stripComments } from '../lib/strip-comments.mjs';
 
@@ -212,6 +212,19 @@ export function findUnearnedRaises(baseSource, newSource, readArtifact) {
   return problems;
 }
 
+/** The artifact's text when `docs/derivations/<runId>.json` exists AND git knows it (committed or
+ *  staged): an untracked file satisfied the gate locally and then vanished in CI. */
+export function readTrackedArtifact(root, runId) {
+  if (!/^[\w.-]+$/.test(runId) || runId.includes('..')) return undefined;
+  const rel = `docs/derivations/${runId}.json`;
+  try {
+    execFileSync('git', ['ls-files', '--error-unmatch', '--', rel], { cwd: root, stdio: 'pipe' });
+    return readFileSync(`${root}/${rel}`, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
 /* v8 ignore start -- CLI wiring; the parsing/comparison above is unit tested */
 if (isMainModule(import.meta.url)) {
   const result = await runGate('gate-ceiling', () => {
@@ -220,12 +233,12 @@ if (isMainModule(import.meta.url)) {
       readFileSync(MIGRATION_SQL, 'utf8'),
     );
     if (drift.length > 0) throw new Error(drift.join('; '));
-    const baseRef = resolveBaseRef(REPO_ROOT);
-    if (!baseRef)
-      throw new Error('no base ref resolved — refusing to treat this as "no raise" (R-10)');
+    // The merge-base, like every other gate: the tip of origin/master moves under a stale branch
+    // (a lowered ceiling reads as a raise) and equals HEAD on a push to the default branch.
+    const base = resolveBaseRevision(REPO_ROOT);
     let baseSource = '';
     try {
-      baseSource = execFileSync('git', ['show', `${baseRef}:${CEILING_TS_REPO_PATH}`], {
+      baseSource = execFileSync('git', ['show', `${base}:${CEILING_TS_REPO_PATH}`], {
         cwd: REPO_ROOT,
         encoding: 'utf8',
         stdio: 'pipe',
@@ -233,10 +246,9 @@ if (isMainModule(import.meta.url)) {
     } catch {
       // absent at the base: every level is a raise
     }
-    const raises = findUnearnedRaises(baseSource, readFileSync(CEILING_TS, 'utf8'), (runId) => {
-      const path = `${REPO_ROOT}docs/derivations/${runId}.json`;
-      return existsSync(path) ? readFileSync(path, 'utf8') : undefined;
-    });
+    const raises = findUnearnedRaises(baseSource, readFileSync(CEILING_TS, 'utf8'), (runId) =>
+      readTrackedArtifact(REPO_ROOT, runId),
+    );
     if (raises.length > 0) throw new Error(raises.join('; '));
   });
   reportAndExit(result);

@@ -25,6 +25,9 @@
       "path": "../../packages/domain/issues"
     },
     {
+      "path": "../../packages/domain/context"
+    },
+    {
       "path": "../../packages/domain/evidence"
     },
     {

@@ -27,6 +27,8 @@ import {
   PrismaDraftReviewRepository,
   PrismaGraphReadRepository,
 } from '@healer/domain-architecture';
+import { PrismaGraphReadRepository } from '@healer/domain-architecture';
+import { PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import { PrismaClient } from '@healer/prisma-client';
 import { assertTenantIsolated, assertTenantIsolatedList } from '../../test/tenant-isolation.js';
 import { applySqlFile, startPostgres, type StartedPostgres } from '../../test/containers.js';
@@ -80,6 +82,7 @@ describe('/graph/nodes (004 T041)', () => {
       new PrismaGraphReadRepository(prisma),
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
+      new PrismaBoundaryRejectionRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

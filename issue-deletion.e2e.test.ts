@@ -236,6 +236,36 @@ describe('tenant deletion of an issue (001 T053)', () => {
        values ('${policyDecisionId}', '${tenantId}', '${id}', 'change.open_pull_request', 'digest-1',
                '{}', 1, '{}', 'allow', '{}', false, '{}', now())`,
     );
+    // 003: a finalised snapshot with its pass, one source outcome and one item over the second
+    // evidence record — rows with RESTRICT foreign keys into the issue, the run and the evidence,
+    // each carrying a needle so "nothing is left" can see them.
+    const snapshotId = randomUUID();
+    const passId = randomUUID();
+    await query(
+      pg,
+      `insert into "context"."context_snapshot"
+         (id, tenant_id, issue_id, version, collected_at, window_from, window_to, plan_digest,
+          collection_ruleset_version, ranking_ruleset_version, redaction_ruleset_version,
+          normalisation_ruleset_version, contract_version, runner_id, runner_image_version,
+          completeness, budget_state, finalised_at)
+       values ('${snapshotId}', '${tenantId}', '${id}', 1, now(), now(), now(), 'digest-${secrets[4]}',
+               1, 1, 1, 1, 1, '${randomUUID()}', '0.53.0', '{}', 'within', now());
+       insert into "context"."collection_pass"
+         (id, tenant_id, snapshot_id, pass_ordinal, plan_digest, requested_plan, resolved_plan,
+          requested_by_step, workflow_run_id, callback_id, dispatched_at, outcome)
+       values ('${passId}', '${tenantId}', '${snapshotId}', 0, 'digest-${secrets[4]}', '{}', '{}',
+               'system', '${runId}', '${randomUUID()}', now(), 'completed');
+       insert into "context"."source_outcome"
+         (id, tenant_id, pass_id, collector_key, status, item_count, truncated, duration_ms)
+       values ('${randomUUID()}', '${tenantId}', '${passId}', 'loki_logs', 'collected', 1, false, 5);
+       insert into "context"."context_item"
+         (id, tenant_id, snapshot_id, pass_id, evidence_id, item_class, collector_key, dedup_key,
+          occurrence_count, first_observed_at, last_observed_at, component_attribution,
+          relevance_score, ranking_terms, inclusion_state, redaction_dominated)
+       values ('${randomUUID()}', '${tenantId}', '${snapshotId}', '${passId}', '${evidenceIds[1]}',
+               'error_signature', 'loki_logs', 'key-${secrets[4]}', 1, now(), now(), 'resolved', 1, '[]',
+               'included', false)`,
+    );
     return { id, evidenceIds, runId, policyDecisionId, secrets };
   }
 
@@ -450,6 +480,9 @@ describe('tenant deletion of an issue (001 T053)', () => {
         expect(Object.keys(await mentions(needlesOf(seeded))).sort()).toEqual([
           'agent.agent_run',
           'audit.audit_entry',
+          'context.collection_pass',
+          'context.context_item',
+          'context.context_snapshot',
           'events.outbox',
           'evidence.evidence',
           'evidence.evidence_link',

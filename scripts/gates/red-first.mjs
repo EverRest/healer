@@ -48,9 +48,9 @@ function baseTasksTexts(cwd, base) {
  * @param {{ cwd: string, isAgent: boolean, taskId?: string,
  *           run: (worktree: string, files: string[]) => { failed: boolean } }} input
  */
-export function redFirst({ cwd, isAgent, taskId, run }) {
+export function redFirst({ cwd, isAgent, taskId, run, resolveBase = resolveBaseRevision }) {
   if (!isAgent) return { skipped: 'human-authored' };
-  const base = resolveBaseRevision(cwd);
+  const base = resolveBase(cwd);
   if (taskId && taskIsNoBehaviour(baseTasksTexts(cwd, base), taskId)) {
     return { skipped: `no-behaviour task ${taskId}` };
   }
@@ -61,8 +61,10 @@ export function redFirst({ cwd, isAgent, taskId, run }) {
 
   const parent = mkdtempSync(join(tmpdir(), 'red-first-'));
   const worktree = join(parent, 'base');
-  execFileSync('git', ['worktree', 'add', '--detach', worktree, base], { cwd, stdio: 'pipe' });
+  let added = false;
   try {
+    execFileSync('git', ['worktree', 'add', '--detach', worktree, base], { cwd, stdio: 'pipe' });
+    added = true;
     for (const file of tests) {
       mkdirSync(dirname(join(worktree, file)), { recursive: true });
       copyFileSync(join(cwd, file), join(worktree, file));
@@ -72,7 +74,8 @@ export function redFirst({ cwd, isAgent, taskId, run }) {
     }
   } finally {
     try {
-      execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd, stdio: 'pipe' });
+      if (added)
+        execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd, stdio: 'pipe' });
     } finally {
       rmSync(parent, { recursive: true, force: true });
     }

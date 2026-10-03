@@ -30,6 +30,7 @@ import {
   requireIdempotencyKey,
   resolveActor,
   resolveTenant,
+  UUID_PATTERN,
 } from './policy-http.js';
 import { POLICY_ACTION_REPOSITORY } from './policy-evaluation.controller.js';
 
@@ -132,6 +133,9 @@ export class AutonomyGrantsController {
   ): Promise<unknown> {
     const context = resolveTenant(tenantIdHeader);
     const actor = resolveActor(actorIdHeader);
+    // `id` is a `@db.Uuid` column: a malformed id can match nothing, so it is a 404, not a 500.
+    if (!UUID_PATTERN.test(grantId))
+      throw new NotFoundException(`autonomy grant ${grantId} not found`);
 
     try {
       const revoked = await withCorrelation(newCorrelationId(), () =>

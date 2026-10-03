@@ -100,6 +100,14 @@ export const SEED_POLICY_ACTIONS: readonly Omit<PolicyAction, 'introducedAt'>[] 
     mutating: false,
     owningSpec: '002',
   },
+  // 003: one context collection pass audits as `context.collect_pass`. Read-only — the control
+  // plane never mutates a customer system (FR-002) — so `mutating: false`, never gated by evaluate().
+  {
+    actionKey: 'context.collect_pass',
+    actionClass: 'read_only',
+    mutating: false,
+    owningSpec: '003',
+  },
 ];
 
 /**

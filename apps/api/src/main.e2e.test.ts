@@ -1,3 +1,4 @@
+import type { BoundaryRejectionRepository } from '@healer/domain-context';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -119,6 +120,10 @@ const noopDraftReview: DraftReviewRepository = {
   rejectDraftItems: () => Promise.reject(new Error('not implemented in this test')),
   recordAuditEntry: () => Promise.reject(new Error('not implemented in this test')),
 };
+const noopBoundaryRejections: BoundaryRejectionRepository = {
+  record: () => Promise.reject(new Error('not implemented in this test')),
+  list: () => Promise.reject(new Error('not implemented in this test')),
+};
 
 /**
  * Boots the real Nest DI graph and hits it over HTTP — not just `buildHealthReport`, the plain
@@ -157,6 +162,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopGraphReads,
       noopDiscovery,
       noopDraftReview,
+      noopBoundaryRejections,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);
