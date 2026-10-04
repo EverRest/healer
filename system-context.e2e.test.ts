@@ -194,6 +194,7 @@ describe('GetSystemContext (004 T049, FR-020)', () => {
         strength: 65,
         confidence: 100,
         state,
+        actorRef: 'fixture',
         validFromVersion: 1,
       },
     });

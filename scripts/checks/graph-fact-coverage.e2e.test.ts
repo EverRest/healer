@@ -116,17 +116,17 @@ describe('check:graph-fact-coverage against a real Postgres (004 T035, FR-027, S
         pg,
         `insert into "architecture"."graph_edge"
            (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-            confidence, state, valid_from_version, valid_to_version)
+            confidence, state, valid_from_version, valid_to_version, observation_ref)
          values ('${edgeId}', '${TENANT_ID}', '${NODE_FROM}', '${NODE_TO}', '${edgeType}', 'code',
-                 'derived_from_code', 30, 60, 'proposed', 1, 2147483647)`,
+                 'derived_from_code', 30, 60, 'proposed', 1, 2147483647, '${observationRef}')`,
       );
       await query(
         pg,
         `insert into "architecture"."edge_provenance"
            (id, tenant_id, edge_id, provenance, strength, confidence, observation_ref, adapter_key,
-            adapter_version)
+            adapter_version, valid_from_version)
          values ('${provenanceRowId}', '${TENANT_ID}', '${edgeId}', 'derived_from_code', 30, 60,
-                 '${observationRef}', 'gitlab', '0.2.0')`,
+                 '${observationRef}', 'gitlab', '0.2.0', 1)`,
       );
     }
 

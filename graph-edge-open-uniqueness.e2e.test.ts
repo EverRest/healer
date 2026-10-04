@@ -81,6 +81,7 @@ describe('architecture.graph_edge: at most one open row per logical edge (004 T0
       confidence: 50,
       state: 'proposed' as const,
       validFromVersion: 1,
+      observationRef: randomUUID(),
       // validToVersion defaults to 2147483647 (open) — both racers stay open.
     };
   }

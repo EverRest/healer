@@ -1,5 +1,5 @@
-import { HealerError, NotFoundError, type TenantScoped } from '@healer/shared';
-import { Prisma, type PrismaClient } from '@healer/prisma-client';
+import { HealerError, NotFoundError, type TenantId, type TenantScoped } from '@healer/shared';
+import { Prisma, isConcurrencyConflict, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
 import {
   decideDraftItemApplication,
@@ -27,6 +27,16 @@ import { nodeRefKey } from '../domain/node-key.js';
 import { DISCOVERY_NODE_KIND_LAYER } from '../domain/node-kind-layer.js';
 import type { NodeAttributes } from '../domain/proposed-payload.js';
 import { provenanceStrength } from '../domain/provenance-strength.js';
+import {
+  defaultCharacteristicVocabulary,
+  type CharacteristicVocabulary,
+} from '../domain/characteristics.js';
+import { applyAddEdgeDecision } from './confirm-add-edge.js';
+import {
+  auditAfterWithCollision,
+  collisionsForNewComponents,
+  newComponentIdsOf,
+} from './confirm-natural-key-collisions.js';
 import { createAttrRow, updateAttrRow } from './graph-node-attr-rows.js';
 import { loadLiveGraphSnapshot } from './load-live-graph-snapshot.js';
 import { recordGraphAuditEntry } from './record-graph-audit-entry.js';
@@ -54,26 +64,10 @@ interface DraftItemRow {
   readonly state: string;
   readonly observation_ref: string | null;
   readonly proposal_digest: string;
+  readonly provenance: string;
 }
 
-/**
- * True only for a P2002 on `graph_version`'s own `(tenant_id, version)` unique index — never for
- * any other constraint this transaction's writes can violate (same technique and same review
- * precedent as `prisma-policy-ruleset-repository.ts`'s `isRulesetVersionOrDigestConflict`:
- * `error.meta` for a Postgres unique violation carries `{ modelName, target }`, so checking
- * `modelName` first already disambiguates the table, and the column check pins it to this one
- * index rather than some future second one on `graph_version`).
- */
-function isGraphVersionConflict(error: unknown): boolean {
-  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
-    return false;
-  }
-  const meta = error.meta as
-    { readonly modelName?: unknown; readonly target?: unknown } | undefined;
-  if (meta?.modelName !== 'GraphVersion') return false;
-  const target = meta.target;
-  return Array.isArray(target) && target.includes('tenant_id') && target.includes('version');
-}
+import { isGraphVersionConflict } from './graph-version-conflict.js';
 
 function toDecisionInput(row: DraftItemRow): DraftItemForDecision {
   return {
@@ -84,6 +78,7 @@ function toDecisionInput(row: DraftItemRow): DraftItemForDecision {
     proposed: row.proposed as DraftItemForDecision['proposed'],
     current: row.current,
     observationRef: row.observation_ref,
+    provenance: row.provenance as DraftItemForDecision['provenance'],
   };
 }
 
@@ -99,7 +94,8 @@ async function lockProposedItems(
 ): Promise<DraftItemRow[]> {
   const sortedIds = [...itemIds].sort();
   const rows = await tx.$queryRaw<DraftItemRow[]>`
-    SELECT id, op, target_node_id, target_edge_id, proposed, current, state, observation_ref, proposal_digest
+    SELECT id, op, target_node_id, target_edge_id, proposed, current, state, observation_ref, proposal_digest,
+           provenance::text AS provenance
     FROM "architecture"."draft_item"
     WHERE id = ANY(${sortedIds}::uuid[]) AND tenant_id = ${tenantId}::uuid AND draft_id = ${draftId}::uuid
     ORDER BY id
@@ -131,7 +127,13 @@ interface AppliedWrite {
  * `graph_version`; `rejectDraftItems` mints none (see the domain interface's own doc comment).
  */
 export class PrismaDraftReviewRepository implements DraftReviewRepository {
-  constructor(private readonly prisma: PrismaClient) {
+  constructor(
+    private readonly prisma: PrismaClient,
+    // Phase 5 hook (T044): the open `characteristics` vocabulary, parsed once at the composition
+    // root via `parseCharacteristicVocabulary` — defaulted here so every existing test construction
+    // site keeps compiling; `apps/api/src/main.ts` passes the real one explicitly.
+    private readonly vocabulary: CharacteristicVocabulary = defaultCharacteristicVocabulary(),
+  ) {
     // `scripts/gates/graph-confirm-capability.mjs` (T015) expects the confirm-shaped infra
     // handler in this package to reference `GRAPH_CONFIRM_CAPABILITY` — a drift signal, not a
     // second enforcement point. The real gate is `requireHumanReviewActor` (FR-010,
@@ -232,6 +234,8 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           },
         });
 
+        const newComponentIds = newComponentIdsOf(decided.map((d) => d.decision));
+        const collisions = await collisionsForNewComponents(tx, tenantId, newComponentIds);
         const confirmedItems: ConfirmedItemResult[] = [];
         for (const { item, decision } of decided) {
           // Unreachable: `superseded.length > 0` above already threw and rolled back the
@@ -245,6 +249,8 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
             actorRef,
             decision,
             mintId,
+            draft.runId,
+            now,
           );
           confirmedItems.push({
             itemId: item.id,
@@ -275,7 +281,9 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
             evidenceIds: item.observationRef !== null ? [item.observationRef] : [],
             outcome: 'ok',
             before: item.current,
-            after: applied.after,
+            // Surfaced, never merged (T052): a newly confirmed component that shares a natural key
+            // with another confirmed component is recorded in its own audit entry for the human.
+            after: auditAfterWithCollision(applied.after, applied.nodeId, collisions),
             graphVersion: version,
           });
         }
@@ -295,6 +303,11 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
       });
     } catch (error) {
       if (isGraphVersionConflict(error)) throw new GraphConcurrencyError('GraphVersion');
+      // `mergeObservationInTx` (C-87's machine-row half, called inside this same transaction)
+      // raises the same raw serialization/deadlock failures `PrismaEdgeProvenanceRepository`'s
+      // own public method translates for its callers — translate it here too, since this call
+      // site bypasses that wrapper on purpose (004 reconciliation batch (b)).
+      if (isConcurrencyConflict(error)) throw new GraphConcurrencyError('GraphEdge');
       throw error;
     }
   }
@@ -305,11 +318,13 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
    *  branch. */
   private async applyDecision(
     tx: Prisma.TransactionClient,
-    tenantId: string,
+    tenantId: TenantId,
     version: number,
     actorRef: string,
     decision: AppliedDraftItemDecision,
     mintId: () => string,
+    runId: string,
+    now: Date,
   ): Promise<AppliedWrite> {
     if (decision.kind === 'add_node') {
       await tx.graphNode.create({
@@ -329,7 +344,13 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           validToVersion: OPEN_VERSION,
         },
       });
-      await createAttrRow(tx, tenantId, decision.nodeId, decision.attributes as NodeAttributes);
+      await createAttrRow(
+        tx,
+        tenantId,
+        decision.nodeId,
+        decision.attributes as NodeAttributes,
+        this.vocabulary,
+      );
       return {
         nodeId: decision.nodeId,
         targetType: 'graph_node',
@@ -338,47 +359,17 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
     }
 
     if (decision.kind === 'add_edge') {
-      await tx.graphEdge.create({
-        data: {
-          id: decision.edgeId,
-          tenantId,
-          fromNodeId: decision.fromNodeId,
-          toNodeId: decision.toNodeId,
-          edgeType: decision.edgeType,
-          layer: decision.layer,
-          provenance: CONFIRMED_PROVENANCE,
-          strength: provenanceStrength(CONFIRMED_PROVENANCE),
-          confidence: HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE],
-          state: 'confirmed',
-          validFromVersion: version,
-          validToVersion: OPEN_VERSION,
-        },
-      });
-      await tx.edgeProvenance.create({
-        data: {
-          id: mintId(),
-          tenantId,
-          edgeId: decision.edgeId,
-          provenance: CONFIRMED_PROVENANCE,
-          strength: provenanceStrength(CONFIRMED_PROVENANCE),
-          confidence: HUMAN_CONFIDENCE_BASE[CONFIRMED_PROVENANCE],
-          // No adapter produced this row — a human confirmation is the contributing "source"
-          // (data-model.md flags `edge_provenance` has no `actor_ref` column; these two string
-          // constants are this package's stand-in until that's resolved — see QUESTIONS.md).
-          adapterKey: 'human',
-          adapterVersion: 'confirmation',
-        },
-      });
-      return {
-        edgeId: decision.edgeId,
-        targetType: 'graph_edge',
-        after: {
-          from: decision.fromNodeId,
-          to: decision.toNodeId,
-          edgeType: decision.edgeType,
-          layer: decision.layer,
-        },
-      };
+      const applied = await applyAddEdgeDecision(
+        tx,
+        tenantId,
+        version,
+        actorRef,
+        decision,
+        mintId,
+        runId,
+        now,
+      );
+      return { edgeId: applied.edgeId, targetType: 'graph_edge', after: applied.after };
     }
 
     if (decision.kind === 'modify_attributes') {
@@ -392,7 +383,13 @@ export class PrismaDraftReviewRepository implements DraftReviewRepository {
           actorRef,
         },
       });
-      await updateAttrRow(tx, tenantId, decision.nodeId, decision.attributes as NodeAttributes);
+      await updateAttrRow(
+        tx,
+        tenantId,
+        decision.nodeId,
+        decision.attributes as NodeAttributes,
+        this.vocabulary,
+      );
       return {
         nodeId: decision.nodeId,
         targetType: 'graph_node',

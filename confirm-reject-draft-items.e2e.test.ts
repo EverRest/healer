@@ -377,14 +377,23 @@ describe('confirm/reject draft items (004 Phase 3 US1, T025-T029)', () => {
       const edges = await prisma.graphEdge.findMany({ where: { tenantId: TENANT_ID } });
       expect(edges).toHaveLength(1);
       expect(edges[0]!.provenance).toBe('human_confirmed');
+      expect(edges[0]!.actorRef).toBe('human:bob');
 
-      // T011's own invariant (graph_edge.strength/confidence = MAX over edge_provenance) must
-      // still hold for a human-confirmed edge, which has no discovered observation behind it.
+      // C-87 (004 reconciliation batch (a)+(b)): a confirmed edge keeps BOTH the machine
+      // observation `mergeObservationInTx` wrote (the draft item's own `derived_from_code`,
+      // unchanged by confirmation) AND a separate human-confirmation row with a real `actor_ref`
+      // — T011's MAX-over-`edge_provenance` invariant still resolves `graph_edge`'s own
+      // provenance/strength/confidence to the human row, since `human_confirmed` outranks every
+      // machine class.
       const provenanceRows = await prisma.edgeProvenance.findMany({
         where: { tenantId: TENANT_ID, edgeId: edges[0]!.id },
+        orderBy: { recordedAt: 'asc' },
       });
-      expect(provenanceRows).toHaveLength(1);
-      expect(provenanceRows[0]!.provenance).toBe('human_confirmed');
+      expect(provenanceRows).toHaveLength(2);
+      expect(provenanceRows[0]!.provenance).toBe('derived_from_code');
+      expect(provenanceRows[0]!.actorRef).toBeNull();
+      expect(provenanceRows[1]!.provenance).toBe('human_confirmed');
+      expect(provenanceRows[1]!.actorRef).toBe('human:bob');
     });
 
     it('rejects a draft item: proposal_rejection written, draft_item rejected, no graph_version minted', async () => {
@@ -557,7 +566,7 @@ describe('confirm/reject draft items (004 Phase 3 US1, T025-T029)', () => {
         'superseded-svc',
         nodeId,
         ['old_characteristic'],
-        ['new_characteristic'],
+        ['stateful'],
       );
 
       // The manual edit: someone else changed the live node's attributes after the draft was
@@ -598,7 +607,7 @@ describe('confirm/reject draft items (004 Phase 3 US1, T025-T029)', () => {
         'not-superseded-svc',
         nodeId,
         ['old_characteristic'],
-        ['new_characteristic'],
+        ['stateful'],
       );
 
       await withCorrelation('corr-t028-confirm', () =>
@@ -613,7 +622,7 @@ describe('confirm/reject draft items (004 Phase 3 US1, T025-T029)', () => {
       const attr = await prisma.componentAttr.findUniqueOrThrow({
         where: { nodeId_tenantId: { nodeId, tenantId: TENANT_ID } },
       });
-      expect(attr.characteristics).toEqual(['new_characteristic']);
+      expect(attr.characteristics).toEqual(['stateful']);
     });
 
     it('a batch with one superseded item applies nothing from the whole batch', async () => {

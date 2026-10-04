@@ -43,6 +43,8 @@ import {
   type PolicyRulesetRepository,
 } from '@healer/domain-policy';
 import {
+  DEFAULT_CHARACTERISTICS,
+  parseCharacteristicVocabulary,
   PrismaDiscoveryRepository,
   PrismaDraftReviewRepository,
   type DiscoveryRepository,
@@ -210,6 +212,11 @@ export async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: config.SERVICE_NAME });
   const prisma = createPrismaClient(config.DATABASE_URL);
+  // Phase 5 hook (004 T044, "Pending Phase 3: the composition root calling
+  // parseCharacteristicVocabulary") — no per-tenant config key exists yet for this, so the
+  // composition root validates the shipped default the same way a future configured value
+  // would be validated; `validateComponentAttr` (confirm path) refuses an unlisted term either way.
+  const characteristicVocabulary = parseCharacteristicVocabulary(DEFAULT_CHARACTERISTICS);
   const ApiModule = createApiModule(
     {
       service: config.SERVICE_NAME,
@@ -234,7 +241,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaApprovalLifecycleRepository(prisma),
     new PrismaGraphReadRepository(prisma),
     new PrismaDiscoveryRepository(prisma),
-    new PrismaDraftReviewRepository(prisma),
+    new PrismaDraftReviewRepository(prisma, characteristicVocabulary),
     new PrismaBoundaryRejectionRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });

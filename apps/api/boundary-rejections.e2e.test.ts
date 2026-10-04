@@ -22,7 +22,11 @@ import {
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
 } from '@healer/domain-policy';
-import { PrismaGraphReadRepository } from '@healer/domain-architecture';
+import {
+  PrismaDiscoveryRepository,
+  PrismaDraftReviewRepository,
+  PrismaGraphReadRepository,
+} from '@healer/domain-architecture';
 import { acceptResultBatch, PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import { PrismaClient } from '@healer/prisma-client';
 import { newCorrelationId, TenantContext, withCorrelation } from '@healer/shared';
@@ -76,6 +80,8 @@ describe('/boundary-rejections (003 T030)', () => {
       new PrismaBudgetLimitRepository(prisma),
       new PrismaApprovalLifecycleRepository(prisma),
       new PrismaGraphReadRepository(prisma),
+      new PrismaDiscoveryRepository(prisma),
+      new PrismaDraftReviewRepository(prisma),
       rejections,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });

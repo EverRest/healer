@@ -11,6 +11,7 @@ import {
   sameAttributes,
 } from './attribute-normalisation.js';
 import type { AdapterConstants, DiscoveryItem, DiscoverySourceStatus } from './discovery-batch.js';
+import { resolveDeploymentUnitPlacements } from './deployment-unit-resolution.js';
 import { baseConfidence, deriveEdgeConfidence } from './edge-confidence.js';
 import { resolveEdges } from './edge-resolution.js';
 import type { MachineProvenanceClass } from './edge-observation.js';
@@ -47,9 +48,6 @@ export interface BuildDraftItemsInput {
   readonly adapterConstants: Readonly<Record<string, AdapterConstants>>;
   readonly snapshot: ConfirmedGraphSnapshot;
   readonly rejectedDigests: ReadonlySet<string>;
-  /** The confidence reference instant (R-15: "against the observation window, not today") —
-   *  defaults to the real clock so a caller never has to invent one; a test pins it. */
-  readonly now?: Date;
 }
 
 export type DraftItemOp = ProposedPayload['op'];
@@ -292,8 +290,18 @@ function diffNodes(
  *  when it doesn't, is what "use the fields already present, never invent one" (004 reconciliation
  *  batch (c)) means for an edge candidate. Provenance here is always a discovery-adapter class,
  *  never human (`AdapterConstants.provenance`) — never one of the two confirm-only classes the
- *  merge path's type refuses by construction. */
-function edgeCandidateConfidence(candidate: CandidateEdge, now: Date): number {
+ *  merge path's type refuses by construction.
+ *
+ * `observedUntil` (R-15's reference instant) is the observation's own `lastObservedAt` — not the
+ * wall clock. `EdgeObservation`'s own doc comment already states the rule this follows ("there is
+ * no wall-clock default"): a wall-clock `now` would make the staleness term depend on how long
+ * ingestion took to run, and a batch whose adapter reports an observation from its OWN clock
+ * (which can legitimately race ahead of the control plane's, e.g. a replayed or fast-forwarded
+ * fixture — `discovery-run.e2e.test.ts` T022's third run) would spuriously fail
+ * `assertValidObservation`'s skew check against a clock that was never the observation's own. The
+ * result: staleness is always 0 at draft-build time — correct, since nothing has gone stale
+ * *yet* relative to the instant the adapter itself reported. */
+function edgeCandidateConfidence(candidate: CandidateEdge): number {
   if (candidate.observation === null) return baseConfidence(candidate.provenance);
   return deriveEdgeConfidence(
     {
@@ -301,14 +309,13 @@ function edgeCandidateConfidence(candidate: CandidateEdge, now: Date): number {
       observationCount: candidate.observation.observationCount,
       lastObservedAt: candidate.observation.lastObservedAt,
     },
-    now,
+    candidate.observation.lastObservedAt,
   );
 }
 
 function diffEdges(
   dedupedEdges: Map<string, CandidateEdge>,
   confirmed: readonly ConfirmedEdge[],
-  now: Date,
   push: Push,
 ): void {
   const confirmedKeys = new Set(confirmed.map((e) => edgeKey(e.from, e.to, e.edgeType, e.layer)));
@@ -327,7 +334,7 @@ function diffEdges(
       current: null,
       provenance: candidate.provenance,
       strength: provenanceStrength(candidate.provenance),
-      confidence: edgeCandidateConfidence(candidate, now),
+      confidence: edgeCandidateConfidence(candidate),
       observationRef: candidate.observationRef,
     });
   }
@@ -341,13 +348,29 @@ function diffEdges(
  */
 export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsResult {
   const { tenantId, runId, sources, adapterConstants, snapshot, rejectedDigests } = input;
-  const now = input.now ?? new Date();
 
   const {
-    nodes: candidateNodes,
+    nodes: discoveredNodes,
     pendingBuiltFromEdges,
     collectedKinds,
   } = collectNodeCandidates(sources, adapterConstants, tenantId, runId);
+  // Phase 5 hook (T051): a deployment unit with no matching code component becomes an `external`
+  // component that `deploys` to it, rather than standing unattached in the graph.
+  const deploysTargetKeys = new Set(
+    sources.flatMap((s) =>
+      s.items.flatMap((i) =>
+        i.kind === 'dependency_observation' && i.edgeType === 'deploys' ? [i.toNaturalKey] : [],
+      ),
+    ),
+  );
+  const placements = resolveDeploymentUnitPlacements(
+    discoveredNodes,
+    snapshot.nodes,
+    deploysTargetKeys,
+    tenantId,
+    runId,
+  );
+  const candidateNodes = [...discoveredNodes, ...placements.extraNodes];
   const {
     edges: resolvedEdges,
     unresolvedCount,
@@ -355,7 +378,7 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
   } = resolveEdges(sources, pendingBuiltFromEdges, candidateNodes, snapshot.nodes, tenantId, runId);
 
   const dedupedNodes = dedupeByKey(candidateNodes, (n) => nodeRefKey(n.ref));
-  const dedupedEdges = dedupeByKey(resolvedEdges, (e) =>
+  const dedupedEdges = dedupeByKey([...resolvedEdges, ...placements.extraEdges], (e) =>
     edgeKey(e.from, e.to, e.edgeType, e.layer),
   );
 
@@ -376,7 +399,7 @@ export function buildDraftItems(input: BuildDraftItemsInput): BuildDraftItemsRes
   };
 
   diffNodes(dedupedNodes, snapshot.nodes, push);
-  diffEdges(dedupedEdges, snapshot.edges, now, push);
+  diffEdges(dedupedEdges, snapshot.edges, push);
   markRemovedNodes(
     snapshot.nodes,
     dedupedNodes,

@@ -3328,6 +3328,16 @@ done). Judgment calls, roughly in the order a reviewer would hit them:
    of them individually afterward against the same live Postgres — every one passes. Not re-fixing
    the runner-image test a sixth time, consistent with the standing decision; flagging the fresh
    evidence rather than silently re-running until it got lucky.
+9. **Should `detectNaturalKeyCollisions` (the confirm-time hook from the reconciliation batch) have an
+   end-to-end test?** The hook is wired and attaches collisions to the component's audit `after`,
+   but no e2e test seeds a real collision (two components that match after trim + lowercase). Proposal:
+   add one that asserts the collision is recorded in the audit and nothing is blocked or merged.
+   Decision: [ ] add the test  [ ] not needed.
+10. **Redis on port 6399 for the `apps/api` tests.** Those tests hard-code a manually started Redis at
+    localhost:6399, which is fragile and breaks CI. `ingest.e2e` "503 when queue unreachable" even fails
+    when 6399 is occupied. Proposal: use an ephemeral Redis via testcontainers, the same way Postgres
+    already works. Decision: [ ] testcontainers  [ ] other approach.
+
 ## 002 Phase 4 (T034-T047) — autonomy grants, ceiling, revocation, epoch, sweep
 
 Implemented on `worktree-002-policy`, building on Phases 1-3 (already on master, VERSION 0.46.0).
@@ -4217,10 +4227,14 @@ the brief).
      exactly as (c) directs. CandidateEdge gained an `observation: { observationCount,
      lastObservedAt } | null` field (null for built_from) to carry this without inventing anything
      for the edges that don't have it.
-   - BuildDraftItemsInput gained an optional `now?: Date` (R-15's "observation window end"),
-     defaulting to the real clock - deriveEdgeConfidence needs a reference instant and this is
-     "computed at write time only," never recomputed, so reading the clock once at draft-build
-     time is the correct source, not an invented one.
+   - `observedUntil` (R-15's reference instant) for an add_edge draft item is the observation's
+     OWN `lastObservedAt`, not the wall clock. First attempt used `new Date()` as the default;
+     reverted after discovery-run.e2e.test.ts's T022 third run (a fixture that reports
+     `lastObservedAt` a day ahead of real wall-clock time, simulating trace volume moving forward)
+     failed `assertValidObservation`'s skew check against a `now` that was never the observation's
+     own clock. `EdgeObservation`'s own doc comment already states the rule this now follows
+     ("there is no wall-clock default") — staleness is always 0 at draft-build time, which is
+     correct: nothing has gone stale yet relative to the instant the adapter itself reported.
    - Tenant-level confidenceConfig override (the architecture.confidence_config table) is NOT
      threaded into the draft-build path - only DEFAULT_CONFIDENCE_CONFIG. The override is
      documented (data-model.md) as read "at write time" for T039's merge path specifically; wiring
@@ -4229,3 +4243,85 @@ the brief).
      draft's displayed confidence is an estimate for human review, not the merged graph's real
      confidence (that one does read the tenant override, via mergeObservation) - flagged here in
      case this read is wanted later.
+
+## 004 Phase 3 reconciliation batch - (a)/(b) C-87 implementation and Phase 5 hooks
+
+9. (a)/(b) exact shape chosen, where it departs from a literal reading of the brief:
+   - prisma-edge-provenance-repository.ts's mergeObservation method body is now a standalone
+     exported mergeObservationInTx(tx, o) function; the class method is a thin wrapper that opens
+     its own transaction and calls it. The confirm path calls mergeObservationInTx directly inside
+     its OWN already-open transaction (not the class method) - nesting a second
+     this.prisma.$transaction() inside one already in progress runs on a different connection and
+     would defeat the FOR UPDATE lock the whole merge design depends on.
+   - EdgeObservation's adapterKey/adapterVersion/observationCount/lastObservedAt are not columns
+     on draft_item - it stores the already-derived provenance/strength/confidence from
+     diff-builder.ts, not the raw per-observation facts an adapter saw (and for a
+     dependency_observation-sourced edge, re-deriving them from scratch at confirm time with a
+     volume of 1 would regress (c)'s real derivation). Chosen stand-ins at confirm time:
+     adapterKey: 'discovery', adapterVersion: 'confirm-time-merge', observationCount: 1,
+     lastObservedAt/observedUntil: now (the confirm's own timestamp) - honestly labelled, same
+     technique the pre-existing code already used (adapterKey: 'human') for the thing it couldn't
+     express. discoveryRunId IS real (the draft's own runId, already loaded in the transaction).
+     Net effect: the machine edge_provenance row's OWN confidence number is imprecise
+     (volume-1-shaped) in isolation, but graph_edge's queried provenance/strength/confidence are
+     unaffected - they resolve to the human row, which strictly outranks every machine class.
+     Considered fetching the real adapterKey/observation fields from the evidence row the item's
+     observation_ref points to, but the existing seeded e2e fixture
+     (confirm-reject-draft-items.e2e.test.ts) uses a dangling random observationRef with no
+     evidence row behind it - introducing a hard dependency on evidence existing at confirm time
+     is a materially bigger behavior change than the brief asked for, so rejected.
+   - The edge id used for everything downstream (audit entry, draft_item.target_edge_id backfill)
+     is mergeObservationInTx's OWN returned id, not decideAddEdge's pre-minted edgeId - necessary
+     because mergeObservationInTx always mints its own id on a founding insert (or finds the race
+     winner's). Checked: nothing else in the batch loop reads decision.edgeId for same-batch
+     forward resolution (only add_node's id is fed forward), so this is safe.
+   - Extracted the whole add_edge confirm branch into infrastructure/confirm-add-edge.ts (same
+     lint-line-limit reason mark-removed.ts/graph-node-attr-rows.ts were split out).
+   - New e2e proof: confirm-reject-draft-items.e2e.test.ts's existing T026 same-batch test now
+     asserts 2 edge_provenance rows (machine derived_from_code + human human_confirmed with real
+     actor_ref), was 1 before; graph-node-edge-constraints.e2e.test.ts gained the 4 graph_edge
+     CHECK-constraint tests mirroring graph_node's existing ones (C-87's whole point was parity
+     between the two).
+10. Phase 5 hooks wired in this same batch (touch the same confirm/attr-write code paths C-87
+    already required editing):
+    - validateEdge (structural-edges.ts): called in confirm-add-edge.ts before any write, using
+      fromNodeKind/toNodeKind now carried on the add_edge decision (apply-draft-item.ts -
+      decideAddEdge resolves them from the live snapshot's ConfirmedNode.nodeKind, previously
+      discarded). Fails closed with HealerError('VALIDATION', ...), aborting the transaction.
+    - validateComponentAttr/validateDeploymentUnitAttr/validateRepositoryAttr
+      (kind-attributes.ts): wired into graph-node-attr-rows.ts's createAttrRow/updateAttrRow,
+      replacing the unvalidated direct writes from Phase 3's own NodeAttributes. Found and fixed
+      one existing e2e fixture (confirm-reject-draft-items.e2e.test.ts) using a characteristic
+      ('new_characteristic') outside DEFAULT_CHARACTERISTICS - changed to 'stateful', an existing
+      vocabulary term; the test was never about vocabulary enforcement.
+    - parseCharacteristicVocabulary: wired at apps/api/src/main.ts's bootstrap() (the composition
+      root), called once against DEFAULT_CHARACTERISTICS (no per-tenant config key exists yet for
+      this) and threaded into PrismaDraftReviewRepository's new second constructor parameter,
+      which defaults to defaultCharacteristicVocabulary() so none of the ~14 other call sites
+      (test files, openapi.ts) needed updating.
+11. Phase 5 hooks, remaining two. (a) placeDeploymentUnit (T051) is now called from
+    diff-builder.ts via deployment-unit-resolution.ts: a deployment unit whose natural key matches
+    no component (candidate or confirmed) yields an external component plus a runtime-layer
+    deploys edge, both carrying the unit's observation_ref. The external component reuses the
+    unit's natural key, per placeDeploymentUnit's own contract. (b) detectNaturalKeyCollisions
+    (T052) runs at confirm time (infrastructure/confirm-natural-key-collisions.ts): collisions
+    naming a newly confirmed component are attached to that component's audit entry `after`
+    payload. Surfaced, never merged, and never blocks the confirm. Test coverage is thinner than
+    the other hooks: no e2e case seeds a same-key collision and asserts on the audit payload yet.
+12. graph-provenance.mjs (check:graph-provenance) updated to match C-87. It previously flagged
+    every human-class graph_edge/edge_provenance row because no actor column existed. It now
+    checks actor_ref, mirroring the node logic. Its header and message were updated to match.
+    check:graph-fact-coverage's WATCHED list still omits graph_edge.observation_ref, which is a
+    known follow-up (the check is not in make ci, per decision d).
+13. Test fixtures. Every e2e fixture that inserts a non-human graph_edge now supplies
+    observation_ref, and every edge_provenance insert supplies valid_from_version. Human fixtures
+    supply actor_ref. Tests that asserted on the DB-unreachable "human edge with no actor" state
+    now assert the database refuses the row (graph-checks.e2e.test.ts, graph-node-edge-constraints).
+14. Regression found by the final e2e sweep and fixed: apps/api/boundary-rejections.e2e.test.ts
+    (a master-origin file, merged without conflict) passed the boundary-rejections repository
+    positionally into the discovery/draft-review slots of createApiModule, so every list request
+    returned 500. Added the two missing repositories.
+15. Environment note, not a code change: the apps/api e2e files hardcode a Redis on
+    127.0.0.1:6399 that no docker compose file or test helper provides. Those files fail on a
+    clean machine without one. I started a throwaway redis:7-alpine on host port 6399 to run them
+    and removed it at the end. Pre-existing; unrelated to this batch.

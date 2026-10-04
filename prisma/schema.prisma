@@ -1445,11 +1445,15 @@ model GraphNode {
 }
 
 /// A typed relationship (R-01). `provenance`/`strength`/`confidence` are the **maximum** over
-/// `edge_provenance` (FR-008, R-03) once T011 adds the maintaining trigger; NOT NULL since T006
-/// (no CHECK here — unlike `graph_node`, this table has no `observation_ref`/`actor_ref` to
-/// require one of). `validFromVersion`/`validToVersion` and their two composite indexes are the
-/// traversal's only access paths (R-01, R-02, T008); the partial unique index (one open row per
-/// logical edge) is T009's.
+/// `edge_provenance` (FR-008, R-03) once T011 adds the maintaining trigger. `observationRef`/
+/// `actorRef` (C-87): the same pair `graph_node` already carries, mirrored onto the edge's own
+/// row — `observationRef` is the founding machine observation (set once, at creation, by
+/// `mergeObservation`; never updated afterward, same as `graph_node`'s), `actorRef` the human who
+/// most recently confirmed it. The two CHECK constraints below mirror `graph_node`'s T006 pair
+/// exactly (Prisma cannot express CHECK, so they live in migration.sql only).
+/// `validFromVersion`/`validToVersion` and their two composite indexes are the traversal's only
+/// access paths (R-01, R-02, T008); the partial unique index (one open row per logical edge) is
+/// T009's.
 model GraphEdge {
   id               String            @id @db.Uuid
   tenantId         String            @map("tenant_id") @db.Uuid
@@ -1463,6 +1467,11 @@ model GraphEdge {
   state            GraphElementState
   observationCount BigInt            @default(0) @map("observation_count")
   lastObservedAt   DateTime?         @map("last_observed_at") @db.Timestamptz(6)
+  /// `evidence.id` (001 FR-007) of type `graph_fact` — the observation this edge row was founded
+  /// from (C-87).
+  observationRef   String?           @map("observation_ref") @db.Uuid
+  /// The named human, for the two human provenance classes (C-87).
+  actorRef         String?           @map("actor_ref")
   validFromVersion Int               @map("valid_from_version")
   validToVersion   Int               @default(2147483647) @map("valid_to_version")
 
@@ -1486,7 +1495,10 @@ model GraphEdge {
 
 /// Append-only (FR-008): every contributing observation for an edge, so a merged edge stays
 /// inspectable. T002 creates it as a plain table; T011 adds the append-only trigger and the
-/// edge.strength/.confidence max-maintenance.
+/// edge.strength/.confidence max-maintenance. `actorRef`/`validFromVersion`/`validToVersion`
+/// (C-87, R-04a): a human-confirmation row is now a distinct row from the machine observation(s)
+/// it coexists with, carrying its own actor and the same validity range as the edge it describes
+/// (copied forward on a future edge-closing mutation — not yet built, R-04a's own scope note).
 model EdgeProvenance {
   id             String          @id @db.Uuid
   tenantId       String          @map("tenant_id") @db.Uuid
@@ -1494,10 +1506,11 @@ model EdgeProvenance {
   provenance     ProvenanceClass
   strength       Int             @db.SmallInt
   confidence     Int             @db.SmallInt
-  /// `evidence.id`; nullable — data-model.md lists no `actor_ref` on this table, so a
-  /// human-provenance row (rare: humans normally author graph_node/graph_edge directly, not
-  /// through discovery's edge_provenance path) carries neither reference. Flagged for review.
+  /// `evidence.id`; nullable — a human-provenance row (C-87: now a real, distinct row, not a
+  /// stand-in) carries an `actorRef` instead.
   observationRef String?         @map("observation_ref") @db.Uuid
+  /// The named human, for the two human provenance classes (C-87) — mirrors `graph_node`'s field.
+  actorRef       String?         @map("actor_ref")
   adapterKey     String          @map("adapter_key")
   adapterVersion String          @map("adapter_version")
   discoveryRunId String?         @map("discovery_run_id") @db.Uuid
@@ -1506,6 +1519,10 @@ model EdgeProvenance {
   observationCount BigInt         @default(0) @map("observation_count")
   lastObservedAt   DateTime?      @map("last_observed_at") @db.Timestamptz(6)
   recordedAt     DateTime        @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  /// Validity range (R-04a) — the same range as the edge row this observation was recorded
+  /// against; open rows use `2147483647`.
+  validFromVersion Int           @map("valid_from_version")
+  validToVersion   Int           @default(2147483647) @map("valid_to_version")
 
   edge GraphEdge @relation(fields: [edgeId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
 

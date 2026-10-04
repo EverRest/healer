@@ -134,6 +134,7 @@ async function createEdge(prisma, tenantId, idsByName, spec) {
       strength: HUMAN_AUTHORED_STRENGTH,
       confidence: FIXTURE_CONFIDENCE,
       state: 'confirmed',
+      actorRef: FIXTURE_ACTOR,
       validFromVersion: 1,
     },
   });
@@ -149,6 +150,8 @@ async function createEdge(prisma, tenantId, idsByName, spec) {
       confidence: FIXTURE_CONFIDENCE,
       adapterKey: 'fixture',
       adapterVersion: 'v1',
+      actorRef: FIXTURE_ACTOR,
+      validFromVersion: 1,
     },
   });
 }

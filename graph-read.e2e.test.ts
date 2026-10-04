@@ -264,6 +264,7 @@ describe('GraphReadRepository (004 T041)', () => {
         confidence: 90,
         state: 'proposed',
         validFromVersion: 1,
+        observationRef: randomUUID(),
       },
     });
     const high = { id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', ref: randomUUID(), confidence: 90 };
@@ -274,9 +275,9 @@ describe('GraphReadRepository (004 T041)', () => {
         await tx.$executeRaw`
           INSERT INTO "architecture"."edge_provenance"
             (id, tenant_id, edge_id, provenance, strength, confidence, observation_ref, adapter_key,
-             adapter_version)
+             adapter_version, valid_from_version)
           VALUES (${r.id}::uuid, ${tenant}::uuid, ${edge.id}::uuid, 'derived_from_code', 30,
-                  ${r.confidence}, ${r.ref}::uuid, 'ast', '1')`;
+                  ${r.confidence}, ${r.ref}::uuid, 'ast', '1', 1)`;
       }
     });
     const shown = (await reads.getNode(scope(ctx(tenant), { id: a }))).items.edges[0]!;
@@ -301,6 +302,7 @@ describe('GraphReadRepository (004 T041)', () => {
         confidence: 70,
         state: 'proposed',
         validFromVersion: 1,
+        observationRef: randomUUID(),
       },
     });
     const shown = (await reads.getNode(scope(ctx(tenant), { id: a }))).items.edges[0]!;

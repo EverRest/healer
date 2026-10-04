@@ -10,10 +10,10 @@
 // privileged write or a dropped migration has removed. Same posture as `check:ceiling`:
 // production monitoring, not a release gate.
 //
-// A human-class edge is reported, not skipped: `graph_edge`/`edge_provenance` have no actor column
-// (data-model.md), so nothing can name who authored it, and no code path creates one yet. When a
-// human edge path exists this finding is the reminder that it needs somewhere to record the actor
-// (QUESTIONS.md "Decisions waiting on Pavlo — 004" item 1).
+// A human-class edge now has an actor column (C-87: `graph_edge.actor_ref` / `edge_provenance.
+// actor_ref`, mirroring `graph_node`'s pair) — the backstop below checks it is actually set,
+// same as the node-side logic always has, rather than unconditionally flagging every human-class
+// row the way this check did before that column existed.
 import { PrismaClient } from '../../prisma/generated/client/index.js';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
@@ -29,7 +29,7 @@ export async function findProvenanceViolations(prisma) {
               WHERE ev.id = n.observation_ref AND ev.tenant_id = n.tenant_id)) AS dangling
     FROM "architecture"."graph_node" n`;
   const edges = await prisma.$queryRaw`
-    SELECT e.id, e.tenant_id, e.provenance, e.strength, e.confidence,
+    SELECT e.id, e.tenant_id, e.provenance, e.strength, e.confidence, e.actor_ref,
            (SELECT count(*) FROM "architecture"."edge_provenance" p
               WHERE p.edge_id = e.id AND p.tenant_id = e.tenant_id) AS provenance_rows
     FROM "architecture"."graph_edge" e`;
@@ -39,11 +39,14 @@ export async function findProvenanceViolations(prisma) {
     WHERE p.observation_ref IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM "evidence"."evidence" ev
       WHERE ev.id = p.observation_ref AND ev.tenant_id = p.tenant_id)`;
-  // edge_provenance has no actor column: a human-class row, or any row with no observation, names
-  // neither a source nor a person.
+  // C-87: edge_provenance now has an actor column too — a human-class row names neither a source
+  // nor a person only when BOTH are missing; a machine-class row with no observation_ref already
+  // cannot exist past the DB CHECK (20261003040000), so this remains the backstop for one
+  // dropped or bypassed.
   const unsourced = await prisma.$queryRaw`
     SELECT p.edge_id, p.tenant_id FROM "architecture"."edge_provenance" p
-    WHERE p.provenance IN ('human_authored', 'human_confirmed') OR p.observation_ref IS NULL`;
+    WHERE (p.provenance IN ('human_authored', 'human_confirmed') AND p.actor_ref IS NULL)
+       OR (p.provenance NOT IN ('human_authored', 'human_confirmed') AND p.observation_ref IS NULL)`;
 
   const human = (p) => p === 'human_authored' || p === 'human_confirmed';
   const out = [];
@@ -64,7 +67,8 @@ export async function findProvenanceViolations(prisma) {
     if (e.provenance === null || e.strength === null || e.confidence === null) {
       out.push(`${who}: provenance, strength or confidence is null`);
     } else if (human(e.provenance)) {
-      out.push(`${who}: human provenance but an edge has no actor reference`);
+      if (e.actor_ref === null)
+        out.push(`${who}: human provenance but an edge has no actor reference`);
     } else if (Number(e.provenance_rows) === 0) {
       out.push(`${who}: no edge_provenance row`);
     }
@@ -76,7 +80,7 @@ export async function findProvenanceViolations(prisma) {
   }
   for (const r of unsourced) {
     out.push(
-      `graph_edge ${r.edge_id} (tenant ${r.tenant_id}): edge_provenance row has human provenance or no observation_ref`,
+      `graph_edge ${r.edge_id} (tenant ${r.tenant_id}): edge_provenance row names neither an observation nor an actor`,
     );
   }
   return { violations: out, checked: { nodes: nodes.length, edges: edges.length } };

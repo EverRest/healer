@@ -89,10 +89,10 @@ describe('edge provenance merge: concurrent writers to one edge (004 T038)', () 
         await tx.$executeRaw`
           INSERT INTO "architecture"."edge_provenance"
             (id, tenant_id, edge_id, provenance, strength, confidence, observation_ref,
-             adapter_key, adapter_version)
+             adapter_key, adapter_version, valid_from_version)
           VALUES (${randomUUID()}::uuid, ${TENANT_ID}::uuid, ${edgeId}::uuid, 'derived_from_trace',
                   ${PROVENANCE_STRENGTH_V1.derived_from_trace}, 90, ${randomUUID()}::uuid,
-                  'holder', '1')`;
+                  'holder', '1', 1)`;
         ready();
         await gate;
       },
@@ -193,9 +193,9 @@ describe('edge provenance merge: concurrent writers to one edge (004 T038)', () 
         await tx.$executeRaw`
           INSERT INTO "architecture"."graph_edge"
             (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-             confidence, state, valid_from_version)
+             confidence, state, valid_from_version, observation_ref)
           VALUES (${randomUUID()}::uuid, ${TENANT_ID}::uuid, ${a}::uuid, ${b}::uuid, 'depends_on',
-                  'code', 'derived_from_code', 30, 50, 'proposed', 1)`;
+                  'code', 'derived_from_code', 30, 50, 'proposed', 1, ${randomUUID()}::uuid)`;
         ready();
         await gate;
       },

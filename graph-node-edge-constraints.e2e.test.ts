@@ -139,6 +139,7 @@ describe('architecture.graph_node / graph_edge provenance constraints (004 T005,
       confidence: '50',
       state: `'proposed'`,
       valid_from_version: '1',
+      observation_ref: `'${randomUUID()}'`,
       ...sqlOverrides,
     };
     const columns = Object.keys(fields);
@@ -148,6 +149,32 @@ describe('architecture.graph_node / graph_edge provenance constraints (004 T005,
       `insert into "architecture"."graph_edge" (${columns.join(', ')}) values (${values.join(', ')})`,
     );
   };
+
+  // C-87: graph_edge gained the same two CHECK constraints graph_node already had (T006) —
+  // mirrors the node tests above exactly.
+  it('rejects a non-human-provenance edge with no observation_ref', async () => {
+    await expect(insertEdge({ observation_ref: 'null' })).rejects.toThrow();
+  });
+
+  it('rejects a human-provenance edge with no actor_ref', async () => {
+    await expect(
+      insertEdge({ provenance: `'human_confirmed'`, observation_ref: 'null' }),
+    ).rejects.toThrow();
+  });
+
+  it('accepts a human-provenance edge that names an actor and no observation', async () => {
+    const result = await insertEdge({
+      provenance: `'human_confirmed'`,
+      observation_ref: 'null',
+      actor_ref: `'pavlo'`,
+    });
+    expect(result).toBeDefined();
+  });
+
+  it('accepts a derived-provenance edge that names an observation and no actor', async () => {
+    const result = await insertEdge();
+    expect(result).toBeDefined();
+  });
 
   // Cheap insurance CHECKs (data-model.md describes confidence as "integer 0-100" and R-04's
   // validity range only makes sense with from <= to; neither was ever a CHECK until this fix).

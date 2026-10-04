@@ -415,6 +415,7 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
           confidence: 60,
           state: 'confirmed',
           validFromVersion: 1,
+          observationRef: randomUUID(),
         },
       });
       await prisma.edgeProvenance.create({
@@ -428,6 +429,7 @@ describe('discovery run and draft (004 Phase 3 US1)', () => {
           observationRef: randomUUID(),
           adapterKey: 'gitlab-seed',
           adapterVersion: '1.0.0',
+          validFromVersion: 1,
         },
       });
 

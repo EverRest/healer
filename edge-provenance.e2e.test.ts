@@ -62,9 +62,9 @@ describe('architecture.edge_provenance: append-only + graph_edge max-maintenance
       pg,
       `insert into "architecture"."graph_edge"
          (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-          confidence, state, valid_from_version)
+          confidence, state, valid_from_version, observation_ref)
        values ('${edgeId}', '${TENANT_ID}', '${fromId}', '${toId}', 'depends_on', 'code',
-               'derived_from_code', 5, 5, 'proposed', 1)`,
+               'derived_from_code', 5, 5, 'proposed', 1, '${randomUUID()}')`,
     );
   }, 180_000);
 
@@ -77,9 +77,9 @@ describe('architecture.edge_provenance: append-only + graph_edge max-maintenance
       pg,
       `insert into "architecture"."edge_provenance"
          (id, tenant_id, edge_id, provenance, strength, confidence, observation_ref, adapter_key,
-          adapter_version)
+          adapter_version, valid_from_version)
        values ('${randomUUID()}', '${TENANT_ID}', '${targetEdgeId}', 'derived_from_code',
-               ${strength}, ${confidence}, '${randomUUID()}', 'gitlab', '1.0.0')`,
+               ${strength}, ${confidence}, '${randomUUID()}', 'gitlab', '1.0.0', 1)`,
     );
 
   const insertProvenance = (strength: number, confidence: number) =>
@@ -129,9 +129,9 @@ describe('architecture.edge_provenance: append-only + graph_edge max-maintenance
       pg,
       `insert into "architecture"."graph_edge"
          (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-          confidence, state, valid_from_version)
+          confidence, state, valid_from_version, observation_ref)
        values ('${wrongFoundingEdgeId}', '${TENANT_ID}', '${f}', '${t}', 'depends_on', 'code',
-               'derived_from_code', 99, 99, 'proposed', 1)`,
+               'derived_from_code', 99, 99, 'proposed', 1, '${randomUUID()}')`,
     );
     await insertProvenanceFor(wrongFoundingEdgeId, 40, 40);
     const result = await query(
@@ -162,18 +162,18 @@ describe('architecture.edge_provenance: append-only + graph_edge max-maintenance
       pg,
       `insert into "architecture"."graph_edge"
          (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-          confidence, state, valid_from_version, valid_to_version)
+          confidence, state, valid_from_version, valid_to_version, observation_ref)
        values ('${closedEdgeId}', '${TENANT_ID}', '${f}', '${t}', 'depends_on', 'code',
-               'derived_from_code', 10, 10, 'proposed', 1, 1)`,
+               'derived_from_code', 10, 10, 'proposed', 1, 1, '${randomUUID()}')`,
     );
     // v2 — the open successor.
     await query(
       pg,
       `insert into "architecture"."graph_edge"
          (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-          confidence, state, valid_from_version)
+          confidence, state, valid_from_version, observation_ref)
        values ('${openEdgeId}', '${TENANT_ID}', '${f}', '${t}', 'depends_on', 'code',
-               'derived_from_code', 10, 10, 'proposed', 2)`,
+               'derived_from_code', 10, 10, 'proposed', 2, '${randomUUID()}')`,
     );
 
     // A late-arriving observation is recorded against the OLD (now closed) edge id.

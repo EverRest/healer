@@ -82,6 +82,7 @@ describe('check:graph-structure against a real Postgres', () => {
           strength: 65,
           confidence: 100,
           state: 'confirmed',
+          actorRef: 'fixture',
           validFromVersion: 1,
         },
       });
@@ -132,6 +133,7 @@ describe('check:graph-structure against a real Postgres', () => {
           strength: 65,
           confidence: 100,
           state,
+          actorRef: 'fixture',
           validFromVersion: 1,
           ...(validTo === undefined ? {} : { validToVersion: validTo }),
         },

@@ -58,7 +58,16 @@ Indexes: `(tenant_id, node_kind, valid_from_version, valid_to_version)`,
 | state | enum | `proposed` · `confirmed` · `rejected` · `stale` |
 | observation_count | bigint | how many observations support it (trace volume) |
 | last_observed_at | timestamptz? | recency, an input to confidence |
+| observation_ref | uuid? | `evidence.id` (001 FR-007) of type `graph_fact` — the observation this row was founded from (C-87). Set once, by `mergeObservation`; never updated afterward, same as `graph_node`'s |
+| actor_ref | text? | the named human, for the two human provenance classes (C-87) |
 | valid_from_version, valid_to_version | int | (R-04) |
+
+Constraints (C-87, mirrors `graph_node`'s T006 pair exactly):
+
+```sql
+CHECK (provenance IN ('human_authored', 'human_confirmed') OR observation_ref IS NOT NULL)
+CHECK (provenance NOT IN ('human_authored', 'human_confirmed') OR actor_ref IS NOT NULL)
+```
 
 Indexes: `(tenant_id, from_node_id, valid_from_version, valid_to_version)` and the mirror on
 `to_node_id` — these two are the traversal's only access paths (R-01). Unique
@@ -66,10 +75,20 @@ Indexes: `(tenant_id, from_node_id, valid_from_version, valid_to_version)` and t
 
 ### architecture.edge_provenance (append-only)
 
-Every contributing observation for an edge, so a merged edge stays inspectable (FR-008).
+Every contributing observation for an edge, so a merged edge stays inspectable (FR-008). A
+confirmed edge carries **two** rows once confirmed (C-87): the machine observation that proposed
+it (written through `mergeObservation`, unchanged by confirmation) and a separate human
+confirmation row (`provenance: human_confirmed`, `actor_ref` set, `observation_ref` null) — the
+"keep the machine row" decision. `check:edge-strength-max`'s MAX naturally resolves to the human
+row afterward (`human_confirmed` outranks every machine class, R-03), so `graph_edge.provenance`
+becomes `human_confirmed` without a second write path for that column.
 
 `id`, `tenant_id`, `edge_id`, `provenance`, `strength`, `confidence`, `observation_ref` (`evidence.id`),
-`adapter_key`, `adapter_version`, `discovery_run_id`, `observation_count` (what this observation contributed), `last_observed_at`, `recorded_at`.
+`actor_ref` (C-87, text?, the named human for the two human classes), `adapter_key`,
+`adapter_version`, `discovery_run_id`, `observation_count` (what this observation contributed),
+`last_observed_at`, `recorded_at`, `valid_from_version`/`valid_to_version` (C-87, R-04a: the same
+validity range as the edge row this observation was recorded against; open rows use
+`2147483647`).
 The edge's `observation_count` is the SUM and its `last_observed_at` the MAX over these rows, and its `provenance` class is the strongest row's (ties: earliest `recorded_at`, then `id`) — all three checked by `check:edge-strength-max`.
 
 The denormalised `strength` and `confidence` on `graph_edge` are the maximum over these rows;
@@ -79,7 +98,20 @@ Unique `(tenant_id, edge_id, observation_ref)`: an observation is recorded at mo
 job that runs twice cannot double-count `graph_edge.observation_count` (004 T038). The merge path
 locks the edge row (`SELECT ... FOR UPDATE`) before inserting, because the trigger that maintains the
 maximum computes it from a statement snapshot and two unserialised writers would lower the edge.
-There is no `actor_ref` and no validity range here: human classes never enter through this table.
+
+Constraints (C-87, mirrors the observation-ref CHECK already here):
+
+```sql
+CHECK (provenance IN ('human_authored', 'human_confirmed') OR observation_ref IS NOT NULL)
+CHECK (provenance NOT IN ('human_authored', 'human_confirmed') OR actor_ref IS NOT NULL)
+```
+
+**C-87's `valid_from_version`/`valid_to_version` "copy forward on edge closure" half (R-04a) is
+not yet built** — there is no edge-closing mutation in this phase that would need to copy
+surviving provenance forward with a new range (R-04's `manual_edit`/`drift_resolution` paths are
+future phases). Every row written so far (by `mergeObservation` or by a confirmation) carries the
+edge's *current* `valid_from_version` and the open sentinel; the copy-forward behaviour activates
+the day an edge row is first closed and superseded.
 
 ### architecture.confidence_config
 
@@ -302,13 +334,11 @@ system cannot know which sequence of calls a human considers one journey.
 - **`proposal_rejection`'s primary key is the composite `(tenant_id, proposal_digest)`** rather
   than a surrogate `id` — that pair is already the table's one required uniqueness and every
   lookup is by it.
-- **`edge_provenance` has no `actor_ref` column**, matching this document's field list for that
-  table exactly — but that list also has no field at all for naming a human actor, unlike
-  `graph_node`/`graph_edge`'s explicit `actor_ref`. A `human_authored`/`human_confirmed`
-  `edge_provenance` row (if one is ever written — humans normally author `graph_node`/`graph_edge`
-  directly, not through discovery's per-observation path) would carry neither an observation nor
-  an actor. Flagged for review rather than resolved unilaterally; `observation_ref` is nullable to
-  avoid blocking on it.
+- **Resolved by C-87**: `edge_provenance` now has an `actor_ref` column (and a validity range,
+  R-04a) — the gap this bullet originally flagged. A confirmed `add_edge` writes a
+  `human_confirmed` `edge_provenance` row with `actor_ref` set and `observation_ref` null,
+  distinct from the machine row `mergeObservation` wrote (see "architecture.edge_provenance"
+  above and prisma-draft-review-repository.ts's `add_edge` confirm handling).
 
 ## Phase 3 implementation notes (T018–T035 write path, sub-batch A1)
 

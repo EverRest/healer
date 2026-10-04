@@ -53,6 +53,7 @@ function addNodeItem(naturalKey: string): DraftItemForDecision {
     },
     current: null,
     observationRef: 'obs-1',
+    provenance: 'derived_from_code',
   };
 }
 
@@ -98,6 +99,7 @@ function addEdgeItem(): DraftItemForDecision {
     },
     current: null,
     observationRef: 'obs-2',
+    provenance: 'derived_from_code',
   };
 }
 
@@ -124,8 +126,12 @@ describe('decideDraftItemApplication: add_edge', () => {
       edgeId: 'minted-id',
       fromNodeId: 'id-a',
       toNodeId: 'id-b',
+      fromNodeKind: 'component',
+      toNodeKind: 'component',
       edgeType: 'depends_on',
       layer: 'code',
+      provenance: 'derived_from_code',
+      observationRef: 'obs-2',
     });
   });
 
@@ -163,6 +169,7 @@ function modifyAttributesItem(current: unknown): DraftItemForDecision {
     },
     current,
     observationRef: 'obs-3',
+    provenance: 'derived_from_code',
   };
 }
 
@@ -219,6 +226,7 @@ function markRemovedNodeItem(current: unknown): DraftItemForDecision {
     },
     current,
     observationRef: 'obs-4',
+    provenance: 'derived_from_code',
   };
 }
 
@@ -271,6 +279,7 @@ function markRemovedEdgeItem(): DraftItemForDecision {
       layer: 'code',
     },
     observationRef: 'obs-5',
+    provenance: 'derived_from_code',
   };
 }
 

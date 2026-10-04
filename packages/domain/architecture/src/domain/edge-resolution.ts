@@ -1,5 +1,10 @@
 import type { GraphEdgeType } from './closed-vocabularies.js';
-import type { AcceptedSourceItems, CandidateEdge, CandidateNode, PendingBuiltFromEdge } from './diff-builder.js';
+import type {
+  AcceptedSourceItems,
+  CandidateEdge,
+  CandidateNode,
+  PendingBuiltFromEdge,
+} from './diff-builder.js';
 import type { ConfirmedNode } from './confirmed-graph-snapshot.js';
 import { graphFactId } from './graph-fact-id.js';
 import { canonical } from './natural-key-collisions.js';

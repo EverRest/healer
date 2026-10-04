@@ -121,6 +121,7 @@ async function seedEdge(
       strength: 65,
       confidence: 100,
       state: 'confirmed',
+      actorRef: 'fixture',
       validFromVersion: 1,
     },
   });

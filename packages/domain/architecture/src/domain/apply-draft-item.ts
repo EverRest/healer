@@ -1,8 +1,10 @@
 import type { GraphEdgeType } from './closed-vocabularies.js';
 import type { ConfirmedEdge, ConfirmedNode } from './confirmed-graph-snapshot.js';
+import type { MachineProvenanceClass } from './edge-observation.js';
 import { edgeKey, nodeRefKey } from './node-key.js';
 import { canonicalJson } from './proposal-digest.js';
 import type { DiscoveryNodeKind, ProposedPayload } from './proposed-payload.js';
+import type { ProvenanceClass } from './provenance.js';
 import type { DraftItemOp } from './diff-builder.js';
 
 /**
@@ -38,6 +40,10 @@ export interface DraftItemForDecision {
   readonly proposed: ProposedPayload;
   readonly current: unknown | null;
   readonly observationRef: string | null;
+  /** The machine provenance class this item was proposed with (004 reconciliation batch (a)) —
+   *  an `add_edge` decision carries it forward so confirm can merge the machine observation
+   *  through `mergeObservationInTx` before recording the separate human confirmation (C-87). */
+  readonly provenance: ProvenanceClass;
 }
 
 export type DraftItemDecision =
@@ -55,8 +61,16 @@ export type DraftItemDecision =
       readonly edgeId: string;
       readonly fromNodeId: string;
       readonly toNodeId: string;
+      readonly fromNodeKind: DiscoveryNodeKind;
+      readonly toNodeKind: DiscoveryNodeKind;
       readonly edgeType: GraphEdgeType;
       readonly layer: 'code' | 'runtime' | 'product';
+      /** The item's own machine provenance and the `graph_fact` it was proposed from — the
+       *  "keep the machine row" half of C-87 needs both to call `mergeObservationInTx`. Draft
+       *  items whose `op` can reach here are never human-provenance (FR-009: a discovery run
+       *  never writes `state = 'confirmed'`, so nothing it proposes is already human-authored). */
+      readonly provenance: MachineProvenanceClass;
+      readonly observationRef: string;
     }
   | {
       readonly kind: 'modify_attributes';
@@ -90,6 +104,7 @@ function decideAddNode(
 }
 
 function decideAddEdge(
+  item: DraftItemForDecision,
   proposed: Extract<ProposedPayload, { readonly op: 'add_edge' }>,
   live: LiveGraphSnapshot,
   mintId: () => string,
@@ -106,8 +121,15 @@ function decideAddEdge(
     edgeId: mintId(),
     fromNodeId: from.id,
     toNodeId: to.id,
+    fromNodeKind: from.nodeKind,
+    toNodeKind: to.nodeKind,
     edgeType: proposed.edgeType,
     layer: proposed.layer,
+    // CHECK-constraint-guaranteed on `draft_item` (T026 notes): a non-human-provenance item
+    // always names its `observation_ref`; an `add_edge` item is never human-provenance to begin
+    // with (FR-009).
+    provenance: item.provenance as MachineProvenanceClass,
+    observationRef: item.observationRef!,
   };
 }
 
@@ -167,7 +189,7 @@ export function decideDraftItemApplication(
 ): DraftItemDecision {
   const proposed = item.proposed;
   if (proposed.op === 'add_node') return decideAddNode(proposed, live, mintId);
-  if (proposed.op === 'add_edge') return decideAddEdge(proposed, live, mintId);
+  if (proposed.op === 'add_edge') return decideAddEdge(item, proposed, live, mintId);
   if (proposed.op === 'modify_attributes') return decideModifyAttributes(item, proposed, live);
   return decideMarkRemoved(item, live);
 }

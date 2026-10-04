@@ -61,14 +61,22 @@ describe('graph continuous checks against a real Postgres (004 T040)', () => {
     return id;
   }
 
-  async function edge(t: string, from: string, to: string, provenance = 'derived_from_code') {
+  async function edge(
+    t: string,
+    from: string,
+    to: string,
+    provenance = 'derived_from_code',
+    overrides: { ref?: string | null; actor?: string } = {},
+  ) {
     const id = randomUUID();
+    const ref = overrides.ref === undefined ? await evidence(t) : overrides.ref;
     await sql(
       `insert into "architecture"."graph_edge"
          (id, tenant_id, from_node_id, to_node_id, edge_type, layer, provenance, strength,
-          confidence, state, valid_from_version)
+          confidence, state, valid_from_version, observation_ref, actor_ref)
        values ('${id}', '${t}', '${from}', '${to}', 'depends_on', 'code', '${provenance}',
-               30, 50, 'proposed', 1)`,
+               30, 50, 'proposed', 1, ${ref === null ? 'null' : `'${ref}'`},
+               ${overrides.actor === undefined ? 'null' : `'${overrides.actor}'`})`,
     );
     return id;
   }
@@ -83,17 +91,19 @@ describe('graph continuous checks against a real Postgres (004 T040)', () => {
       provenance?: string;
       count?: number;
       last?: string;
+      actor?: string;
     } = {},
   ) {
     const ref = over.ref === undefined ? await evidence(t) : over.ref;
     await sql(
       `insert into "architecture"."edge_provenance"
          (id, tenant_id, edge_id, provenance, strength, confidence, observation_ref, adapter_key,
-          adapter_version, observation_count, last_observed_at)
+          adapter_version, observation_count, last_observed_at, valid_from_version, actor_ref)
        values ('${randomUUID()}', '${t}', '${edgeId}', '${over.provenance ?? 'derived_from_code'}',
                ${over.strength ?? 30}, ${over.confidence ?? 50},
                ${ref === null ? 'null' : `'${ref}'`}, 'ast', '1', ${over.count ?? 0},
-               ${over.last === undefined ? 'null' : `'${over.last}'`})`,
+               ${over.last === undefined ? 'null' : `'${over.last}'`}, 1,
+               ${over.actor === undefined ? 'null' : `'${over.actor}'`})`,
     );
   }
 
@@ -172,28 +182,40 @@ describe('graph continuous checks against a real Postgres (004 T040)', () => {
       );
     });
 
-    it('flags a human-class edge: no actor can be recorded on an edge', async () => {
+    // C-87 added graph_edge.actor_ref and its matching CHECK — "a human-class edge with no
+    // actor" is no longer a state `findProvenanceViolations` ever gets to report on: the
+    // database refuses the row outright (same posture as graph_node's equivalent CHECK, proven
+    // in graph-node-edge-constraints.e2e.test.ts). This check's own backstop for it is proven
+    // instead by the still-reachable case below, where a *dropped/bypassed* CHECK is simulated.
+    it('a human-class edge with no actor is refused by the database, never reaches the check', async () => {
       const t = await tenant();
       const [a, b] = [
         await node(t, 'derived_from_code', await evidence(t)),
         await node(t, 'derived_from_code', await evidence(t)),
       ];
-      const human = await edge(t, a, b, 'human_authored');
-      expect((await findProvenanceViolations(prisma)).violations).toContain(
-        `graph_edge ${human} (tenant ${t}): human provenance but an edge has no actor reference`,
+      await expect(edge(t, a, b, 'human_authored')).rejects.toThrow();
+    });
+
+    it('flags a human-class edge with an actor but an edge_provenance row naming neither', async () => {
+      const t = await tenant();
+      const [a, b] = [
+        await node(t, 'derived_from_code', await evidence(t)),
+        await node(t, 'derived_from_code', await evidence(t)),
+      ];
+      const human = await edge(t, a, b, 'human_confirmed', { ref: null, actor: 'pavlo' });
+      await row(t, human, { provenance: 'human_confirmed', ref: null, actor: 'pavlo' });
+      expect((await findProvenanceViolations(prisma)).violations).not.toContain(
+        expect.stringContaining(`graph_edge ${human}`),
       );
     });
 
-    it('flags a human-class edge_provenance row: it has no observation and no actor', async () => {
+    // edge_provenance's own actor_ref CHECK (C-87) means a human-class row with neither an
+    // observation nor an actor is likewise refused at the database — covered the same way as
+    // the graph_edge case above.
+    it('a human-class edge_provenance row with no actor is refused by the database', async () => {
       const t = await tenant();
       const { e } = await cleanEdge(t);
-      await row(t, e, { provenance: 'human_confirmed', ref: null });
-      const found = about((await findProvenanceViolations(prisma)).violations, t);
-      expect(found).toEqual([
-        expect.stringContaining(
-          `graph_edge ${e} (tenant ${t}): edge_provenance row has human provenance or no observation_ref`,
-        ),
-      ]);
+      await expect(row(t, e, { provenance: 'human_confirmed', ref: null })).rejects.toThrow();
     });
   });
 
