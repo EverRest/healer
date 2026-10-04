@@ -3261,6 +3261,15 @@ done). Judgment calls, roughly in the order a reviewer would hit them:
 
 ## Decisions waiting on Pavlo — 004 Phase 3 (index; detail in the named sections above)
 
+0. **Pushed with a known-red test (decision by Pavlo, 2026-10-04).** The fast-forward push of
+   `reconcile-004-phase3-batch` to master included `apps/runner/runner-image.e2e.test.ts`
+   ("genuinely drains an in-flight heartbeat before exiting on SIGTERM") failing. It fails on master
+   too (`7038c2e`) with the identical assertion (`container still running after 120s`), both
+   standalone and under `make ci`, under comparable host load. So it is pre-existing, not caused by
+   this batch. The rest of `make ci` is green, including `gate-agent-scope` with the human author
+   identity set. Open: repair the runner test (it no longer behaves as shared-machine contention, since
+   it fails standalone too), or re-decide. Revisit before any further runner work.
+
 1. **Once Phase 7 exists, does a contradiction of a confirmed element go to drift *instead of* the
    draft, or *as well as*?** FR-012/FR-017 read as "instead" (a contradiction "MUST be raised as
    drift"); R-07 and quickstart 11 read as "as well" (re-discovery is add/modify/remove ops against
