@@ -4325,3 +4325,27 @@ the brief).
     127.0.0.1:6399 that no docker compose file or test helper provides. Those files fail on a
     clean machine without one. I started a throwaway redis:7-alpine on host port 6399 to run them
     and removed it at the end. Pre-existing; unrelated to this batch.
+16. **Fail-closed on the graph confirm/reject HTTP routes (Pavlo's decision, to revisit).**
+    `POST /discovery/drafts/{draftId}/confirm` and `/reject` now throw 403 `HUMAN_CREDENTIAL_REQUIRED`
+    unconditionally, before anything is parsed or looked up. No feature flag. The HTTP handlers no
+    longer read `X-Actor-Type`, `X-Actor-Id` or `X-Agent-Run-Id`. `resolveGraphReviewActor` (the
+    header parser) is deleted; `confirmDraftItems`/`rejectDraftItems` and their own tests are
+    unchanged and still take a `GraphReviewActor`, so the architecture-package e2e tests call them
+    directly and stay green. Why: any client could send `X-Actor-Type: human` and confirm graph
+    edges, which bypasses FR-010's human-only guarantee. Consequence: confirm and reject are
+    unusable over HTTP until a verified human credential exists. That needs a credential/capability
+    registry (002 or a new ADR). Nothing else changes; the GET draft route and the other discovery
+    routes never read actor headers and are untouched.
+    Project-wide gap, not fixed here: `X-Tenant-Id` (and `X-Actor-Id` on every other route) is the
+    same caller-asserted stub. Any client can name any tenant. Tenant isolation on the confirm/reject
+    routes is now enforced by the 403 path (both tenants get the identical refusal). It is not
+    enforced by a tenant-scoped lookup, and that is not a real guarantee until the tenant header is
+    authenticated.
+    Tests: `discovery.e2e.test.ts`'s confirm/reject cases assert 403 for every actor type, including
+    the spoofing case (`X-Actor-Type: human` still 403). Mutation check: temporarily making the
+    confirm handler trust `X-Actor-Type: human` turned that test red (200 instead of 403). The
+    controller was restored byte-for-byte (sha256 prefix e8d928ecf9fb7062). `test/tenant-isolation.ts`
+    gained an optional `otherTenantStatus` (default 404) so the isolation helper can name the 403
+    for both tenants while still being the call gate-isolation recognises.
+    `apps/api/openapi.json` regenerated: confirm and reject no longer document the four actor/tenant
+    headers. contracts-check passes.

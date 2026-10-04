@@ -281,8 +281,11 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
       }));
   });
 
+  // FR-010 / SC-002, fail closed: no caller can yet be verified as a human (no credential or
+  // capability registry), and every header this API trusts is caller-asserted. So confirm and
+  // reject refuse EVERY request with 403 before any lookup, whatever X-Actor-Type says.
   describe('POST /discovery/drafts/{draftId}/confirm (FR-010, SC-002)', () => {
-    it('confirms with a human actor and mints a graph version', async () => {
+    it('403s a confirm even with X-Actor-Type: human (spoofing regression: a header is never trusted)', async () => {
       const { draftId, itemId } = await seedDraft(TENANT_A);
 
       const response = await post(
@@ -290,63 +293,45 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
         `/api/v1/discovery/drafts/${draftId}/confirm`,
         { itemIds: [itemId] },
         { 'X-Actor-Type': 'human', 'X-Actor-Id': 'pavlo' },
-      ).expect(200);
+      ).expect(403);
+      expect(response.body.code).toBe('HUMAN_CREDENTIAL_REQUIRED');
 
-      expect(response.body.version).toBe(1);
-      expect(response.body.confirmedItems).toEqual([{ itemId, nodeId: expect.any(String) }]);
+      // Nothing was applied: no graph version minted for this tenant.
+      expect(await prisma.graphVersion.count({ where: { tenantId: TENANT_A } })).toBe(0);
     });
 
-    it('403s HUMAN_ACTOR_REQUIRED for an agent actor, and audits the refusal (FR-010, SC-002)', async () => {
+    it('403s a confirm for an agent actor', async () => {
       const { draftId, itemId } = await seedDraft(TENANT_A);
 
-      const response = await post(
+      await post(
         TENANT_A,
         `/api/v1/discovery/drafts/${draftId}/confirm`,
         { itemIds: [itemId] },
         { 'X-Actor-Type': 'agent', 'X-Actor-Id': 'agent-7', 'X-Agent-Run-Id': randomUUID() },
       ).expect(403);
-      expect(response.body.code).toBe('HUMAN_ACTOR_REQUIRED');
-
-      const audited = await prisma.auditEntry.findFirst({
-        where: { tenantId: TENANT_A, actorType: 'agent', actorRef: 'agent-7', outcome: 'refused' },
-      });
-      expect(audited).not.toBeNull();
     });
 
-    it('rejects a confirm with no X-Actor-Type header', async () => {
+    it('403s a confirm with no actor headers at all', async () => {
       const { draftId, itemId } = await seedDraft(TENANT_A);
       await post(TENANT_A, `/api/v1/discovery/drafts/${draftId}/confirm`, {
         itemIds: [itemId],
-      }).expect(400);
-    });
-
-    it('requires X-Agent-Run-Id when X-Actor-Type is agent', async () => {
-      const { draftId, itemId } = await seedDraft(TENANT_A);
-      await post(
-        TENANT_A,
-        `/api/v1/discovery/drafts/${draftId}/confirm`,
-        { itemIds: [itemId] },
-        { 'X-Actor-Type': 'agent', 'X-Actor-Id': 'agent-7' },
-      ).expect(400);
+      }).expect(403);
     });
 
     it(
-      "confirming another tenant's draft 404s, never 403 (tenant isolation, " +
-        '.claude/rules/backend-nestjs.md)',
+      "confirming another tenant's draft is refused identically: 403 for both tenants, " +
+        'isolation enforced by the refusal path (tenant isolation, .claude/rules/backend-nestjs.md)',
       () => {
-        // `assertTenantIsolated` sends the identical body to both tenants' requests, so the one
-        // real `draft_item` id it needs to exist must be fixed ahead of time rather than returned
-        // from `createUnderTenant` (whose own return value is substituted into the path, not the
-        // body) — tenant A's own request succeeds because this id is real under its seeded
-        // draft; tenant B's identical request 404s on the draft lookup itself, before this id is
-        // even considered.
+        // Refused before the draft is looked up, so the other tenant's request gets the same 403
+        // as its own: there is no lookup that could differ by tenant.
         const itemId = randomUUID();
         return assertTenantIsolated(app, 'POST', '/api/v1/discovery/drafts/:draftId/confirm', {
           tenantA: TENANT_A,
           tenantB: TENANT_B,
           tenantHeader: 'X-Tenant-Id',
           createUnderTenant: async (tenantId) => (await seedDraft(tenantId, itemId)).draftId,
-          ownRequestStatus: 200,
+          ownRequestStatus: 403,
+          otherTenantStatus: 403,
           requestHeaders: {
             'Idempotency-Key': randomUUID(),
             'X-Actor-Type': 'human',
@@ -359,7 +344,7 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
   });
 
   describe('POST /discovery/drafts/{draftId}/reject (FR-011)', () => {
-    it('rejects with a human actor and a reason, no graph version minted', async () => {
+    it('403s a reject even with X-Actor-Type: human (spoofing regression)', async () => {
       const { draftId, itemId } = await seedDraft(TENANT_A);
 
       const response = await post(
@@ -367,12 +352,11 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
         `/api/v1/discovery/drafts/${draftId}/reject`,
         { itemIds: [itemId], reason: 'not a real dependency' },
         { 'X-Actor-Type': 'human', 'X-Actor-Id': 'pavlo' },
-      ).expect(200);
-
-      expect(response.body.rejectedItemIds).toEqual([itemId]);
+      ).expect(403);
+      expect(response.body.code).toBe('HUMAN_CREDENTIAL_REQUIRED');
     });
 
-    it('403s a non-human reject', async () => {
+    it('403s a reject for a non-human actor too', async () => {
       const { draftId, itemId } = await seedDraft(TENANT_A);
       await post(
         TENANT_A,
@@ -382,19 +366,9 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
       ).expect(403);
     });
 
-    it('422s a reject with no reason', async () => {
-      const { draftId, itemId } = await seedDraft(TENANT_A);
-      await post(
-        TENANT_A,
-        `/api/v1/discovery/drafts/${draftId}/reject`,
-        { itemIds: [itemId] },
-        { 'X-Actor-Type': 'human', 'X-Actor-Id': 'pavlo' },
-      ).expect(422);
-    });
-
     it(
-      "rejecting another tenant's draft 404s, never 403 (tenant isolation, " +
-        '.claude/rules/backend-nestjs.md)',
+      "rejecting another tenant's draft is refused identically: 403 for both tenants " +
+        '(tenant isolation, .claude/rules/backend-nestjs.md)',
       () => {
         const itemId = randomUUID();
         return assertTenantIsolated(app, 'POST', '/api/v1/discovery/drafts/:draftId/reject', {
@@ -402,7 +376,8 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
           tenantB: TENANT_B,
           tenantHeader: 'X-Tenant-Id',
           createUnderTenant: async (tenantId) => (await seedDraft(tenantId, itemId)).draftId,
-          ownRequestStatus: 200,
+          ownRequestStatus: 403,
+          otherTenantStatus: 403,
           requestHeaders: {
             'Idempotency-Key': randomUUID(),
             'X-Actor-Type': 'human',

@@ -44,6 +44,11 @@ export async function assertTenantIsolated(
      *  the tenant. */
     readonly requestHeaders?: Record<string, string>;
     readonly body?: unknown;
+    /** The status tenant B's identical request must return. Default 404 (its lookup finds nothing).
+     *  A route that refuses every caller before any lookup (e.g. 403 for an unverified credential,
+     *  DiscoveryDraftsController's confirm/reject) passes its refusal status here instead — the
+     *  isolation then rests on the refusal being identical for both tenants. */
+    readonly otherTenantStatus?: number;
     /** Query string for a route that names its resource there rather than in the path
      *  (002 T067: `GET /budgets/state?scopeType=issue&scopeId=…`). Sent identically for both
      *  tenants. */
@@ -62,7 +67,7 @@ export async function assertTenantIsolated(
   };
 
   await send(config.tenantA).expect(config.ownRequestStatus ?? 200);
-  await send(config.tenantB).expect(404);
+  await send(config.tenantB).expect(config.otherTenantStatus ?? 404);
 }
 
 /**
