@@ -23,6 +23,7 @@ import {
   PrismaPolicyRulesetRepository,
   SEED_POLICY_ACTIONS,
   revokeAutonomy,
+  PrismaAgentRunRepository,
 } from '@healer/domain-policy';
 import {
   PrismaDiscoveryRepository,
@@ -92,6 +93,7 @@ describe('/approvals (002 T075)', () => {
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
+      new PrismaAgentRunRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

@@ -234,3 +234,17 @@ export {
   tenantConsumption as deriveTenantConsumption,
   type Consumption as DerivedConsumption,
 } from './infrastructure/budget-aggregate.js';
+
+// 012 T094 — `agent_run` written from a runner's `agent_run_report`.
+export {
+  AgentRunReferenceNotFoundError,
+  AgentRunReportConflictError,
+  type AgentRunReportRecord,
+  type AgentRunRepository,
+} from './domain/agent-run-repository.js';
+export { toCostDecimal } from './domain/agent-run-cost.js';
+export {
+  recordAgentRunReport,
+  type RecordAgentRunReportInput,
+} from './application/commands/record-agent-run-report.js';
+export { PrismaAgentRunRepository } from './infrastructure/prisma-agent-run-repository.js';

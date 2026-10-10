@@ -290,7 +290,22 @@ describe('findUnmeasuredCostRuns — fail loudly rather than pass on an estimate
     outputTokens: 50,
     finished: true,
     declaredMax: null,
+    costProvenance: 'reported',
     ...over,
+  });
+
+  it('a finished run whose cost is an estimate is refused, and the message says reported is unreconciled', () => {
+    const v = findUnmeasuredCostRuns([run({ costProvenance: 'estimated' })]);
+    expect(v).toHaveLength(1);
+    expect(v[0]).toMatch(/estimated/);
+    expect(v[0]).toMatch(/reported.*not reconciled/);
+  });
+
+  it('an estimate on a run still in flight is not yet a charge to refuse, and a reported cost passes', () => {
+    expect(findUnmeasuredCostRuns([run({ costProvenance: 'estimated', finished: false })])).toEqual(
+      [],
+    );
+    expect(findUnmeasuredCostRuns([run({ costProvenance: 'reported' })])).toEqual([]);
   });
 
   it('a finished run that recorded tokens but no cost is unpriced — nothing measured it', () => {

@@ -68,10 +68,10 @@ describe('policy performance budget (plan.md)', () => {
       h.pg,
       `insert into "agent"."agent_run"
          (id, tenant_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-          input_tokens, output_tokens, cost, tool_calls, outcome, started_at, finished_at)
+          input_tokens, output_tokens, cost, tool_calls, outcome, cost_provenance, started_at, finished_at)
        select gen_random_uuid(), '${t.tenantId}', gen_random_uuid(), 'investigator',
               '${seededPromptVersionId()}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.01, '[]',
-              'ok', '2026-10-01T00:00:00Z'::timestamptz + (g || ' seconds')::interval,
+              'ok', 'reported', '2026-10-01T00:00:00Z'::timestamptz + (g || ' seconds')::interval,
               '2026-10-01T00:00:00Z'::timestamptz + (g || ' seconds')::interval
        from generate_series(1, 10000) g`,
     );

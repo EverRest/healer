@@ -299,6 +299,7 @@ model RunnerRegistration {
 
   tenant      Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   resolutions RunnerCapabilityResolution[]
+  agentRuns   AgentRun[]
 
   @@unique([tenantId, name])
   @@index([tenantId, status])
@@ -366,12 +367,38 @@ model AgentRun {
   outcome          String
   startedAt        DateTime     @map("started_at") @db.Timestamptz(6)
   finishedAt       DateTime?    @map("finished_at") @db.Timestamptz(6)
+  /// `runner` iff `runnerInstanceId` is set — the `agent_run_runner_iff_runner_instance` CHECK (T094).
+  executedIn       ExecutedIn   @default(control_plane) @map("executed_in")
+  runnerInstanceId String?      @map("runner_instance_id") @db.Uuid
+  /// Where `cost` came from; no default, a writer states it every time (T094).
+  costProvenance   CostProvenance @map("cost_provenance")
+  /// A runner report's idempotency key; unique per tenant (T094).
+  reportId         String?      @map("report_id") @db.Uuid
 
-  promptVersion PromptVersion @relation(fields: [promptVersionId], references: [id], onDelete: Restrict)
+  promptVersion  PromptVersion       @relation(fields: [promptVersionId], references: [id], onDelete: Restrict)
+  runnerInstance RunnerRegistration? @relation(fields: [runnerInstanceId], references: [id], onDelete: Restrict)
 
+  @@unique([tenantId, reportId])
   @@index([tenantId, startedAt])
   @@index([correlationId])
   @@map("agent_run")
+  @@schema("agent")
+}
+
+enum ExecutedIn {
+  control_plane
+  runner
+
+  @@map("executed_in")
+  @@schema("agent")
+}
+
+/// No `measured` member until a writer can earn it by reconciling against provider usage (T094).
+enum CostProvenance {
+  reported
+  estimated
+
+  @@map("cost_provenance")
   @@schema("agent")
 }
 

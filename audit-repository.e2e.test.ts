@@ -128,9 +128,9 @@ describe('PrismaAuditRepository (001 T042/T043, FR-012, SC-007)', () => {
       pg,
       `insert into "agent"."agent_run"
          (id, tenant_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-          input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
+          input_tokens, output_tokens, cost, tool_calls, outcome, cost_provenance, started_at)
        values ('${agentRunId}', '${TENANT_ID}', '${randomUUID()}', 'investigator',
-               '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', now())`,
+               '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', 'reported', now())`,
     );
     await repo.record(
       scope(CONTEXT, newEntry({ actorType: 'agent', actorRef: 'investigator', agentRunId })),
@@ -152,9 +152,9 @@ describe('PrismaAuditRepository (001 T042/T043, FR-012, SC-007)', () => {
       pg,
       `insert into "agent"."agent_run"
          (id, tenant_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-          input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
+          input_tokens, output_tokens, cost, tool_calls, outcome, cost_provenance, started_at)
        values ('${agentRunId}', '${OTHER_TENANT_ID}', '${randomUUID()}', 'investigator',
-               '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', now())`,
+               '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', 'reported', now())`,
     );
 
     expect(await repo.resolveAgentRunFacts(scope(CONTEXT, { agentRunId }))).toBeNull();

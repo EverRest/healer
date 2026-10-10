@@ -115,6 +115,7 @@ export interface SeedAgentRun {
   readonly finishedAt?: string | null;
   readonly policyDecisionId?: string;
   readonly outcome?: string;
+  readonly costProvenance?: 'reported' | 'estimated';
 }
 
 export async function seedAgentRun(pg: StartedPostgres, run: SeedAgentRun): Promise<string> {
@@ -126,11 +127,11 @@ export async function seedAgentRun(pg: StartedPostgres, run: SeedAgentRun): Prom
     pg,
     `insert into "agent"."agent_run"
        (id, tenant_id, issue_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-        input_tokens, output_tokens, cost, tool_calls, policy_decision_id, outcome, started_at, finished_at)
+        input_tokens, output_tokens, cost, tool_calls, policy_decision_id, outcome, cost_provenance, started_at, finished_at)
      values ('${id}', '${run.tenantId}', ${run.issueId ? `'${run.issueId}'` : 'null'},
              '${run.correlationId ?? randomUUID()}', 'investigator', '${promptVersionId}',
              'claude-sonnet-5', 'anthropic', 100, 50, ${run.cost}, '[]',
-             ${run.policyDecisionId ? `'${run.policyDecisionId}'` : 'null'}, '${run.outcome ?? 'ok'}',
+             ${run.policyDecisionId ? `'${run.policyDecisionId}'` : 'null'}, '${run.outcome ?? 'ok'}', '${run.costProvenance ?? 'reported'}',
              '${started}', ${finished === null ? 'null' : `'${finished}'`})`,
   );
   return id;

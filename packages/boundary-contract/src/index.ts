@@ -14,3 +14,4 @@ export * from './byo-fallback-check.js';
 export * from './discovery-shapes.js';
 export * from './diagnostics.js';
 export * from './inference.js';
+export * from './agent-run-report-envelope.js';

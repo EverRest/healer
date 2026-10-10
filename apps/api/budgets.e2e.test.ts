@@ -22,6 +22,7 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  PrismaAgentRunRepository,
 } from '@healer/domain-policy';
 import {
   PrismaDiscoveryRepository,
@@ -95,6 +96,7 @@ describe('/budgets (002 T067)', () => {
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
+      new PrismaAgentRunRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

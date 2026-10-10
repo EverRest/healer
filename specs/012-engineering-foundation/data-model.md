@@ -147,6 +147,25 @@ here, and an `audit_entry` reaches them through `agent_run_id`.
 `runner`), `runner_instance_id?` — set when `executed_in = runner`, the row then written from an
 `agent_run_report` (ADR 0010).
 
+Written by 012 T094 (migration `20261008000000`), the recording columns are:
+
+- `executed_in` and `runner_instance_id` (FK → `runner_registration`, `ON DELETE RESTRICT`: a row is the
+  tenant's spend, so a runner registration cannot be deleted from under it). `CHECK`
+  `agent_run_runner_iff_runner_instance` — `executed_in = runner` **iff** `runner_instance_id` is set — makes
+  the inconsistent row unrepresentable. `executed_in` defaults to `control_plane` (every pre-existing row
+  was written there; the CHECK refuses a runner row that fell back to it).
+- `cost_provenance` (`reported` · `estimated`), **no default**. `reported`: a runner said so; nothing has
+  been reconciled against provider usage (no provider usage source exists), so a cost is never labelled
+  *measured*. `estimated`: a guess — the backfill value for rows that predate the column, which
+  `check:budget-reconcile` refuses on a finished run. A `measured` member is added by the migration that
+  builds the reconciliation, not before: a member no writer can produce has no reader.
+- `report_id` — the runner's idempotency key for one report, unique per tenant
+  (`(tenant_id, report_id)`); `CHECK` `agent_run_runner_has_report_id` requires it on a runner-side row. A
+  report delivered twice is stored once.
+
+The report's `decision_path_step_ids` and `duration_ms` are not stored as such: duration becomes
+`finished_at`; the step ids have no column yet (no reader exists).
+
 Tool call arguments are stored as digests, not values: arguments routinely contain file paths,
 identifiers and excerpts, and this table is read by support.
 

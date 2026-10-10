@@ -21,6 +21,7 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  PrismaAgentRunRepository,
 } from '@healer/domain-policy';
 import { findStaleRunners, CURRENT_PROTOCOL_VERSION } from '@healer/boundary-contract';
 import { TenantContext, scope } from '@healer/shared';
@@ -111,6 +112,7 @@ describe('POST /runners/heartbeat (012 T042, FR-018, FR-020)', () => {
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
+      new PrismaAgentRunRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

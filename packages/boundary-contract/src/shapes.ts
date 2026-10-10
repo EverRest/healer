@@ -212,7 +212,9 @@ const testBindingRef = z
   })
   .strict();
 
-const agentRunReport = z
+// Exported only so `agent-run-report-envelope.ts` can tighten it with `.extend` — this shape itself
+// is unchanged for every other consumer.
+export const agentRunReport = z
   .object({
     kind: z.literal('agent_run_report'),
     agentKind: z.enum(['investigator', 'change', 'verifier', 'support', 'test_author']),

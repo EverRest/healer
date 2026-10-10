@@ -27,6 +27,7 @@ import {
   type EvidenceRepository,
 } from '@healer/domain-evidence';
 import {
+  PrismaAgentRunRepository,
   PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaBudgetLimitRepository,
@@ -34,6 +35,7 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  type AgentRunRepository,
   type ApprovalLifecycleRepository,
   type AutonomyGrantRepository,
   type BudgetLimitRepository,
@@ -85,6 +87,10 @@ import {
 import type { RunnerRegistrationRepository } from './runners/domain/repository.js';
 import { PrismaRunnerRegistrationRepository } from './runners/infrastructure/prisma-runner-registration-repository.js';
 import { RUNNER_REGISTRATION_REPOSITORY, RunnersController } from './runners/runners.controller.js';
+import {
+  AGENT_RUN_REPOSITORY,
+  AgentRunReportsController,
+} from './runners/agent-run-reports.controller.js';
 import {
   AUTONOMY_GRANT_REPOSITORY,
   AutonomyGrantsController,
@@ -161,6 +167,7 @@ export function createApiModule(
   discovery: DiscoveryRepository,
   draftReview: DraftReviewRepository,
   boundaryRejections: BoundaryRejectionRepository,
+  agentRuns: AgentRunRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -171,6 +178,7 @@ export function createApiModule(
       PolicyDecisionsController,
       PolicyEvaluationController,
       RunnersController,
+      AgentRunReportsController,
       AutonomyGrantsController,
       BudgetsController,
       ApprovalsController,
@@ -200,6 +208,7 @@ export function createApiModule(
       { provide: DISCOVERY_REPOSITORY, useValue: discovery },
       { provide: DRAFT_REVIEW_REPOSITORY, useValue: draftReview },
       { provide: BOUNDARY_REJECTION_REPOSITORY, useValue: boundaryRejections },
+      { provide: AGENT_RUN_REPOSITORY, useValue: agentRuns },
     ],
   })
   class ApiModule {}
@@ -243,6 +252,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaDiscoveryRepository(prisma),
     new PrismaDraftReviewRepository(prisma, characteristicVocabulary),
     new PrismaBoundaryRejectionRepository(prisma),
+    new PrismaAgentRunRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

@@ -16,6 +16,7 @@ import type {
   BudgetRepository,
   PolicyActionRepository,
   PolicyDecisionRepository,
+  AgentRunRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
 import {
@@ -85,6 +86,9 @@ const noopPolicyActions: PolicyActionRepository = {
 const noopRunnerRegistrations: RunnerRegistrationRepository = {
   upsert: () => Promise.reject(new Error('not implemented for contract generation')),
   findByName: () => Promise.resolve(null),
+};
+const noopAgentRuns: AgentRunRepository = {
+  record: () => Promise.reject(new Error('not implemented for contract generation')),
 };
 const noopBoundaryRejections: BoundaryRejectionRepository = {
   record: () => Promise.reject(new Error('not implemented for contract generation')),
@@ -174,6 +178,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopDiscovery,
     noopDraftReview,
     noopBoundaryRejections,
+    noopAgentRuns,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

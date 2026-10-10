@@ -375,6 +375,27 @@
         "tags": ["Runners"]
       }
     },
+    "/api/v1/runners/agent-run-reports": {
+      "post": {
+        "operationId": "AgentRunReportsController_record",
+        "parameters": [
+          {
+            "name": "x-tenant-id",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "x-runner-name",
+            "required": true,
+            "in": "header",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": { "201": { "description": "" } },
+        "tags": ["AgentRunReports"]
+      }
+    },
     "/api/v1/autonomy/grants": {
       "get": {
         "operationId": "AutonomyGrantsController_list",

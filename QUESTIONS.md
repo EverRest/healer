@@ -4435,3 +4435,65 @@ the fan-out's sequential `add` ceiling (ADR Consequences), and a scheduler-liven
 - **Gap (b): overlapping heartbeat ticks.** `runAgent` is awaited inside the heartbeat cycle and ticks overlap, so a redelivered directive could run twice. A real `runAgent` needs persisted run state, not await-in-heartbeat (ADR 0003 spirit); this must be solved before a real `runAgent` is wired.
 - **Gap (c): digest construction.** `computePromptDigest` concatenates body and schemaRef with no separator or length prefix (body `AB` + schemaRef `''` collides with body `A` + schemaRef `B`), and lone surrogates collide on encoding. Fixing it changes stored digests, so it needs a versioned digest. The handler recomputes `computePromptDigest(body)`, which matches only schemaRef-less prompts; a prompt published with a schemaRef is refused unless it collides as above. The `prompt_version` shape also needs an optional `schemaRef`.
 - **Gap (d): resolved capability set.** Once the control plane registers requirements, gate on the resolved set as well as the declaration.
+
+## 012 T093-T095 — agent_run from runner report (judgment calls)
+
+T094 only (T093 and T095 were other sessions' work). Migration `20261008000000_t094_agent_run_from_runner_report`.
+
+1. **The write is built; reconciliation against provider usage is not, and is not faked.** No provider
+   usage source exists. The cost is stored as the runner reported it with `cost_provenance = reported`.
+   The enum has **no `measured` member**: a value no writer can produce has no reader, and a closed list
+   with a promise in it is the failure `AGENTS.md` names. Adding it is a migration made together with the
+   reconciliation. 002 Decisions item 5 ("`agent_run.cost` has no provenance column") is closed as far as
+   honestly possible: the column exists, `check:budget-reconcile` refuses `estimated` on a finished run and
+   its header and success line say `reported` is unreconciled. **Still open:** per-tenant-key reconciliation
+   (C-34) and "a mismatch recorded" from the T094 text.
+2. **Backfill and defaults.** Existing rows backfill `cost_provenance = estimated` (nothing recorded where
+   their cost came from) and the default is then dropped, so every writer states it; five e2e files and the
+   budget fixture that raw-insert `agent_run` now say `reported`. `executed_in` keeps a `control_plane`
+   default: every old row was written there, and `agent_run_runner_iff_runner_instance` refuses a runner row
+   that fell back to it. Nothing writes `agent_run` in production today, so no real data is touched.
+3. **`runner_instance_id` FK is RESTRICT**, not cascade/set-null: the row is the tenant's spend, and
+   SET NULL would violate the CHECK. Consequence: deleting a runner registration that has reported spend
+   fails, and so does a tenant deletion that cascades into it — a tenant-erasure path must handle
+   `agent_run` first (001 keeps `agent_run` rows as spend). No such path exists yet.
+4. **Idempotency key = `reportId`**, a runner-generated uuid added to the new envelope (the report has no
+   id). Unique `(tenant_id, report_id)`, required on a runner-side row by a CHECK. Write is
+   `INSERT ... ON CONFLICT DO NOTHING`, no read-then-write; an overlapping redelivery waits on the first
+   write's key (proved with a held-open transaction and `pg_stat_activity`). The same id with different
+   content (cost, tokens, model, prompt, correlation, runner) is a 409, first write stands — a redelivery is
+   identical by construction, so a difference is a runner bug or a forgery.
+5. **Cost conversion rounds, does not reject, past six decimals** (`toFixed(6)`, half-even on the binary
+   value): a runner cannot know the column scale and a refused report is a spend nobody sees. Negative,
+   non-finite and above 999 999 are refused (envelope and `toCostDecimal`). `0.1 + 0.2` is stored `0.300000`.
+6. **Closed lists.** Providers: the Prisma `ProviderName` enum is the authority; the envelope restates it
+   (the contract package may not import Prisma) and `agent-run-closed-lists.test.ts` fails on drift — the same
+   test pins the report's `agentKind` list (already a third copy in `shapes.ts`) and the data-model lists to
+   Prisma. **Outcome had no vocabulary anywhere** (column is text; fixtures use `ok`): defined
+   `completed | failed | stopped`, smallest list for "how did the run end" (a verdict such as `REJECT_PATCH`
+   is the verifier's result, not an outcome). Tool-call outcome: `ok | error | denied`. Both are authoritative in
+   `agent-run-report-envelope.ts`. Model id, tool names and step ids are pattern-bounded identifiers, argument
+   digests must be 64 hex — no free-text field reaches a table support reads.
+7. **The existing `agentRunReport` evidence shape is unchanged**; it is now exported from `shapes.ts` only so
+   the envelope can `.extend` it. `decisionPathStepIds` is validated but not stored (no column, no reader);
+   `durationMs` becomes `finished_at`.
+8. **Referenced rows are checked, not trusted:** a report's `issueId` and `policyDecisionId` must belong to
+   the tenant (the decision must be an `allow`, since the link replaces its open charge), else 422; an unknown
+   prompt version is the FK violation mapped to the same typed error. A **revoked** runner is not refused: its
+   spend is real, and refusing would hide it.
+9. **Ingress identity.** `X-Runner-Name` is only the lookup key into the authenticated tenant's
+   registrations, flagged as the same stub-auth as the heartbeat: until a runner credential exists, anyone
+   with a tenant id and a registered name can record spend for that tenant. A runner of another tenant is a
+   404 and writes nothing.
+10. **`createApiModule` gained a trailing `agentRuns` parameter**; 11 e2e callers were updated. Pre-existing:
+    `apps/api/discovery.e2e.test.ts` already omits the `boundaryRejections` argument and was left as it was.
+11. **Mutation checks of the database guards** (the two CHECKs, the unique index, the FK RESTRICT) were
+    attempted by editing the new migration; the auto-mode classifier refused that edit as "security test
+    removal", so the guards are proven by tests that attempt each unsafe insert/delete against a real
+    Postgres and by mutating the repository and schema code (tenant lookup, `skipDuplicates`, each envelope
+    closed list) instead.
+
+**Gaps for the next session:** the runner-side sender of `agent_run_report` (`apps/runner`, owned elsewhere);
+reconciliation against provider usage and a `measured` provenance; storing `decisionPathStepIds`; a real
+runner credential on the ingress; changelog/VERSION entry (not added — release bookkeeping is the
+orchestrator's).

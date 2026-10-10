@@ -176,6 +176,25 @@ describe('check:budget-reconcile (002 T069)', () => {
     expect(violations.some((v) => v.includes(id) && v.includes('not measured'))).toBe(true);
   });
 
+  it('fails loudly on a finished run whose cost is an estimate, and passes a reported one', async () => {
+    const { tenantId } = await h.newTenant();
+    const estimated = await seedAgentRun(h.pg, {
+      tenantId,
+      cost: 1,
+      costProvenance: 'estimated',
+      startedAt: '2026-10-02T10:00:00Z',
+    });
+    await seedAgentRun(h.pg, { tenantId, cost: 1, startedAt: '2026-10-02T11:00:00Z' });
+    const violations = await findBudgetDiscrepancies(h.prisma, {
+      asOf: AS_OF,
+      tenantIds: [tenantId],
+    });
+    expect(violations.filter((v) => v.includes('estimated'))).toHaveLength(1);
+    expect(violations.some((v) => v.includes(estimated) && v.includes('not reconciled'))).toBe(
+      true,
+    );
+  });
+
   it('fails loudly on a run that cost more than the maximum its step declared', async () => {
     const { tenantId, ctx } = await h.newTenant();
     await h.setLimit(ctx, { spendLimit: 100 });

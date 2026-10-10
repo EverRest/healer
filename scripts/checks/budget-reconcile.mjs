@@ -11,15 +11,16 @@
 // is exactly the kind of claim ("a run never starts before the window its workflow was pinned to")
 // that only an independent recomputation can falsify.
 //
-// **Measured, never estimated (012 FR-036, T061).** `agent_run.cost` has no provenance column and
-// the writer that would record provider-reported cost is not built (012 T059's write path, T094's
-// reconciliation against provider usage), so this check cannot *prove* a figure was measured. It
-// refuses the forms of estimate it can see — a finished run that recorded tokens but no cost, a
-// negative cost, and a run that cost more than the maximum its own step declared (which would make
-// the ex-ante charge a guess) — and says so in its failure. When 012's writer lands, add the real
-// reconciliation here rather than relaxing these.
+// **Measured, never estimated (012 FR-036, T061, T094).** `agent_run.cost_provenance` says where a
+// cost came from: `reported` (a runner said so) or `estimated`. This check refuses `estimated` on a
+// finished run, plus the other forms of estimate it can see — a finished run that recorded tokens
+// but no cost, a negative cost, and a run that cost more than the maximum its own step declared.
+// It does NOT prove a `reported` cost is true: **`reported` is unreconciled** — reconciliation
+// against provider usage per tenant key (C-34) is not built, because no provider usage source
+// exists. A `measured` provenance and that reconciliation arrive together; until then a passing run
+// of this check means "no visible estimate", never "verified against the provider".
 import { deriveIssueConsumption, deriveTenantConsumption } from '@healer/domain-policy';
-import { PrismaClient } from '../../prisma/generated/client/index.js';
+import { CostProvenance, PrismaClient } from '../../prisma/generated/client/index.js';
 import { isMainModule, runGate, reportAndExit } from '../lib/harness.mjs';
 
 const SPEND_EPSILON = 1e-6; // cost is numeric(12,6)
@@ -110,7 +111,7 @@ export function recompute(rows, asOf) {
 
 /**
  * The measured-not-estimated refusals this check can make (see the header).
- * @param {{ id: string, tenantId: string, cost: number, inputTokens: number, outputTokens: number, finished: boolean, declaredMax: number | null }[]} runs
+ * @param {{ id: string, tenantId: string, cost: number, inputTokens: number, outputTokens: number, finished: boolean, declaredMax: number | null, costProvenance: string }[]} runs
  * @returns {string[]}
  */
 export function findUnmeasuredCostRuns(runs) {
@@ -118,6 +119,12 @@ export function findUnmeasuredCostRuns(runs) {
   for (const r of runs) {
     const where = `agent_run ${r.id} (tenant ${r.tenantId})`;
     if (r.cost < 0) out.push(`${where}: negative cost ${r.cost} is not a measurement`);
+    if (r.finished && r.costProvenance === CostProvenance.estimated) {
+      out.push(
+        `${where}: cost ${r.cost} is estimated, not reported by the runner that made the call ` +
+          '(012 FR-036); note a reported cost is itself not reconciled against provider usage',
+      );
+    }
     if (r.finished && r.cost === 0 && r.inputTokens + r.outputTokens > 0) {
       out.push(
         `${where}: finished with ${r.inputTokens + r.outputTokens} tokens recorded but no cost — ` +
@@ -167,7 +174,8 @@ async function loadRows(prisma) {
            correlation_id::text AS "correlationId", cost::float8 AS cost,
            input_tokens AS "inputTokens", output_tokens AS "outputTokens",
            started_at AS "startedAt", finished_at AS "finishedAt",
-           policy_decision_id::text AS "policyDecisionId"
+           policy_decision_id::text AS "policyDecisionId",
+           cost_provenance::text AS "costProvenance"
     FROM "agent"."agent_run"`;
   const workflowRuns = await prisma.$queryRaw`
     SELECT id::text AS id, tenant_id::text AS "tenantId", issue_id::text AS "issueId",
@@ -231,6 +239,7 @@ export async function findBudgetDiscrepancies(prisma, options = {}) {
         inputTokens: r.inputTokens,
         outputTokens: r.outputTokens,
         finished: Boolean(r.finishedAt),
+        costProvenance: r.costProvenance,
         declaredMax: r.policyDecisionId ? (reservedById.get(r.policyDecisionId) ?? null) : null,
       })),
     ),
@@ -276,7 +285,8 @@ if (isMainModule(import.meta.url)) {
       const violations = await findBudgetDiscrepancies(prisma);
       if (violations.length > 0) throw new Error(violations.join('; '));
       process.stderr.write(
-        'check:budget-reconcile: derived consumption matches agent_run, policy_decision and workflow_run\n',
+        'check:budget-reconcile: derived consumption matches agent_run, policy_decision and workflow_run; ' +
+          'cost provenance `reported` is NOT reconciled against provider usage (not built)\n',
       );
     } finally {
       await prisma.$disconnect();

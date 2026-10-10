@@ -26,6 +26,7 @@ import {
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
+  PrismaAgentRunRepository,
 } from '@healer/domain-policy';
 import { TenantContext, newCorrelationId, scope, withCorrelation } from '@healer/shared';
 import { PrismaGraphReadRepository } from '@healer/domain-architecture';
@@ -154,6 +155,7 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
+      new PrismaAgentRunRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -388,9 +390,9 @@ describe('/issues (001 T031/T040, FR-001, FR-007, FR-020, SC-004)', () => {
         pg,
         `insert into "agent"."agent_run"
            (id, tenant_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-            input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
+            input_tokens, output_tokens, cost, tool_calls, outcome, cost_provenance, started_at)
          values ('${agentRunId}', '${TENANT_ID}', '${randomUUID()}', 'investigator',
-                 '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', now())`,
+                 '${promptVersionId}', 'claude-sonnet-5', 'anthropic', 100, 50, 0.05, '[]', 'ok', 'reported', now())`,
       );
       const entry = await audit.record(
         scope(CONTEXT, {

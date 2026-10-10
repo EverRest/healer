@@ -39,7 +39,9 @@ import {
   type ApprovalLifecycleRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
+  type AgentRunRepository,
   type PolicyRulesetRepository,
+  PrismaAgentRunRepository,
 } from '@healer/domain-policy';
 import { PrismaGraphReadRepository, type GraphReadRepository } from '@healer/domain-architecture';
 import { PrismaClient } from '@healer/prisma-client';
@@ -59,6 +61,9 @@ import {
   type DraftReviewRepository,
 } from '@healer/domain-architecture';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
+const noopAgentRuns: AgentRunRepository = {
+  record: () => Promise.reject(new Error('not implemented in this test')),
+};
 const noopBoundaryRejections: BoundaryRejectionRepository = {
   record: () => Promise.reject(new Error('not implemented in this test')),
   list: () => Promise.reject(new Error('not implemented in this test')),
@@ -155,6 +160,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
+      new PrismaAgentRunRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -485,6 +491,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopDiscovery,
       noopDraftReview,
       noopBoundaryRejections,
+      noopAgentRuns,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

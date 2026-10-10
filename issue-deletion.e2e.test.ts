@@ -227,9 +227,9 @@ describe('tenant deletion of an issue (001 T053)', () => {
        values ('${randomUUID()}', '${runId}', '${tenantId}', 'ci_result', 'h-${randomUUID()}', now());
        insert into "agent"."agent_run"
          (id, tenant_id, issue_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-          input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
+          input_tokens, output_tokens, cost, tool_calls, outcome, cost_provenance, started_at)
        values ('${randomUUID()}', '${tenantId}', '${id}', '${randomUUID()}', 'investigator',
-               '${promptVersionId}', 'm', 'anthropic', 10, 20, 0.5, '[]', 'ok', now());
+               '${promptVersionId}', 'm', 'anthropic', 10, 20, 0.5, '[]', 'ok', 'reported', now());
        insert into "policy"."policy_decision"
          (id, tenant_id, issue_id, action_key, proposal_digest, decision_input, ruleset_version,
           matched_rule_keys, outcome, reason_codes, ceiling_applied, budget_state, evaluated_at)
@@ -398,9 +398,9 @@ describe('tenant deletion of an issue (001 T053)', () => {
        values ('${randomUUID()}', '${run}', '${t}', 'ci_result', 'h-${randomUUID()}', now());
        insert into "agent"."agent_run"
          (id, tenant_id, issue_id, correlation_id, agent_kind, prompt_version_id, model_id, provider,
-          input_tokens, output_tokens, cost, tool_calls, outcome, started_at)
+          input_tokens, output_tokens, cost, tool_calls, outcome, cost_provenance, started_at)
        values ('${randomUUID()}', '${t}', '${gone.id}', '${randomUUID()}', 'investigator',
-               '${promptVersionId}', 'm', 'anthropic', 1, 2, 0.1, '[]', 'ok', now())`,
+               '${promptVersionId}', 'm', 'anthropic', 1, 2, 0.1, '[]', 'ok', 'reported', now())`,
     );
   }
 
