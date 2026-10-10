@@ -14,7 +14,7 @@
 // Rather than hand-maintain a denylist of package names to strip (a closed list with no single
 // authority, guaranteed to drift the next time root gains a new dependency), this computes the
 // real ALLOWED set directly from `pnpm list --json`'s own dependency tree for exactly the projects
-// apps/runner actually needs (itself, @healer/boundary-contract, @healer/shared) and deletes every
+// apps/runner actually needs (itself, @healer/boundary-contract, @healer/prompts, @healer/shared) and deletes every
 // other *versioned* store entry. `pnpm list`'s own tree is authoritative — `pnpm why` returning
 // empty for @prisma/client already proves it agrees the runner's real graph never reaches it.
 import { execFileSync } from 'node:child_process';

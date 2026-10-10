@@ -4424,3 +4424,11 @@ fan-out logs a warning at zero tenants; boot fails if a sweep's queue is not con
 during boot no longer logs a false registration failure; ADR §4 weakened to what is enforced. Left:
 the fan-out's sequential `add` ceiling (ADR Consequences), and a scheduler-liveness check
 (`getJobSchedulers()` `next` in the past) — no alerting sink exists yet (012 T054 note).
+
+## 012 T093-T095 — runner-side inference (judgment calls)
+
+- **T093 handler is a gate with injected ports.** `createAgentDirectiveHandler({ capabilities, fetchPrompt, runAgent, next })`; refusals throw a typed `DirectiveRefusedError` (closed reason list in `boundary-contract/src/inference.ts`: `inference_capability_missing`, `prompt_id_mismatch`, `prompt_digest_mismatch`). No `logger` dep: `dispatchDirectives` already logs the throw. Not wired into `main.ts` (003 owns it); the orchestrator wires it.
+- **Gap: no prompt-serving endpoint or HTTP client.** `fetchPrompt` is a port; the control plane has no endpoint serving a `prompt_version` by id, and the runner has no client. Needs its own task.
+- **Gap: provider credential resolution** (customer secret manager) is the injected `runAgent`'s concern; nothing implements it yet.
+- **schemaRef gap.** `computePromptDigest(body, schemaRef)` includes `schemaRef`, the `prompt_version` shape has none. The handler recomputes `computePromptDigest(body)`, exact only for schemaRef-less prompts; a prompt published with a `schemaRef` is refused (fails closed). The shape needs an optional `schemaRef` (a versioned contract change) before schema-bound prompts can run on a runner. Not widened here.
+- **`@healer/prompts` is now a runner dependency** (package.json, tsconfig reference, lockfile, Dockerfile COPY/find lines, comment counts in Dockerfile and `scripts/prune-runner-store.mjs`). The image build was not re-run here (`runner-image.e2e.test.ts` needs Docker); the prune script derives its allow-list from `pnpm list`, so it should pick the package up.

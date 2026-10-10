@@ -3,8 +3,8 @@
 # Plain multi-stage Node/pnpm image — no new base image or runtime dependency beyond what the
 # repo already uses everywhere (pnpm workspaces, `tsc --build` project references).
 #
-# Build strategy: SCOPED, not whole-monorepo. `apps/runner` depends on exactly two workspace
-# packages (@healer/boundary-contract, @healer/shared — see apps/runner/package.json and
+# Build strategy: SCOPED, not whole-monorepo. `apps/runner` depends on exactly three workspace
+# packages (@healer/boundary-contract, @healer/prompts, @healer/shared — see apps/runner/package.json and
 # tsconfig.json's own `references`), neither of which touches Prisma. The root `pnpm run build`
 # script (`tsc --build tsconfig.json`) builds *every* package in the workspace, including
 # `packages/prisma-client`, which requires a generated Prisma client
@@ -24,7 +24,7 @@ FROM node:22-alpine AS base
 RUN corepack enable && corepack prepare pnpm@10.6.2 --activate
 WORKDIR /repo
 
-# ---- build: compile apps/runner + its two workspace deps, nothing else ----
+# ---- build: compile apps/runner + its three workspace deps, nothing else ----
 FROM base AS build
 COPY . .
 RUN pnpm install --frozen-lockfile --filter "@healer/runner..." --filter "{.}"
@@ -32,7 +32,7 @@ RUN pnpm exec tsc --build apps/runner/tsconfig.json
 # `tsconfig.json`'s own `include: ["src/**/*"]` compiles test files too (needed so `pnpm run
 # typecheck` actually checks them) — strip their compiled output before it ships in an image
 # nothing runs tests from (012 T050 review).
-RUN find apps/runner/dist packages/boundary-contract/dist packages/shared/dist \( -name '*.test.*' -o -name 'test-support.*' \) -delete
+RUN find apps/runner/dist packages/boundary-contract/dist packages/prompts/dist packages/shared/dist \( -name '*.test.*' -o -name 'test-support.*' \) -delete
 
 # ---- prod-deps: same scoped filter, production dependencies only ----
 FROM base AS prod-deps
@@ -61,11 +61,13 @@ COPY --from=prod-deps /repo/apps/runner/package.json ./apps/runner/package.json
 COPY --from=prod-deps /repo/apps/runner/node_modules ./apps/runner/node_modules
 COPY --from=prod-deps /repo/packages/boundary-contract/package.json ./packages/boundary-contract/package.json
 COPY --from=prod-deps /repo/packages/boundary-contract/node_modules ./packages/boundary-contract/node_modules
+COPY --from=prod-deps /repo/packages/prompts/package.json ./packages/prompts/package.json
 COPY --from=prod-deps /repo/packages/shared/package.json ./packages/shared/package.json
 COPY --from=prod-deps /repo/packages/shared/node_modules ./packages/shared/node_modules
 
 COPY --from=build /repo/apps/runner/dist ./apps/runner/dist
 COPY --from=build /repo/packages/boundary-contract/dist ./packages/boundary-contract/dist
+COPY --from=build /repo/packages/prompts/dist ./packages/prompts/dist
 COPY --from=build /repo/packages/shared/dist ./packages/shared/dist
 
 # Outbound-only by construction (apps/runner/src/main.ts's own doc comment): no `EXPOSE`, nothing

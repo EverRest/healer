@@ -130,6 +130,9 @@ importers:
       '@healer/boundary-contract':
         specifier: workspace:*
         version: link:../../packages/boundary-contract
+      '@healer/prompts':
+        specifier: workspace:*
+        version: link:../../packages/prompts
       '@healer/shared':
         specifier: workspace:*
         version: link:../../packages/shared

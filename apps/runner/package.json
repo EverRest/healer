@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@healer/boundary-contract": "workspace:*",
+    "@healer/prompts": "workspace:*",
     "@healer/shared": "workspace:*",
     "zod": "^3.24.1"
   }

@@ -2,3 +2,4 @@
 export { start, type RunnerHandle } from './main.js';
 export type { DirectiveHandler, DirectiveEnvelope } from './directive-dispatcher.js';
 export * from './collection/index.js';
+export { createAgentDirectiveHandler, DirectiveRefusedError } from './agent-directive-handler.js';

@@ -10,6 +10,9 @@
       "path": "../../packages/boundary-contract"
     },
     {
+      "path": "../../packages/prompts"
+    },
+    {
       "path": "../../packages/shared"
     }
   ]
