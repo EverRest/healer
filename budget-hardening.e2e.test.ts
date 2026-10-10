@@ -61,6 +61,17 @@ describe('budget hardening (review fixes)', () => {
       evaluateAndBind(h.repos, ctx, { decisionInput: decisionInput(declared, at), binding }),
     );
 
+  /** A bounded lock wait is retryable by contract; under a loaded suite six callers can exceed it. */
+  const retryOnContention = async <T>(run: () => Promise<T>, attempts = 3): Promise<T> => {
+    for (let i = 1; ; i++) {
+      try {
+        return await run();
+      } catch (error) {
+        if (!(error instanceof BudgetContentionError) || i >= attempts) throw error;
+      }
+    }
+  };
+
   describe('idempotent charge (H2/C2)', () => {
     async function runFor(ctxTenant: { tenantId: string }) {
       // the per-issue default (2) would refuse these charges before the key is ever in play
@@ -98,7 +109,7 @@ describe('budget hardening (review fixes)', () => {
       const { issueId, runId } = await runFor(t);
       const binding = { issueId, workflowRunId: runId, workflowState: 'diagnosing' };
       const results = await Promise.all(
-        Array.from({ length: 6 }, () => bindStep(t.ctx, 3, binding)),
+        Array.from({ length: 6 }, () => retryOnContention(() => bindStep(t.ctx, 3, binding))),
       );
       expect(new Set(results.map((r) => r.decision.id)).size).toBe(1);
       expect(await decisionCount(t.tenantId)).toBe(1);
