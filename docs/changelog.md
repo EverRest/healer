@@ -1852,3 +1852,18 @@ not been executed. Recorded in 012's tasks.md rather than left implicit.
   existing worker tests pass unchanged.
 - Not registered: the 012 stale-runner sweep (no body exists) and `check:stale-approvals` /
   `check:budget-reconcile` (scripts, not per-tenant jobs) — see QUESTIONS.md "C-90".
+
+## 0.57.0 — 2026-10-10
+
+**012 T093–T095 — runner-side inference, `agent_run` from a runner report, key-rotation runbook.** Migration `20261008000000`.
+
+- `inference` is a declared runner capability with one authority (`directiveRefusal`, closed refusal
+  reasons). Every `agent_directive` is refused without it; the prompt is checked on id, digest and
+  shape. Wired fail-closed in `apps/runner`: no prompt fetch or agent runner exists yet, so every
+  directive is refused as `agent_runner_unavailable` (T093 stays open).
+- `POST /runners/agent-run-reports` writes `agent_run` with `executed_in = runner`,
+  `runner_instance_id` (tenant-bound FK) and `cost_provenance = reported`. Idempotent on
+  `(tenant_id, report_id)`; reported instants and the landed policy decision are checked. Reported
+  cost is recorded as reported; reconciliation against provider usage is not built (T094 stays open).
+  `check:budget-reconcile` refuses `estimated`; decisions C-93–C-95.
+- Runbook `docs/runbooks/provider-key-rotation.md`.
