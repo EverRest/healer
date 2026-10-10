@@ -215,6 +215,11 @@ wait.
 - [ ] T094 [Phase 8] `agent_run` written from `agent_run_report` with `executed_in = runner` and `runner_instance_id`; reported cost reconciled against provider usage per tenant key, a mismatch recorded (FR-033, FR-046a, C-34)
 - [ ] T096 [Phase 8] OpenTelemetry Collector configuration in `docker/` exporting traces, logs and metrics to Grafana Cloud; `tenantId` replaced by a keyed hash before export, resolvable only through the audited operator path; alert rules for workflow budget breach, dead-letter depth, `timeout` rate, cost per issue and heartbeat gaps. **Test first** — a planted tenant identifier never appears in exported telemetry (FR-032, FR-035, FR-037, R-17, C-41)
 - [ ] T095 [Phase 6] Runbook `docs/runbooks/provider-key-rotation.md`, indexed in `docs/README.md`: issue the new per-tenant key, customer stores it, overlap window, revoke the old key; the runner re-resolves credentials on the next directive (C-38)
+- [X] T105 [Phase 7] **Test first** (C-90, [ADR 0018](../../docs/adr/0018-tenant-sweeps-bullmq-job-schedulers.md)): registering the tenant sweeps twice leaves exactly one scheduler per sweep; a fan-out enqueues one job per active tenant carrying only that tenant's id; a fan-out that dies halfway and is retried leaves exactly one job per tenant (none missed, none doubled); an unknown sweep name fails the fan-out — `packages/workflow/src/schedule/tenant-sweep.test.ts` and `packages/workflow/tenant-sweep.e2e.test.ts` (real Redis); mutations (drop `jobId`, random scheduler id) each fail one test
+- [X] T106 [Phase 7] `TENANT_SWEEPS` (the one closed list), `registerTenantSweeps` and `fanOutTenantSweep` in `packages/workflow`, the `TenantEnumerator` port; the fan-out never waits and never runs a sweep (T105) — `packages/workflow/src/schedule/tenant-sweep.ts`
+- [X] T107 [Phase 7] **Test first**: `PrismaTenantEnumerator` returns `active` tenants and not `suspended`/`deleting` ones — `apps/worker/src/infrastructure`, reads `tenant.tenant` only — `apps/worker/prisma-tenant-enumerator.e2e.test.ts`; dropping the `status` filter fails it
+- [X] T108 [Phase 7] Worker wiring: consume `scheduling`, register the sweeps on boot (a failed registration fails the process, never a silent unscheduled worker), route the fan-out job. **Test first** — tenant isolation: the per-tenant job for tenant A leaves tenant B's due approval `pending` — isolation test lives in `approval-lifecycle.e2e.test.ts` (it owns the approval fixture); the registration-failure exit is untested (entry-point block), see QUESTIONS.md "C-90"
+- [X] T109 [Phase 7] First consumer end to end (002 `expireDueApprovals`): scheduler → fan-out → per-tenant job → approval `expired` for every tenant that had one due; the other sweeps are one-line registrations listed in QUESTIONS.md "C-90" — only `approval-expiry` is registered; the rest are listed in QUESTIONS.md "C-90"
 
 ---
 
@@ -233,7 +238,7 @@ Phase 1 (T001–T006)
           ├─▶ Phase 9 · US7 (T063–T065)
           └─▶ Phase 10 · US8 (T066–T070)
 Phase 11 (T071–T073) last
-Phase 12 (T074–T081) lands with the phase each line names, not after Phase 11
+Phase 12 (T074–T081) and T105–T109 land with the phase each line names, not after Phase 11
 Phase 13 · US10 (T084–T092) ← T087 needs T020; T088–T092 need the repository on GitHub (C-37)
                  T097 before T089; T098 and T102–T103 need the API and a bot token (T104); T099–T100 are open questions first; T101 waits for 006–008 and C-42's adapter
 T093–T095 land with the phase each line names

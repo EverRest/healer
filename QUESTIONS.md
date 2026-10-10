@@ -4383,3 +4383,44 @@ the brief).
   nothing to review.
 
 Not added to "Decisions waiting on Pavlo" — nothing here needs a decision only Pavlo can make.
+
+## C-90 — tenant enumerator and repeatable schedule (012 T105–T109, 2026-10-10)
+
+Built: ADR 0018, `TENANT_SWEEPS` + `registerTenantSweeps` + `fanOutTenantSweep` (`packages/workflow`),
+`PrismaTenantEnumerator` (`apps/worker`), worker wiring, 002 `expireDueApprovals` as the proof
+consumer. No migration.
+
+Judgment calls:
+
+- **Interval 60 s for `approval-expiry`**, `scheduling` queue. Not derived from anything; a lapse is
+  seen at most a minute late. Change the number in `TENANT_SWEEPS`.
+- **Only `active` tenants are swept.** A `suspended`/`deleting` tenant's approvals do not expire and
+  its retention does not run. Deliberate (ADR 0018 Consequences); say so if retention on a deleting
+  tenant must still run.
+- **Enumerator returns all ids in one read**, no paging — ids only; revisit at tens of thousands.
+- **A failed schedule registration exits the process** (`ready` rejects → `process.exit(1)`); not
+  covered by a test, the entry-point block is not importable without starting a worker.
+- **Fan-out and per-tenant jobs share one queue** (the sweep's own), so a slow sweep delays the next
+  fan-out only by queue concurrency, not by a separate budget.
+
+Remaining consumers — each is one line in `TENANT_SWEEPS` plus a router branch in
+`apps/worker/src/main.ts` where none exists. Their bodies were not touched:
+
+| Consumer | State |
+|---|---|
+| 001 `staleness-sweep`, `evidence-retention` | worker branch exists (`maintenance`); only the `TENANT_SWEEPS` line is missing |
+| 002 `sweepRevokedApprovals` | body exists; needs a router branch + line (`scheduling`) |
+| 002 `releaseAbandonedCharges` | body exists; needs a router branch + line |
+| 012 stale-runner sweep | body not located on master; confirm owner before registering |
+| `check:stale-approvals`, `check:budget-reconcile` | CLI scripts, not per-tenant jobs — decide whether they become jobs or stay CI/cron |
+
+002's "Nothing schedules …" entries above are now stale for `expireDueApprovals` only; left as
+written (another spec's text).
+
+Review of this batch (code-reviewer + silent-failure-hunter, opus), fixed in the same change: stale
+schedulers removed on boot; handler map `Record<TenantSweepName, …>` (a sweep with no body does not
+compile; a sweep on the wrong queue throws); `error` listener and full-error logging on workers;
+fan-out logs a warning at zero tenants; boot fails if a sweep's queue is not consumed; a SIGTERM
+during boot no longer logs a false registration failure; ADR §4 weakened to what is enforced. Left:
+the fan-out's sequential `add` ceiling (ADR Consequences), and a scheduler-liveness check
+(`getJobSchedulers()` `next` in the past) — no alerting sink exists yet (012 T054 note).

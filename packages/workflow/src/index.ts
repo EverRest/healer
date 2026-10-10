@@ -5,3 +5,4 @@ export * from './queues/index.js';
 export * from './queues/bullmq.js';
 export * from './job-budget.js';
 export * from './periodic-checks.js';
+export * from './schedule/tenant-sweep.js';

@@ -1827,3 +1827,17 @@ not been executed. Recorded in 012's tasks.md rather than left implicit.
   012 T083 ticked — the diff half already shipped in 002 T086/T087.
 - 012 T038 and T079 re-checked against master and left deferred (nothing to match / retrieve yet);
   recorded in QUESTIONS.md.
+
+## 0.56.0 — 2026-10-10
+
+**C-90 — tenant enumerator and repeatable schedule** ([ADR 0018](adr/0018-tenant-sweeps-bullmq-job-schedulers.md), 012 T105–T109). No migration.
+
+- `@healer/workflow`: `TENANT_SWEEPS` (the one closed list), `registerTenantSweeps` (BullMQ
+  `upsertJobScheduler`, idempotent across boots) and `fanOutTenantSweep` (one deduplicated job per
+  active tenant; a retried fan-out neither misses nor doubles a tenant). `TenantEnumerator` port,
+  implemented by `PrismaTenantEnumerator` in `apps/worker` (`tenant.tenant`, `status = active`).
+- `apps/worker` consumes `scheduling`, registers its schedules on boot (a failed registration exits
+  the process) and routes the fan-out and the first consumer, 002's `expireDueApprovals`
+  (`approval-expiry`, every 60 s). Proven against real Postgres and Redis: tenant A's job leaves
+  tenant B's due approval pending; the fan-out then expires it.
+- The other consumers are one-line registrations — listed in QUESTIONS.md "C-90".

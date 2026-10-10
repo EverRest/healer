@@ -6,7 +6,17 @@ import {
   withCorrelation,
 } from '@healer/shared';
 import { type DrainResult } from '@healer/events';
-import { createWorker, deadLetterDepth, createQueue, type QueueClass } from '@healer/workflow';
+import {
+  FANOUT_JOB,
+  TENANT_SWEEPS,
+  createWorker,
+  deadLetterDepth,
+  createQueue,
+  fanOutTenantSweep,
+  registerTenantSweeps,
+  type QueueClass,
+  type TenantSweepName,
+} from '@healer/workflow';
 import {
   markStaleIssues,
   processSignalJob,
@@ -15,7 +25,13 @@ import {
   type SignalJobData,
 } from '@healer/domain-issues';
 import { applyEvidenceRetention, PrismaEvidenceRetentionRepository } from '@healer/domain-evidence';
+import {
+  PrismaApprovalLifecycleRepository,
+  PrismaPolicyDecisionRepository,
+  expireDueApprovals,
+} from '@healer/domain-policy';
 import { createPrismaClient } from './infrastructure/prisma.js';
+import { PrismaTenantEnumerator } from './infrastructure/prisma-tenant-enumerator.js';
 
 /** Records one retention run works through. The rest wait for the next run — oldest expiry first —
  *  rather than one pass outliving the `maintenance` queue's wall-clock budget. */
@@ -37,9 +53,9 @@ const RETENTION_BATCH = 500;
 
 /** Classes this process consumes. `ingestion` is 001's own signal-processing queue (T025); the
  *  outbox drain is `maintenance`'s one processor. */
-const CONSUMED: readonly QueueClass[] = ['maintenance', 'ingestion'];
+const CONSUMED: readonly QueueClass[] = ['maintenance', 'ingestion', 'scheduling'];
 
-export function start(): { close: () => Promise<void> } {
+export function start(): { ready: Promise<void>; close: () => Promise<void> } {
   const config = loadConfig();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-worker' });
   const connection = { url: config.REDIS_URL };
@@ -47,6 +63,20 @@ export function start(): { close: () => Promise<void> } {
   const rulesetRepo = new PrismaNormalisationRulesetRepository(prisma);
   const issueRepo = new PrismaIssueRepository(prisma);
   const retentionRepo = new PrismaEvidenceRetentionRepository(prisma);
+  const approvalRepos = {
+    approvals: new PrismaApprovalLifecycleRepository(prisma),
+    decisions: new PrismaPolicyDecisionRepository(prisma),
+  };
+  const tenants = new PrismaTenantEnumerator(prisma);
+  // One body per entry of `TENANT_SWEEPS`: a sweep with no body here fails to compile.
+  const sweepBodies: Record<TenantSweepName, (context: TenantContext) => Promise<object>> = {
+    'approval-expiry': async (context) => {
+      const { expired, skipped } = await expireDueApprovals(approvalRepos, context);
+      return { expired: expired.length, skipped };
+    },
+  };
+  // One producer handle per consumed queue: the scheduler registers on it and the fan-out adds to it.
+  const queues = new Map(CONSUMED.map((q) => [q, createQueue(q, connection)] as const));
 
   const workers = CONSUMED.map((queue) =>
     createWorker(queue, connection, async (job) => {
@@ -106,6 +136,34 @@ export function start(): { close: () => Promise<void> } {
           );
           return result;
         }
+        // C-90 / ADR 0018: the scheduler fires the fan-out; the fan-out enqueues one job per
+        // tenant and returns — it never runs a sweep and never waits.
+        if (job.name === FANOUT_JOB) {
+          const result = await fanOutTenantSweep(tenants, queues.get(queue)!, {
+            timestamp: job.timestamp,
+            data: job.data as { sweep: string },
+          });
+          // Zero tenants is what a wrong database or an all-suspended fleet looks like: green job,
+          // nothing swept — so it is a warning, not a summary line.
+          const log = result.enqueued === 0 ? logger.warn : logger.info;
+          log.call(logger, { queue, jobId: job.id, correlationId, ...result }, 'tenant fan-out');
+          return result;
+        }
+        if (Object.hasOwn(TENANT_SWEEPS, job.name)) {
+          const name = job.name as TenantSweepName;
+          // The queue is declared once, in `TENANT_SWEEPS`; a job arriving anywhere else is a
+          // mis-registration, and a green no-op there is exactly the gap C-90 closes.
+          if (TENANT_SWEEPS[name].queue !== queue) {
+            throw new Error(`tenant sweep ${name} arrived on ${queue}, not its declared queue`);
+          }
+          const { tenantId } = job.data as { tenantId: string };
+          const result = await sweepBodies[name](TenantContext.forTrustedInternalUse(tenantId));
+          logger.info(
+            { queue, jobId: job.id, correlationId, tenantId, ...result },
+            `${name} finished`,
+          );
+          return result;
+        }
         return undefined;
       });
     }),
@@ -115,13 +173,33 @@ export function start(): { close: () => Promise<void> } {
     // A dead letter is kept and observable (T015). Silence here is the failure mode where
     // a queue drains into nothing and the investigation simply never finishes.
     worker.on('failed', (job, error) => {
-      logger.error({ queue: worker.name, jobId: job?.id, err: error.message }, 'job failed');
+      // The error itself, not its message: an AggregateError's per-item causes live in `.errors`.
+      logger.error({ queue: worker.name, jobId: job?.id, err: error }, 'job failed');
+    });
+    // BullMQ reports a failure to schedule the *next* iteration here and nowhere else; without a
+    // listener the schedule stops with a bare console line.
+    worker.on('error', (error) => {
+      logger.error({ queue: worker.name, err: error }, 'worker error');
     });
   }
 
+  // A worker that failed to register its schedule would run fine and sweep nothing — the very gap
+  // C-90 closes — so the entry point below exits on a rejection instead of carrying on.
+  const unconsumed = Object.values(TENANT_SWEEPS).filter((s) => !CONSUMED.includes(s.queue));
+  const ready = Promise.all(
+    [...queues].map(([queue, producer]) => registerTenantSweeps(producer, queue)),
+  ).then(() => {
+    if (unconsumed.length > 0) {
+      throw new Error('a tenant sweep is declared on a queue this worker does not consume');
+    }
+    logger.info({ sweeps: Object.keys(TENANT_SWEEPS) }, 'tenant sweeps registered');
+  });
+
   return {
+    ready,
     close: async () => {
       await Promise.all(workers.map((w) => w.close()));
+      await Promise.all([...queues.values()].map((q) => q.close()));
       await prisma.$disconnect();
     },
   };
@@ -141,7 +219,19 @@ export type { DrainResult };
 
 if (process.argv[1]?.endsWith('main.js')) {
   const handle = start();
-  const stop = (): void => void handle.close().then(() => process.exit(0));
+  let stopping = false;
+  handle.ready.catch((error: unknown) => {
+    if (stopping) return; // closing the queues rejects a pending registration: not a failure
+    createLogger({ level: loadConfig().LOG_LEVEL, serviceName: 'healer-worker' }).error(
+      { err: error },
+      'tenant sweep registration failed',
+    );
+    process.exit(1);
+  });
+  const stop = (): void => {
+    stopping = true;
+    void handle.close().then(() => process.exit(0));
+  };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   createLogger({ level: loadConfig().LOG_LEVEL, serviceName: 'healer-worker' }).info(

@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PrismaClient } from '@healer/prisma-client';
 import { PrismaIssueRepository } from '@healer/domain-issues';
+import { FANOUT_JOB, createQueue } from '@healer/workflow';
 import {
   ApprovalAlreadyPendingError,
   ApprovalNotPendingError,
@@ -41,7 +42,14 @@ import {
   withCorrelation,
 } from '@healer/shared';
 import { buildDecisionInput } from './packages/domain/policy/src/domain/test-support/fixtures.js';
-import { applySqlFile, query, startPostgres, type StartedPostgres } from './test/containers.js';
+import {
+  applySqlFile,
+  query,
+  startPostgres,
+  startRedis,
+  type StartedPostgres,
+} from './test/containers.js';
+import { start as startWorker } from './apps/worker/src/main.js';
 import { findReplayMismatches } from './scripts/checks/decision-replay.mjs';
 import { findStaleApprovals } from './scripts/checks/stale-approvals.mjs';
 
@@ -1306,6 +1314,60 @@ describe('approval lifecycle (T070-T074)', () => {
     it('a malformed id reads as not found, not as a database error', async () => {
       const f = await fixture();
       expect(await lifecycle.findById(scope(f.context, { id: 'not-a-uuid' }))).toBeNull();
+    });
+  });
+  describe('C-90 / T108-T109: the worker expires due approvals on a schedule', () => {
+    let redis: Awaited<ReturnType<typeof startRedis>>;
+    let worker: ReturnType<typeof startWorker>;
+    let queue: ReturnType<typeof createQueue>;
+    let other: { id: string; tenantId: string };
+
+    beforeAll(async () => {
+      redis = await startRedis();
+      process.env.DATABASE_URL = pg.url;
+      process.env.REDIS_URL = redis.url;
+      worker = startWorker();
+      await worker.ready;
+      queue = createQueue('scheduling', { url: redis.url });
+    }, 120_000);
+
+    afterAll(async () => {
+      await queue?.close();
+      await worker?.close();
+      await redis?.stop();
+    });
+
+    const stateOf = async (id: string) =>
+      (await prisma.approvalRequest.findUniqueOrThrow({ where: { id } })).state;
+    const dueApproval = async () => {
+      const f = await fixture();
+      await prisma.tenant.create({
+        data: { id: f.context.tenantId, name: `t-${f.context.tenantId}`, status: 'active' },
+      });
+      const approval = await request(f, { expiresAt: minus(RUN_DEADLINE, 3_600_000) });
+      return { id: approval.id, tenantId: f.context.tenantId };
+    };
+
+    it('registers the schedule on boot', async () => {
+      expect((await queue.getJobSchedulers()).map((s) => s.name)).toContain(FANOUT_JOB);
+    });
+
+    it("tenant A's job expires A's approval and leaves tenant B's due approval pending", async () => {
+      const a = await dueApproval();
+      other = await dueApproval();
+      const job = await queue.add('approval-expiry', { tenantId: a.tenantId });
+      await vi.waitFor(async () => expect(await stateOf(a.id)).toBe('expired'), {
+        timeout: 20_000,
+      });
+      await vi.waitFor(async () => expect(await job.isCompleted()).toBe(true), { timeout: 20_000 });
+      expect(await stateOf(other.id)).toBe('pending');
+    });
+
+    it('the fan-out reaches every active tenant: the one left pending above is now expired', async () => {
+      await queue.add(FANOUT_JOB, { sweep: 'approval-expiry' });
+      await vi.waitFor(async () => expect(await stateOf(other.id)).toBe('expired'), {
+        timeout: 20_000,
+      });
     });
   });
 });
