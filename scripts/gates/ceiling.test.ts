@@ -167,6 +167,16 @@ describe('gate-ceiling diff half (002 T086, FR-008a)', () => {
     ]);
   });
 
+  it('a ceiling.ts absent at the base raises every class that has a level', () => {
+    const problems = findUnearnedRaises('', CEILING_TS, () => undefined);
+    expect(problems).toHaveLength(
+      Object.values(ceilingTable(CEILING_TS)).filter((level) => level >= 0).length,
+    );
+    expect(problems).toEqual(
+      expect.arrayContaining([expect.stringMatching(/code_change.*cites no derivation/)]),
+    );
+  });
+
   it('fails closed on a ceiling.ts it cannot parse', () => {
     expect(() => ceilingTable('export const x = 1;')).toThrow(/ACTION_CEILING/);
   });

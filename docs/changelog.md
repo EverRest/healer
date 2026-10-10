@@ -1819,3 +1819,11 @@ Specification: agent-driven development (012 US10). No code.
 Verified: `typecheck`, `lint`, `format-check` and 48 unit tests green. Not verified: the compose
 stack and the migration were never applied — the Docker daemon was not running — so `test-e2e` has
 not been executed. Recorded in 012's tasks.md rather than left implicit.
+
+## 0.55.1 — 2026-10-10
+
+- `gate-ceiling`: a test pins the "ceiling.ts absent at the base" case (every level is a raise);
+  mutating `?? NONE` in `findUnearnedRaises` survived the existing 18 tests and now fails this one.
+  012 T083 ticked — the diff half already shipped in 002 T086/T087.
+- 012 T038 and T079 re-checked against master and left deferred (nothing to match / retrieve yet);
+  recorded in QUESTIONS.md.

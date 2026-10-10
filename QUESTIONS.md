@@ -4358,3 +4358,28 @@ the brief).
     for both tenants while still being the call gate-isolation recognises.
     `apps/api/openapi.json` regenerated: confirm and reject no longer document the four actor/tenant
     headers. contracts-check passes.
+
+## 012 hygiene (T038, T079, T083) — judgment calls
+
+- **T083: already built, ticked, one gap closed.** `scripts/gates/ceiling.mjs` already carries the
+  FR-008a diff half (002 T086/T087, 0.52.0): `findUnearnedRaises` fails a raise, or a level given to
+  a class that had none, unless a `derivation[<class>]` citation resolves to a tracked, digest-valid
+  `docs/derivations/<run-id>.json`. It reads a committed artifact, no database. Reader: `make
+  gate-ceiling` (inside `make ci`). The task's "deferred" note was stale. Mutation-checking the gate
+  found `?? NONE` (class/file absent at the base) unpinned — mutated to `?? 99`, 18/18 still passed;
+  added a test, mutant now fails it, gate restored byte-for-byte. I did **not** mutate the real
+  `ceiling.ts`/migration (auto-mode refused editing the ceiling and a committed migration); the
+  unit fixtures exercise the same path.
+- **T038: left deferred, same reason as before.** Re-verified on master: none of
+  `RepositoryWriteCapability`, `RemediationDispatchCapability`, `AnswerPublishCapability`,
+  `DraftPublishCapability` exists, and no mutating infrastructure module does (the integrations
+  adapters are read-only, `ports-read-only.test.ts`). A lint pattern needs module paths to forbid;
+  inventing them now would be a guess that 005/008/009/010 then contradict. Whoever lands the first
+  mutating module owns the pattern in the same change.
+- **T079: left deferred.** `CREATE EXTENSION vector` is the only pgvector artefact on master — no
+  vector column or index exists, so there is nothing to drop and rebuild. Writing it needs the 005
+  T011 schema, which this batch may not touch. Un-tick stays until that lands.
+- **Reviews skipped:** the net diff is one test, docs and VERSION; the opus review pair would have
+  nothing to review.
+
+Not added to "Decisions waiting on Pavlo" — nothing here needs a decision only Pavlo can make.
