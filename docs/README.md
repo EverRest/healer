@@ -12,6 +12,7 @@
 | [workflows/investigation-pipeline.md](workflows/investigation-pipeline.md) | How the thirteen features compose, and what holds each seam |
 | [runbooks/runner-diagnosis.md](runbooks/runner-diagnosis.md) | Triaging a customer's runner without seeing their data |
 | [runbooks/raising-autonomy.md](runbooks/raising-autonomy.md) | The procedure for raising an autonomy ceiling, and what each refusal means |
+| [runbooks/provider-key-rotation.md](runbooks/provider-key-rotation.md) | Rotating a tenant's model-provider key without a gap, and what each failure means |
 | [security-posture.md](security-posture.md) | The procurement and security-review document; a consolidation of ADR 0001, ADR 0006 and the runner protocol |
 | [boundary-exceptions.md](boundary-exceptions.md) | The only form a boundary-rule exception takes — a recorded row, never an inline suppression (012 T077) |
 
