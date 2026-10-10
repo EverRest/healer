@@ -55,6 +55,18 @@ const RETENTION_BATCH = 500;
  *  outbox drain is `maintenance`'s one processor. */
 const CONSUMED: readonly QueueClass[] = ['maintenance', 'ingestion', 'scheduling'];
 
+/** What a log line may say about a failure: names and messages only. Redaction is by field path,
+ *  so a stack or a Prisma error object (which can embed query arguments) is not logged whole; an
+ *  `AggregateError`'s per-item causes are kept, since the expiry tick reports through them. */
+function describe(error: unknown): { err: string; causes?: string[] } {
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  if (!(error instanceof AggregateError)) return { err: message };
+  return {
+    err: message,
+    causes: error.errors.map((e) => (e instanceof Error ? e.name : typeof e)),
+  };
+}
+
 export function start(): { ready: Promise<void>; close: () => Promise<void> } {
   const config = loadConfig();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-worker' });
@@ -174,12 +186,12 @@ export function start(): { ready: Promise<void>; close: () => Promise<void> } {
     // a queue drains into nothing and the investigation simply never finishes.
     worker.on('failed', (job, error) => {
       // The error itself, not its message: an AggregateError's per-item causes live in `.errors`.
-      logger.error({ queue: worker.name, jobId: job?.id, err: error }, 'job failed');
+      logger.error({ queue: worker.name, jobId: job?.id, ...describe(error) }, 'job failed');
     });
     // BullMQ reports a failure to schedule the *next* iteration here and nowhere else; without a
     // listener the schedule stops with a bare console line.
     worker.on('error', (error) => {
-      logger.error({ queue: worker.name, err: error }, 'worker error');
+      logger.error({ queue: worker.name, ...describe(error) }, 'worker error');
     });
   }
 
@@ -223,7 +235,7 @@ if (process.argv[1]?.endsWith('main.js')) {
   handle.ready.catch((error: unknown) => {
     if (stopping) return; // closing the queues rejects a pending registration: not a failure
     createLogger({ level: loadConfig().LOG_LEVEL, serviceName: 'healer-worker' }).error(
-      { err: error },
+      describe(error),
       'tenant sweep registration failed',
     );
     process.exit(1);
