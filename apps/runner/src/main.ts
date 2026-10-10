@@ -26,6 +26,7 @@ import {
   dispatchDirectives,
   type DirectiveHandler,
 } from './directive-dispatcher.js';
+import { createAgentDirectiveHandler, DirectiveRefusedError } from './agent-directive-handler.js';
 import { DiagnosticsState } from './diagnostics-state.js';
 import { diagnosticsFilePath, pidFilePath } from './diagnostics-paths.js';
 
@@ -51,6 +52,27 @@ export function createLoggingDirectiveHandler(logger: Logger): DirectiveHandler 
   return (directive: ControlPlaneDirective) => {
     logger.info({ directiveKind: directive.kind }, 'directive received');
   };
+}
+
+/**
+ * The runner's real directive handler (012 T093): the agent gate in front of the logging handler.
+ * Wired fail-closed — no prompt-serving endpoint or agent runner exists yet, so an
+ * `agent_directive` that passes the capability gate is refused terminally as
+ * `agent_runner_unavailable` (QUESTIONS.md "012 T093-T095").
+ */
+export function createRunnerDirectiveHandler(
+  config: Pick<RunnerConfig, 'RUNNER_CAPABILITIES'>,
+  logger: Logger,
+): DirectiveHandler {
+  const unavailable = (): Promise<never> =>
+    Promise.reject(new DirectiveRefusedError('agent_runner_unavailable'));
+  return createAgentDirectiveHandler({
+    capabilities: config.RUNNER_CAPABILITIES,
+    logger,
+    next: createLoggingDirectiveHandler(logger),
+    fetchPrompt: unavailable,
+    runAgent: unavailable,
+  });
 }
 
 export interface HeartbeatCycleDeps {
@@ -250,7 +272,7 @@ export function start(): RunnerHandle {
   const presence = getRunnerConfigPresence();
   const logger = createLogger({ level: config.LOG_LEVEL, serviceName: 'healer-runner' });
   const seen = new BoundedSeenSet(config.RUNNER_DIRECTIVE_SEEN_SET_SIZE);
-  const handle = createLoggingDirectiveHandler(logger);
+  const handle = createRunnerDirectiveHandler(config, logger);
   const diagnostics = new DiagnosticsState();
   // A fresh, unguessable value per process start (012 T048 review) — the identity token a stale
   // pidfile's bare PID cannot provide on its own once that PID is reused by an unrelated process.

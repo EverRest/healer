@@ -10,6 +10,7 @@ import { pidFilePath } from './diagnostics-paths.js';
 import {
   buildRunnerDiagnosticsBundle,
   createLoggingDirectiveHandler,
+  createRunnerDirectiveHandler,
   runHeartbeatCycle,
   start,
   writeDiagnosticsFile,
@@ -50,6 +51,73 @@ describe('createLoggingDirectiveHandler (012 T051 — trivial handler, no real d
     handle({ kind: 'capability_query', requested: ['inference'] });
     expect(infoSpy).toHaveBeenCalledWith(
       expect.objectContaining({ directiveKind: 'capability_query' }),
+      expect.any(String),
+    );
+  });
+});
+
+describe('createRunnerDirectiveHandler (012 T093 — the agent gate is wired fail-closed)', () => {
+  it('refuses an agent_directive from a heartbeat response when inference is undeclared: logged, marked seen, never run', async () => {
+    const directive = {
+      id: 'a1',
+      directive: {
+        kind: 'agent_directive' as const,
+        agentKind: 'verifier' as const,
+        promptVersionId: 'pv1',
+        promptDigest: 'd1',
+        inputRefs: {},
+        budget: { tokens: 1, cost: 1, wallClockMs: 1 },
+        toolScope: [],
+      },
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ status: 'active', resolvedCapabilities: [], directives: [directive] }),
+      );
+    const logger = silentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const infoSpy = vi.spyOn(logger, 'info');
+    const seen = new BoundedSeenSet(5);
+    await runHeartbeatCycle({
+      config,
+      seen,
+      handle: createRunnerDirectiveHandler(config, logger),
+      logger,
+      diagnostics: new DiagnosticsState(),
+      fetchImpl,
+    });
+    expect(seen.hasSeen('a1')).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ refusalReason: 'inference_capability_missing' }),
+      expect.any(String),
+    );
+    expect(infoSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ directiveKind: 'agent_directive' }),
+      expect.any(String),
+    );
+  });
+
+  it('with inference declared, the unbuilt prompt fetch and agent runner refuse terminally (fail closed)', async () => {
+    const logger = silentLogger();
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const handle = createRunnerDirectiveHandler(
+      { ...config, RUNNER_CAPABILITIES: ['inference'] },
+      logger,
+    );
+    await Promise.resolve(
+      handle({
+          kind: 'agent_directive',
+          agentKind: 'verifier',
+          promptVersionId: 'pv1',
+          promptDigest: 'd1',
+          inputRefs: {},
+          budget: { tokens: 1, cost: 1, wallClockMs: 1 },
+          toolScope: [],
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ refusalReason: 'agent_runner_unavailable' }),
       expect.any(String),
     );
   });

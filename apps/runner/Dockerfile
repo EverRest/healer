@@ -5,7 +5,7 @@
 #
 # Build strategy: SCOPED, not whole-monorepo. `apps/runner` depends on exactly three workspace
 # packages (@healer/boundary-contract, @healer/prompts, @healer/shared — see apps/runner/package.json and
-# tsconfig.json's own `references`), neither of which touches Prisma. The root `pnpm run build`
+# tsconfig.json's own `references`), none of which touches Prisma. The root `pnpm run build`
 # script (`tsc --build tsconfig.json`) builds *every* package in the workspace, including
 # `packages/prisma-client`, which requires a generated Prisma client
 # (`link:../../prisma/generated/client`, from `pnpm run db-generate`) before it will typecheck —

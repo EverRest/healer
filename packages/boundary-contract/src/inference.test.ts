@@ -31,7 +31,7 @@ describe('directiveRefusal (012 T093, FR-046a, C-35, ADR 0010)', () => {
     expect(directiveRefusal(q, [])).toBeUndefined();
   });
 
-  it('rejects an agent_directive carrying a credential-like field (never a credential in a directive)', () => {
+  it('regression pin of the existing .strict() shape (not T093 evidence): a credential-like field is rejected', () => {
     for (const field of ['apiKey', 'providerCredential', 'secret', 'token']) {
       expect(ControlPlaneDirective.safeParse({ ...agent, [field]: 'sk-123' }).success).toBe(false);
     }
