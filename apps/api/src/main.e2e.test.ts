@@ -122,6 +122,7 @@ const noopDraftReview: DraftReviewRepository = {
   recordAuditEntry: () => Promise.reject(new Error('not implemented in this test')),
 };
 const noopAgentRuns: AgentRunRepository = {
+  databaseNow: () => Promise.resolve(new Date()),
   record: () => Promise.reject(new Error('not implemented in this test')),
 };
 const noopBoundaryRejections: BoundaryRejectionRepository = {

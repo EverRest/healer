@@ -8,6 +8,9 @@
 --    cannot hide a runner row, since a runner row names a `runner_instance_id` and the CHECK then
 --    refuses `control_plane`. The FK is RESTRICT: an `agent_run` is the tenant's spend, so deleting a
 --    runner registration must not delete or null the cost record (null would also violate the CHECK).
+--    The FK is composite `(tenant_id, runner_instance_id)` -> `runner_registration(tenant_id, id)`, so
+--    the database itself refuses attributing a row to ANOTHER tenant's runner (MATCH SIMPLE: it is not
+--    enforced while `runner_instance_id` is null, which the CHECK already ties to `control_plane`).
 --
 -- 2. `cost_provenance`: `reported` = a runner said so and nothing has been reconciled against provider
 --    usage (no provider usage source exists yet); `estimated` = a guess, which `check:budget-reconcile`
@@ -20,8 +23,14 @@
 -- 3. `report_id`: the runner-generated idempotency key of one report. A report delivered twice carries
 --    the same id and `(tenant_id, report_id)` makes the second a no-op instead of a double charge.
 --    Null for rows not written from a report; a runner-side row MUST have one (CHECK).
+-- 4. `agent_run_finished_decision_key`: a policy decision is landed by at most one FINISHED run — landing
+--    replaces the decision's open charge with the run's cost, so a second finished run for it would
+--    double-count. The writer refuses it first (as a policy-decision error); this is what holds under a race.
 CREATE TYPE "agent"."executed_in" AS ENUM ('control_plane', 'runner');
 CREATE TYPE "agent"."cost_provenance" AS ENUM ('reported', 'estimated');
+
+-- The target of the composite foreign key below: `id` is already unique, so this adds no restriction.
+CREATE UNIQUE INDEX "runner_registration_tenant_id_id_key" ON "runner"."runner_registration"("tenant_id", "id");
 
 ALTER TABLE "agent"."agent_run"
   ADD COLUMN "executed_in" "agent"."executed_in" NOT NULL DEFAULT 'control_plane',
@@ -32,11 +41,14 @@ ALTER TABLE "agent"."agent_run"
 ALTER TABLE "agent"."agent_run" ALTER COLUMN "cost_provenance" DROP DEFAULT;
 
 ALTER TABLE "agent"."agent_run"
-  ADD CONSTRAINT "agent_run_runner_instance_id_fkey" FOREIGN KEY ("runner_instance_id")
-    REFERENCES "runner"."runner_registration"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
+  ADD CONSTRAINT "agent_run_tenant_id_runner_instance_id_fkey" FOREIGN KEY ("tenant_id", "runner_instance_id")
+    REFERENCES "runner"."runner_registration"("tenant_id", "id") ON DELETE RESTRICT ON UPDATE CASCADE,
   ADD CONSTRAINT "agent_run_runner_iff_runner_instance"
     CHECK (("executed_in" = 'runner') = ("runner_instance_id" IS NOT NULL)),
   ADD CONSTRAINT "agent_run_runner_has_report_id"
     CHECK ("executed_in" <> 'runner' OR "report_id" IS NOT NULL);
 
 CREATE UNIQUE INDEX "agent_run_tenant_id_report_id_key" ON "agent"."agent_run"("tenant_id", "report_id");
+CREATE INDEX "agent_run_tenant_id_runner_instance_id_idx" ON "agent"."agent_run"("tenant_id", "runner_instance_id");
+CREATE UNIQUE INDEX "agent_run_finished_decision_key" ON "agent"."agent_run"("tenant_id", "policy_decision_id")
+  WHERE "policy_decision_id" IS NOT NULL AND "finished_at" IS NOT NULL;

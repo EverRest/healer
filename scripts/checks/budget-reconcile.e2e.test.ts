@@ -171,7 +171,12 @@ describe('check:budget-reconcile (002 T069)', () => {
 
   it('fails loudly on a finished run that recorded tokens but no cost, rather than pass on an estimate', async () => {
     const { tenantId } = await h.newTenant();
-    const id = await seedAgentRun(h.pg, { tenantId, cost: 0, startedAt: '2026-10-02T10:00:00Z' });
+    const id = await seedAgentRun(h.pg, {
+      tenantId,
+      cost: 0,
+      costProvenance: 'estimated',
+      startedAt: '2026-10-02T10:00:00Z',
+    });
     const violations = await findBudgetDiscrepancies(h.prisma, { asOf: AS_OF });
     expect(violations.some((v) => v.includes(id) && v.includes('not measured'))).toBe(true);
   });

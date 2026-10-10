@@ -125,7 +125,13 @@ export function findUnmeasuredCostRuns(runs) {
           '(012 FR-036); note a reported cost is itself not reconciled against provider usage',
       );
     }
-    if (r.finished && r.cost === 0 && r.inputTokens + r.outputTokens > 0) {
+    // Not for `reported`: a positive sub-micro cost legitimately rounds to 0.000000 in numeric(12,6).
+    if (
+      r.finished &&
+      r.costProvenance !== CostProvenance.reported &&
+      r.cost === 0 &&
+      r.inputTokens + r.outputTokens > 0
+    ) {
       out.push(
         `${where}: finished with ${r.inputTokens + r.outputTokens} tokens recorded but no cost — ` +
           'the cost was not measured (012 FR-036)',

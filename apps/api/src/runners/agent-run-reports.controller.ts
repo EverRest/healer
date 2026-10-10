@@ -11,20 +11,15 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { AgentRunReportEnvelope } from '@healer/boundary-contract';
+import { recordAgentRunReport, type AgentRunRepository } from '@healer/domain-policy';
 import {
-  AgentRunReferenceNotFoundError,
-  AgentRunReportConflictError,
-  recordAgentRunReport,
-  type AgentRunRepository,
-} from '@healer/domain-policy';
-import {
-  HealerError,
-  NotFoundError,
   TenantContext,
   TenantIsolationError,
+  createLogger,
   newCorrelationId,
   withCorrelation,
 } from '@healer/shared';
+import { refusalFor } from './agent-run-report-refusal.js';
 
 export const AGENT_RUN_REPOSITORY = Symbol('AGENT_RUN_REPOSITORY');
 
@@ -42,16 +37,43 @@ export const AGENT_RUN_REPOSITORY = Symbol('AGENT_RUN_REPOSITORY');
  */
 @Controller('runners')
 export class AgentRunReportsController {
+  // Every refusal is logged here (reportId, runner name, a closed reason code — never a payload
+  // field): a 409 or 422 is a runner that believes its spend was recorded and it was not.
+  protected logger: { warn(fields: object, message: string): void } = createLogger();
+
   constructor(@Inject(AGENT_RUN_REPOSITORY) private readonly agentRuns: AgentRunRepository) {}
 
-  // Same deliberate, TODO-flagged stub-auth pattern as every other controller in this app (001
-  // T019) — no credential is verified yet.
-  private resolveTenant(tenantIdHeader: string | undefined): TenantContext {
+  private refuse(
+    status: 400 | 404 | 409 | 422,
+    reason: string,
+    message: unknown,
+    runnerName?: string,
+    reportId?: string,
+  ): never {
+    this.logger.warn(
+      { status, reason, reportId, runnerName: runnerName?.slice(0, 200) },
+      'agent run report refused',
+    );
+    if (status === 404) throw new NotFoundException(message);
+    if (status === 409) throw new ConflictException(message);
+    if (status === 422) throw new UnprocessableEntityException(message);
+    throw new BadRequestException(message);
+  }
+
+  // TODO(012 T094, security): stub auth — the same deliberate stub as every other controller in this
+  // app (TODO(001 T019, security)); no credential is verified yet, so the tenant (and the runner
+  // name below) is whatever the caller says.
+  private resolveTenant(tenantIdHeader: string | undefined, runnerName?: string): TenantContext {
     try {
       return TenantContext.forTrustedInternalUse(tenantIdHeader ?? '');
     } catch (error) {
       if (error instanceof TenantIsolationError) {
-        throw new BadRequestException('X-Tenant-Id header is missing or not a valid tenant id');
+        this.refuse(
+          400,
+          'bad_tenant',
+          'X-Tenant-Id header is missing or not a valid tenant id',
+          runnerName,
+        );
       }
       throw error;
     }
@@ -65,14 +87,22 @@ export class AgentRunReportsController {
     @Headers('x-runner-name') runnerName?: string,
   ): Promise<{ id: string; created: boolean }> {
     return withCorrelation(newCorrelationId(), async () => {
-      const context = this.resolveTenant(tenantIdHeader);
+      const context = this.resolveTenant(tenantIdHeader, runnerName);
       if (runnerName === undefined || runnerName === '') {
-        throw new BadRequestException('X-Runner-Name header is required');
+        return this.refuse(400, 'missing_runner_name', 'X-Runner-Name header is required');
       }
       const parsed = AgentRunReportEnvelope.safeParse(body);
-      if (!parsed.success) throw new BadRequestException(parsed.error.flatten());
+      if (!parsed.success) {
+        const id = (body as { reportId?: unknown } | null)?.reportId;
+        return this.refuse(
+          400,
+          'bad_envelope',
+          parsed.error.flatten(),
+          runnerName,
+          typeof id === 'string' ? id.slice(0, 64) : undefined,
+        );
+      }
       const { reportId, report, correlationId, issueId, policyDecisionId, startedAt } = parsed.data;
-      const started = new Date(startedAt);
 
       try {
         const result = await recordAgentRunReport(this.agentRuns, context, {
@@ -90,20 +120,15 @@ export class AgentRunReportsController {
           cost: report.cost,
           toolCalls: report.toolCalls,
           outcome: report.outcome,
-          startedAt: started,
-          finishedAt: new Date(started.getTime() + Math.round(report.durationMs)),
+          startedAt: new Date(startedAt),
+          durationMs: report.durationMs,
         });
         response.status(result.created ? 201 : 200);
         return result;
       } catch (error) {
-        if (error instanceof NotFoundError) throw new NotFoundException(error.message);
-        if (error instanceof AgentRunReportConflictError) {
-          throw new ConflictException(error.message);
-        }
-        if (error instanceof AgentRunReferenceNotFoundError || error instanceof HealerError) {
-          throw new UnprocessableEntityException(error.message);
-        }
-        throw error;
+        const refusal = refusalFor(error);
+        if (refusal === null) throw error;
+        return this.refuse(refusal.status, refusal.reason, refusal.message, runnerName, reportId);
       }
     });
   }

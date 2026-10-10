@@ -88,6 +88,7 @@ const noopRunnerRegistrations: RunnerRegistrationRepository = {
   findByName: () => Promise.resolve(null),
 };
 const noopAgentRuns: AgentRunRepository = {
+  databaseNow: () => Promise.resolve(new Date()),
   record: () => Promise.reject(new Error('not implemented for contract generation')),
 };
 const noopBoundaryRejections: BoundaryRejectionRepository = {

@@ -263,6 +263,14 @@ Proposed, pending the owner's confirmation; see [ADR 0016](adr/0016-chat-channel
 | C-91 | **Proposed.** A chat post is classified by structure into a task or a finding. A task becomes a task line or issue after the allowlisted owner confirms a card; a finding enters 001 ingestion as a signal and is never an agent task | Keeps ADR 0011's "one task per pull request" and the constitution's classify-before-patching true for input that arrives as free text. Rejected: a post that directly starts an agent (chat text would be the only control on a model budget); treating bot findings as tasks (skips reproduction and classification). Relaxing the confirmation is a new decision |
 | C-92 | **Proposed.** The agent that runs inside `agent-task.yml` is the Claude Code GitHub Action, authenticated with the GitHub App token of 012 R-16 | 012 names no product on purpose; T089 cannot be built without one. The repository's `AGENTS.md`, `CLAUDE.md`, `.claude/rules` and speckit skills already target it. Swapping it later changes one workflow step, not a gate |
 
+## 012 T094 — `agent_run` from a runner report (2026-10-10)
+
+| ID | Decision | Consequence |
+|----|----------|-------------|
+| C-93 | `check:budget-reconcile` is **red on pre-migration `agent_run` rows by design**: migration `20261008000000` backfills every existing row to `cost_provenance = estimated` and the check refuses `estimated` on a finished run. History is not relabelled `reported`. Its reader is a person running `pnpm run check:budget-reconcile` by hand — it is **not** in `make ci` and nothing schedules it (wiring it into CI is recorded as waiting on Pavlo, QUESTIONS.md "012 T093-T095") | Nothing wrote `agent_run` in production before this migration, so the expected number of such rows is zero; a database that has some (a dev or staging database) shows them until they are adopted (relabelled by a human who knows where the cost came from) or removed. Relabelling them in the migration would claim a provenance nobody can vouch for |
+| C-94 | A report from a **revoked** runner is still recorded | The spend already happened and is real; refusing the report hides it from the budget and from support. Revocation stops the runner's *future* work (its credential), it does not un-spend. The runner is still resolved only inside the authenticated tenant's own registrations |
+| C-95 | Cost `reported` by a runner is stored as reported and labelled `reported`; there is no `measured` value until reconciliation against provider usage per tenant key (C-34) exists | No provider usage source exists, so any `measured` label would be a claim nothing can check — the failure the repository's "every guarantee names its reader" rule exists to prevent |
+
 ## Deliberately unset
 
 `false-fix rate`, `30-day revert rate`, `per-incident cost ceiling`, escalation attempt cap —

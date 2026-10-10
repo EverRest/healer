@@ -149,8 +149,10 @@ here, and an `audit_entry` reaches them through `agent_run_id`.
 
 Written by 012 T094 (migration `20261008000000`), the recording columns are:
 
-- `executed_in` and `runner_instance_id` (FK → `runner_registration`, `ON DELETE RESTRICT`: a row is the
-  tenant's spend, so a runner registration cannot be deleted from under it). `CHECK`
+- `executed_in` and `runner_instance_id` (composite FK `(tenant_id, runner_instance_id)` →
+  `runner_registration(tenant_id, id)`, so another tenant's runner cannot be named; `ON DELETE RESTRICT`: a
+  row is the tenant's spend, so a runner registration cannot be deleted from under it; indexed
+  `(tenant_id, runner_instance_id)`). `CHECK`
   `agent_run_runner_iff_runner_instance` — `executed_in = runner` **iff** `runner_instance_id` is set — makes
   the inconsistent row unrepresentable. `executed_in` defaults to `control_plane` (every pre-existing row
   was written there; the CHECK refuses a runner row that fell back to it).
@@ -162,6 +164,12 @@ Written by 012 T094 (migration `20261008000000`), the recording columns are:
 - `report_id` — the runner's idempotency key for one report, unique per tenant
   (`(tenant_id, report_id)`); `CHECK` `agent_run_runner_has_report_id` requires it on a runner-side row. A
   report delivered twice is stored once.
+- A partial unique `(tenant_id, policy_decision_id)` where the run is finished: a policy decision is landed
+  by at most one finished run (landing replaces its open charge with the run's cost; a second would double
+  count). The writer also refuses a decision that is another tenant's, not an `allow`, invalidated, bound to
+  another issue or to a workflow run of another correlation.
+- The reported `started_at` and the finish instant are bounded against the database clock by the writer
+  (the evaluation path's `MAX_EVALUATION_SKEW_MS`), because they select the budget window a run is charged to.
 
 The report's `decision_path_step_ids` and `duration_ms` are not stored as such: duration becomes
 `finished_at`; the step ids have no column yet (no reader exists).

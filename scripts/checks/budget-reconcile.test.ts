@@ -309,10 +309,14 @@ describe('findUnmeasuredCostRuns — fail loudly rather than pass on an estimate
   });
 
   it('a finished run that recorded tokens but no cost is unpriced — nothing measured it', () => {
-    const v = findUnmeasuredCostRuns([run({ cost: 0 })]);
-    expect(v).toHaveLength(1);
-    expect(v[0]).toMatch(/r1/);
-    expect(v[0]).toMatch(/tokens/);
+    const v = findUnmeasuredCostRuns([run({ cost: 0, costProvenance: 'estimated' })]);
+    expect(v.some((m) => /r1/.test(m) && /tokens/.test(m))).toBe(true);
+  });
+
+  it('a reported cost that rounded to 0.000000 is not accused of being unpriced', () => {
+    // The runner said a positive sub-micro cost; numeric(12,6) holds 0.000000. That is the column's
+    // precision, not a missing measurement, so the zero-cost rule is for non-reported provenance only.
+    expect(findUnmeasuredCostRuns([run({ cost: 0, costProvenance: 'reported' })])).toEqual([]);
   });
 
   it('a negative cost is not a measurement', () => {

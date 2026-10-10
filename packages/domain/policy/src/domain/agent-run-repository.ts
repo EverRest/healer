@@ -34,7 +34,9 @@ export interface AgentRunReportRecord {
   readonly correlationId: string;
   readonly issueId?: string;
   readonly policyDecisionId?: string;
-  readonly agentKind: 'investigator' | 'change' | 'verifier' | 'support' | 'test_author';
+  /** Strings here, cast to the database enums in infrastructure: the one authority for each list is
+   *  the Prisma enum, and `agent-run-closed-lists.test.ts` pins the envelope that feeds it. */
+  readonly agentKind: string;
   readonly modelId: string;
   readonly provider: string;
   readonly promptVersionId: string;
@@ -49,11 +51,15 @@ export interface AgentRunReportRecord {
 }
 
 export interface AgentRunRepository {
+  /** The database clock — what the reported instants are bounded against. */
+  databaseNow(): Promise<Date>;
   /**
    * Writes the row, or returns the one already written for `(tenantId, reportId)`. Throws
    * `NotFoundError('runner')` when `runnerName` is not registered under the tenant (a runner of
    * another tenant is indistinguishable from none), `AgentRunReferenceNotFoundError` for a prompt
-   * version, issue or allowed policy decision that does not resolve, and
+   * version, issue or policy decision that does not resolve or may not be landed by this report (not
+   * the tenant's, not an `allow`, invalidated, bound to another issue or workflow run, or already
+   * landed by a finished run — all the same message, so existence does not leak), and
    * `AgentRunReportConflictError` when the id was reused with different content.
    */
   record(input: TenantScoped<AgentRunReportRecord>): Promise<{ id: string; created: boolean }>;

@@ -302,6 +302,8 @@ model RunnerRegistration {
   agentRuns   AgentRun[]
 
   @@unique([tenantId, name])
+  /// The target of `agent_run`'s composite foreign key (T094); `id` alone is already unique.
+  @@unique([tenantId, id])
   @@index([tenantId, status])
   @@map("runner_registration")
   @@schema("runner")
@@ -376,9 +378,10 @@ model AgentRun {
   reportId         String?      @map("report_id") @db.Uuid
 
   promptVersion  PromptVersion       @relation(fields: [promptVersionId], references: [id], onDelete: Restrict)
-  runnerInstance RunnerRegistration? @relation(fields: [runnerInstanceId], references: [id], onDelete: Restrict)
+  runnerInstance RunnerRegistration? @relation(fields: [tenantId, runnerInstanceId], references: [tenantId, id], onDelete: Restrict)
 
   @@unique([tenantId, reportId])
+  @@index([tenantId, runnerInstanceId])
   @@index([tenantId, startedAt])
   @@index([correlationId])
   @@map("agent_run")

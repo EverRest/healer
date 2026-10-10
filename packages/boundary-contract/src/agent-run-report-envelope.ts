@@ -14,7 +14,7 @@ import { agentRunReport } from './shapes.js';
  * anything is dispatched.
  *
  * Closed lists, one authority each: `AGENT_RUN_PROVIDERS` restates the database's `provider_name`
- * enum (the authority — schema.prisma) and `agent-run-report-writer.test.ts` fails if they drift;
+ * enum (the authority — schema.prisma) and `apps/api/src/runners/agent-run-closed-lists.test.ts` fails if they drift;
  * `AGENT_RUN_OUTCOMES` and `AGENT_TOOL_CALL_OUTCOMES` are authoritative here, the column being text.
  */
 export const AGENT_RUN_PROVIDERS = ['anthropic', 'openai', 'bedrock', 'vertex'] as const;
@@ -25,11 +25,15 @@ export const AGENT_RUN_OUTCOMES = ['completed', 'failed', 'stopped'] as const;
 export const AGENT_TOOL_CALL_OUTCOMES = ['ok', 'error', 'denied'] as const;
 
 const MAX_INT4 = 2_147_483_647;
-/** `agent_run.cost` is numeric(12,6): 6 integer digits. A run beyond this is a defect to refuse. */
-export const MAX_REPORTED_COST = 999_999;
+/** The largest value `agent_run.cost` numeric(12,6) holds — the column is the authority and
+ *  `toCostDecimal` (domain-policy) restates it; the closed-lists test pins the two together. A value
+ *  that rounds past it at six decimals is refused by `toCostDecimal`, not here. */
+export const MAX_REPORTED_COST = 999_999.999999;
 const MAX_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
-const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,199}$/);
+// `_` is in the set on purpose: `read_file`, `mcp__x__y` are ordinary tool names, and a 400 here
+// drops the whole report — and its spend.
+const identifier = z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9_.:/@-]{0,199}$/);
 const uuid = z.string().uuid();
 
 const strictReport = agentRunReport.extend({
@@ -48,6 +52,8 @@ const strictReport = agentRunReport.extend({
       })
       .strict(),
   ),
+  // Validated so a free-text field cannot ride in, but NOT stored: `agent_run` has no column for
+  // it and nothing reads it yet (012 QUESTIONS.md T093-T095).
   decisionPathStepIds: z.array(identifier),
   outcome: z.enum(AGENT_RUN_OUTCOMES),
   durationMs: z.number().finite().nonnegative().max(MAX_DURATION_MS),

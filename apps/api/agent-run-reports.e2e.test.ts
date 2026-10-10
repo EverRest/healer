@@ -32,6 +32,7 @@ import { PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import { PrismaClient } from '@healer/prisma-client';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
 import { seedBase, seededPromptVersionId } from '../../test/budget-fixtures.js';
+import { AgentRunReportsController } from './src/runners/agent-run-reports.controller.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
 import { configureApiPrefix, createApiModule } from './src/main.js';
 
@@ -58,7 +59,7 @@ describe('POST /runners/agent-run-reports (012 T094)', () => {
   const body = (overrides: Record<string, unknown> = {}, report: Record<string, unknown> = {}) => ({
     reportId: randomUUID(),
     correlationId: randomUUID(),
-    startedAt: '2026-10-08T10:00:00.000Z',
+    startedAt: new Date(Date.now() - 2_000).toISOString(),
     report: {
       kind: 'agent_run_report',
       agentKind: 'change',
@@ -184,5 +185,41 @@ describe('POST /runners/agent-run-reports (012 T094)', () => {
     await post(TENANT_A, 'runner-a', { ...payload, report: { ...payload.report, cost: 9 } }).expect(
       409,
     );
+  });
+
+  describe('every refusal is logged with a closed reason and no payload field (review fix)', () => {
+    const logged: Record<string, unknown>[] = [];
+    beforeAll(() => {
+      const controller = app.get(AgentRunReportsController) as unknown as {
+        logger: { warn(fields: Record<string, unknown>, message: string): void };
+      };
+      controller.logger = { warn: (fields) => void logged.push(fields) };
+    });
+
+    it('400, 404, 409 and 422 each leave a warn with the reportId, runner and reason', async () => {
+      logged.length = 0;
+      const bad = body({}, { cost: -1 });
+      await post(TENANT_A, 'runner-a', bad).expect(400);
+      const other = body();
+      await post(TENANT_B, 'runner-a', other).expect(404);
+      const first = body();
+      await post(TENANT_A, 'runner-a', first).expect(201);
+      await post(TENANT_A, 'runner-a', {
+        ...first,
+        report: { ...first.report, cost: 9 },
+      }).expect(409);
+      const unknownPrompt = body({}, { promptVersionId: randomUUID() });
+      await post(TENANT_A, 'runner-a', unknownPrompt).expect(422);
+
+      expect(logged.map((l) => [l.status, l.reason, l.reportId])).toEqual([
+        [400, 'bad_envelope', bad.reportId],
+        [404, 'runner_not_found', other.reportId],
+        [409, 'report_conflict', first.reportId],
+        [422, 'reference_not_found', unknownPrompt.reportId],
+      ]);
+      expect(logged.every((l) => l.runnerName === 'runner-a')).toBe(true);
+      // never a payload field
+      expect(JSON.stringify(logged)).not.toMatch(/claude-sonnet|argumentDigest|inputTokens|cost/);
+    });
   });
 });

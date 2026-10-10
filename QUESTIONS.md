@@ -4497,3 +4497,49 @@ T094 only (T093 and T095 were other sessions' work). Migration `20261008000000_t
 reconciliation against provider usage and a `measured` provenance; storing `decisionPathStepIds`; a real
 runner credential on the ingress; changelog/VERSION entry (not added — release bookkeeping is the
 orchestrator's).
+
+### 012 T093-T095 — T094 review fixes (two opus reviews of 9e5ca8a)
+
+Edited migration `20261008000000` in place (it has not been pushed).
+
+1. **Reported instants are bounded** in `recordAgentRunReport` (not the controller), against the database
+   `now()`, with the evaluation path's own `MAX_EVALUATION_SKEW_MS` and `EvaluationInstantError`. **Decided
+   differently from the brief:** the *finish* instant is bounded both ways and the *start* only against the
+   future. Bounding the start both ways would refuse any run longer than the skew (5 min) and drop its spend;
+   the finish is what a prompt report pins, and `durationMs` is bounded at 7 days in the envelope. Residual: a
+   runner can still back-date a start by up to its duration (7 days max) — tighten the envelope's duration
+   ceiling if that matters. `finishedAt` is now computed in the command; the repository gained `databaseNow()`.
+2. **A landed policy decision** must be the tenant's, `allow`, not invalidated, `issue_id` IS NOT DISTINCT
+   FROM the report's, and (when it carries a workflow run) that run's `correlation_id` equals the report's;
+   and no finished run may already hold it. Every violation is the same 422 as a missing one. A redelivery of
+   the report that already landed it is answered before these checks. The race for one decision is held by a
+   new partial unique index `agent_run_finished_decision_key (tenant_id, policy_decision_id) WHERE finished`;
+   the loser is a `policy_decision` 422. Added in the same (unpushed) migration.
+3. **`isSameReport` compares every written column** (tool calls by name/digest/outcome tuples, instants by
+   epoch ms); one test per field.
+4. **Refusals are logged** (Pino warn: status, closed reason, reportId, runner name — no payload) and only
+   `AgentRunReferenceNotFoundError`, conflict, skew, runner-not-found and `VALIDATION`-coded errors are 4xx;
+   any other `HealerError` rethrows as a 5xx (`refusalFor`).
+5. **Composite FK** `(tenant_id, runner_instance_id) -> runner_registration(tenant_id, id)` (+ unique
+   `(tenant_id, id)` on `runner_registration`, which adds no restriction) and index
+   `(tenant_id, runner_instance_id)`. down.sql reverses them and carries the round-trip caveat: down-then-up
+   relabels `reported` rows `estimated`.
+6. **`check:budget-reconcile`** applies the zero-cost-with-tokens rule only to non-`reported` provenance (a
+   positive sub-micro cost rounds to 0.000000). Pre-migration rows stay `estimated` and the check is red on
+   them by design — docs/decisions.md C-93.
+7. **One authority:** envelope `MAX_REPORTED_COST = 999_999.999999` (the column's largest value), pinned to
+   `toCostDecimal` by the closed-lists test; a value that rounds past it is refused by `toCostDecimal` (422).
+   The agent-kind literal union is gone from the domain record (`string`, cast to the Prisma enum in
+   infrastructure), the envelope's list stays pinned to the enum by the closed-lists test. Envelope
+   identifiers accept `_`. `decisionPathStepIds` is validated, not stored (doc comment says so).
+8. **Docs:** docs/decisions.md C-93..C-95 (red-by-design check and its reader, revoked-runner reports are
+   recorded, no `measured`). `TODO(012 T094, security)` is on the controller's stub-auth line.
+9. **issue-deletion.e2e** did not finish in two earlier attempts under host load; see the final report for the
+   bounded rerun.
+
+**Waiting on Pavlo (added to the index):** wire `check:budget-reconcile` into `make ci` (and decide who runs it
+until then); it is run by hand today and is red on any pre-migration `estimated` row by design (C-93).
+
+## Decisions waiting on Pavlo — 012 T094 (index; detail in "012 T093-T095" above)
+
+1. Wire `check:budget-reconcile` into `make ci`? It is run by hand and not scheduled; it is red on pre-migration `estimated` `agent_run` rows by design (C-93), so wiring it needs those rows adopted or removed first.

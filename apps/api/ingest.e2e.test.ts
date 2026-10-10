@@ -62,6 +62,7 @@ import {
 } from '@healer/domain-architecture';
 import { configureApiPrefix, configureIngestBodyLimit, createApiModule } from './src/main.js';
 const noopAgentRuns: AgentRunRepository = {
+  databaseNow: () => Promise.resolve(new Date()),
   record: () => Promise.reject(new Error('not implemented in this test')),
 };
 const noopBoundaryRejections: BoundaryRejectionRepository = {

@@ -86,6 +86,16 @@ describe('AgentRunReportEnvelope (012 T094) — what a runner must say for the c
     expect(AgentRunReportEnvelope.safeParse(envelope({}, top)).success).toBe(false);
   });
 
+  it('accepts ordinary tool names with underscores, and the largest cost the column holds', () => {
+    const toolCalls = ['read_file', 'mcp__x__y'].map((name) => ({
+      name,
+      argumentDigest: DIGEST,
+      outcome: 'ok',
+    }));
+    expect(AgentRunReportEnvelope.safeParse(envelope({ toolCalls })).success).toBe(true);
+    expect(AgentRunReportEnvelope.safeParse(envelope({ cost: 999_999.999999 })).success).toBe(true);
+  });
+
   it('accepts every member of the closed provider and outcome lists', () => {
     for (const provider of AGENT_RUN_PROVIDERS) {
       expect(AgentRunReportEnvelope.safeParse(envelope({ provider })).success).toBe(true);
