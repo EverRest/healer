@@ -204,20 +204,30 @@ describe('PrismaIssueRepository (001 T012, FR-006)', () => {
       ]);
       const fulfilled = outcomes.filter((o) => o.status === 'fulfilled');
       const rejected = outcomes.filter((o) => o.status === 'rejected');
-      expect(fulfilled).toHaveLength(1);
-      expect(rejected).toHaveLength(1);
-      const reason = (rejected[0] as PromiseRejectedResult).reason;
-      expect(
-        reason instanceof ConcurrentModificationError ||
-          reason instanceof InvalidIssueTransitionError,
-      ).toBe(true);
+      // `investigating -> stale` is a legal edge, so when the calls do not overlap (a loaded host
+      // runs them back to back) both settling fulfilled is correct: two events in a chain. The
+      // invariant is that no two events share a `fromState` — never two commits off one state.
+      expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+      for (const r of rejected) {
+        const reason = (r as PromiseRejectedResult).reason;
+        expect(
+          reason instanceof ConcurrentModificationError ||
+            reason instanceof InvalidIssueTransitionError,
+        ).toBe(true);
+      }
 
       const events = await query(
         pg,
         `select count(*) from "issue"."issue_event"
          where issue_id = '${input.id}' and type = 'state_changed'`,
       );
-      expect(events).toBe('1');
+      expect(events).toBe(String(fulfilled.length));
+      const distinctFrom = await query(
+        pg,
+        `select count(distinct from_state) from "issue"."issue_event"
+         where issue_id = '${input.id}' and type = 'state_changed'`,
+      );
+      expect(distinctFrom).toBe(events);
     }));
 
   it('rejects creating an issue against a ruleset_version that was never published — the FK (001 T011)', () =>
