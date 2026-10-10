@@ -197,11 +197,11 @@ carries its provenance and a derived confidence (merge under a row lock, race pr
 `pg_stat_activity`), `GET /graph/nodes`, three continuous checks, and one model for any architecture:
 structural separations as edges, a single-authority vocabulary, `GetSystemContext` with no style
 discriminator, and a `gate-architecture-agnostic` that fails outside `packages/integrations/**`.
-Phase 3 (discovery and confirmation, T018–T035) is still on unmerged branches, so the new guarantees
-have their readers in continuous checks, not yet in a write path. Open decisions: `QUESTIONS.md`,
+Phase 3 (discovery and confirmation, T018–T035) has since landed on master (T029 deliberately unticked,
+see `tasks.md`), so those guarantees now have their write path. Open decisions: `QUESTIONS.md`,
 "Decisions waiting on Pavlo — 004", items 3–6.
 
-Next: **merge 004 phase 3** (discovery and confirmation, T018–T035 — built, on unmerged branches), then 004 phases 6–7 (blast radius, drift); and **002 phase 5** (reversible-action governance — blocked on 010's catalogue; phases 6–7 landed
+Next: 004 phases 6–7 (blast radius, drift; phase 3 is merged); and **002 phase 5** (reversible-action governance — blocked on 010's catalogue; phases 6–7 landed
 in 0.50.0) and the consumers phases 6–7 left unbuilt (T058b, T066b, the sweep/tick scheduler of C-90) and **a GitHub Actions CI workflow running `make ci` on push/PR** (needs its own ADR —
 the first CI/CD pipeline this repo will have). 012 phase 13
 (agent-driven development) still waits on user sign-off for its GitHub-account-level actions
