@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { DecisionInput } from './decision-input.js';
 import { evaluate } from './evaluate.js';
 import type { ResolvedRuleset, Rule } from './rule.js';
 import { buildDecisionInput } from './test-support/fixtures.js';
@@ -191,45 +192,68 @@ describe('evaluate — monotone restriction: steps 3-6 never turn DENY back into
     expect(decision.reasonCodes).not.toContain('BUDGET_EXHAUSTED');
   });
 
+  const bounds = { ratePerWindow: 100, cooldownSeconds: 0, attemptCap: 999 };
+  const cooled = (cooldown: Partial<DecisionInput['cooldown']>, b: Partial<typeof bounds>) =>
+    buildDecisionInput({
+      cooldown: {
+        recentAllowCount: 0,
+        windowSeconds: 60,
+        attemptCount: 0,
+        bounds: { ...bounds, ...b },
+        ...cooldown,
+      },
+    });
+
   it('cooldown: attempt cap reached downgrades ALLOW to DENY(ATTEMPT_CAP_REACHED)', () => {
-    const input = buildDecisionInput({
-      cooldown: { recentAllowCount: 0, windowSeconds: 60, attemptCount: 5 },
-    });
-    const ruleset = rulesetOf([allowRule], {
-      cooldownBounds: { ratePerWindow: 100, cooldownSeconds: 0, attemptCap: 5 },
-    });
-    const { decision } = evaluate(ruleset, input);
+    const { decision } = evaluate(
+      rulesetOf([allowRule]),
+      cooled({ attemptCount: 5 }, { attemptCap: 5 }),
+    );
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+    const below = evaluate(rulesetOf([allowRule]), cooled({ attemptCount: 4 }, { attemptCap: 5 }));
+    expect(below.decision.outcome).toBe('allow');
   });
 
   it('cooldown: rate limited downgrades ALLOW to DENY(RATE_LIMITED)', () => {
-    const input = buildDecisionInput({
-      cooldown: { recentAllowCount: 10, windowSeconds: 60, attemptCount: 0 },
-    });
-    const ruleset = rulesetOf([allowRule], {
-      cooldownBounds: { ratePerWindow: 10, cooldownSeconds: 0, attemptCap: 999 },
-    });
-    const { decision } = evaluate(ruleset, input);
+    const { decision } = evaluate(
+      rulesetOf([allowRule]),
+      cooled({ recentAllowCount: 10 }, { ratePerWindow: 10 }),
+    );
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('RATE_LIMITED');
+    const below = evaluate(
+      rulesetOf([allowRule]),
+      cooled({ recentAllowCount: 9 }, { ratePerWindow: 10 }),
+    );
+    expect(below.decision.outcome).toBe('allow');
   });
 
-  it('cooldown: not enough time since the last allow downgrades ALLOW to DENY(COOLDOWN)', () => {
-    const input = buildDecisionInput({
-      cooldown: { recentAllowCount: 1, windowSeconds: 5, attemptCount: 0 },
-    });
-    const ruleset = rulesetOf([allowRule], {
-      cooldownBounds: { ratePerWindow: 999, cooldownSeconds: 30, attemptCap: 999 },
-    });
-    const { decision } = evaluate(ruleset, input);
+  it('cooldown: too soon after the last allow downgrades ALLOW to DENY(COOLDOWN)', () => {
+    const { decision } = evaluate(
+      rulesetOf([allowRule]),
+      cooled({ secondsSinceLastAllow: 5 }, { cooldownSeconds: 30 }),
+    );
     expect(decision.outcome).toBe('deny');
     expect(decision.reasonCodes).toContain('COOLDOWN');
+    const exactly = evaluate(
+      rulesetOf([allowRule]),
+      cooled({ secondsSinceLastAllow: 30 }, { cooldownSeconds: 30 }),
+    );
+    expect(exactly.decision.outcome).toBe('allow');
+    // No counted allow at all: nothing to cool down from.
+    const none = evaluate(rulesetOf([allowRule]), cooled({}, { cooldownSeconds: 30 }));
+    expect(none.decision.outcome).toBe('allow');
   });
 
-  it('cooldown step is a no-op when the ruleset has no configured bounds', () => {
+  it('cooldown step is a no-op when the input carries no bounds', () => {
     const input = buildDecisionInput({
-      cooldown: { recentAllowCount: 999, windowSeconds: 0, attemptCount: 999 },
+      cooldown: {
+        recentAllowCount: 999,
+        windowSeconds: 0,
+        attemptCount: 999,
+        secondsSinceLastAllow: 0,
+      },
     });
     const { decision } = evaluate(rulesetOf([allowRule]), input);
     expect(decision.outcome).toBe('allow');

@@ -4708,3 +4708,72 @@ Phase 3 in tasks.md, not Phase 2, and are NOT in this batch (the tables exist; t
 - #27: the SET-able privileged-write bypass (affects every append-only table, not only 005).
 - #29: where the constraint↔grant tie is enforced (writer T030 plus reader T089, or a DB constraint).
 - #17: nothing marks a document `deleted_at_source` yet, so file renames stay in conflict.
+## 002 Phase 5 (T054, T055, T085) — judgment calls (rate limits)
+
+Built: `policy.action_limit` enforcement (FR-014), no schema.prisma change. Counts and bounds are
+resolved by the binder, overwrite the caller's `cooldown` group (as the budget group is overwritten)
+and are stored in `decision_input.cooldown` (C-82), so replay needs neither table. Migration
+`20261009000000_action_limit` adds CHECK constraints only (rate >= 1, window >= 1, cooldown >= 0,
+cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?`;
+`ResolvedRuleset.cooldownBounds` is gone; the "AMBIGUITY FOR T054" in `evaluate.ts` is resolved
+(`windowSeconds` is the counting window, `secondsSinceLastAllow` is the elapsed time).
+
+1. **Counted rows: live + consumed allows, not "consumed" only.** The spec (T054, R-13) says "count
+   of consumed ALLOW decisions". Counting only consumed ones lets N parallel proposals each get an
+   ALLOW before any is acted on (nothing consumes an allow today), so the limit would not limit. The
+   rule is `outcome = allow AND invalidated_reason IS NULL` (consumed and invalidated are mutually
+   exclusive, `policy_decision_terminal_xor`, so this is "consumed or still live"); an abandoned,
+   run-terminal or revoked allow stops counting. A refusal never counts. No upper bound on
+   `evaluated_at`, so a backdated caller instant cannot hide a later allow; `secondsSinceLastAllow`
+   is clamped at 0 for that case. **Needs Pavlo.**
+2. **Advisory lock instead of FOR UPDATE** (ADR 0015's pattern, a paragraph added there): no row is
+   guaranteed to exist (defaults), so there is nothing to lock. Key
+   `policy.action_limit:<tenant>:<action>:<target>:<fingerprint>`; budget lock first, limit lock
+   second. Contention fails retryably (`ActionLimitContentionError`, RATE_LIMITED/429).
+3. **Default bounds only for `reversible_remediation`** (`DEFAULT_REMEDIATION_ACTION_LIMIT`,
+   `packages/domain/policy/src/domain/action-limit.ts`): ratePerWindow 1, windowSeconds 3600,
+   cooldownSeconds 3600, attemptCap 3. PLACEHOLDERS (stage-0), nothing measured: one remediation of
+   a target per hour, three ever, then a human. FR-014 bounds repeated remediation; an all-time
+   attempt cap of 3 on investigation steps would break the product, so every other class with no
+   row is unlimited (counts still filled, `windowSeconds` = the default window). **Needs Pavlo: pick
+   real default bounds, and whether other classes get any.** Existing tests are unaffected (none
+   evaluate a remediation more than once against one target).
+4. **Null scope matching**: a null `target_ref` / `fingerprint` matches null to null, written as
+   `= $x` or `IS NULL` (not `IS NOT DISTINCT FROM`) so the `(tenant_id, action_key, target_ref,
+   fingerprint, evaluated_at)` index stays usable. `DecisionInput` requires both non-empty, so
+   today's callers never reach the null branch.
+5. **"Read in the same query as the rule set" is interpreted** as "resolved in the same evaluation
+   and baked into `decision_input`". The rule set (per-tenant, versioned) and `action_limit`
+   (mutable, per action) are different tables; one literal query would not make the refusal more
+   explicable than the stored input does.
+6. **No FK `action_limit.action_key -> policy_action`**: would need a schema.prisma change, owned by
+   another session. An `action_limit` row for an unregistered key is inert (never read).
+7. **No write endpoint for `action_limit`** (none in openapi; YAGNI). Rows are seeded by SQL, so a
+   limit change has no audit entry until a PUT exists.
+8. **`recentAllowCount` window** is `evaluated_at > asOf - window_seconds` (strict), so an allow
+   exactly one window old is out. `secondsSinceLastAllow` is floored, i.e. slightly stricter.
+9. **The brief's "consumed_at IS NOT NULL OR invalidated_reason IS NULL" is redundant** under the
+   xor constraint and equals `invalidated_reason IS NULL`; the shorter form is used (a mutation of
+   the longer one could not fail).
+10. **`ActionLimitContentionError` reuses the error code `RATE_LIMITED`**, like
+    `BudgetContentionError`, so logs mix "busy, retry" with limit refusals (which are decisions, not
+    errors, but share the reason code). A distinct code would mean changing the shared error list;
+    left as is.
+11. **For 010 (from the T084 batch):** the undo-only key `deployment.restore_dispatch_version` is
+    registered in `policy_action` as `reversible_remediation`. Only 010's proposal path (not built
+    yet) refuses proposing it; a tenant rule could ALLOW it on `/policy/evaluate`. 010's proposal
+    handler must refuse it.
+12. **Retried steps (review):** every decision bound to a run and state now carries a request key,
+    charged or not, and `recordLimited` returns the live allow already minted for it, so a job that
+    runs twice is not refused by its own allow. `releaseAbandonedCharges` is unchanged and touches
+    only rows with `reservedSpend > 0`. Counts are measured from `LEAST(evaluatedAt, now())`.
+
+## Decisions waiting on Pavlo — 002 Phase 5 (index; detail in the section above)
+
+1. **Pick real default bounds** for `reversible_remediation` actions with no `action_limit` row
+   (`DEFAULT_REMEDIATION_ACTION_LIMIT`: rate 1 / window 3600 s / cooldown 3600 s / attempt cap 3 —
+   all placeholders), and whether any other class should get a default.
+2. **Counted-row rule**: live + consumed allows (built) versus the spec's "consumed" only. The spec
+   wording makes the limit toothless until an executor consumes allows.
+3. A write path for `action_limit` (PUT + audit entry) — not built; who owns it, and does a limit
+   change need the same audit as a budget change (FR-020)?

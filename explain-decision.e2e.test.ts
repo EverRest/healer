@@ -8,6 +8,7 @@ import {
   publishRuleset,
   PrismaAutonomyEpochRepository,
   PrismaAutonomyGrantRepository,
+  PrismaActionLimitRepository,
   PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
@@ -199,6 +200,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
   let actions: PrismaPolicyActionRepository;
   let autonomyGrants: PrismaAutonomyGrantRepository;
   let budgets: PrismaBudgetRepository;
+  let actionLimits: PrismaActionLimitRepository;
 
   beforeAll(async () => {
     pg = await startPostgres();
@@ -211,6 +213,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     autonomyEpochs = new PrismaAutonomyEpochRepository(prisma);
     autonomyGrants = new PrismaAutonomyGrantRepository(prisma);
     budgets = new PrismaBudgetRepository(prisma, { maxEvaluationSkewMs: Number.POSITIVE_INFINITY });
+    actionLimits = new PrismaActionLimitRepository(prisma);
     actions = new PrismaPolicyActionRepository(prisma);
 
     // `policy_action` is global (batch 9 C1(b) made `actions` a required dependency of both
@@ -236,7 +239,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
 
     for (const { input } of MATRIX) {
       await withCorrelation('corr-explain', () =>
-        explainDecision({ rulesets, actions, autonomyGrants, budgets }, CONTEXT, {
+        explainDecision({ rulesets, actions, autonomyGrants, budgets, actionLimits }, CONTEXT, {
           decisionInput: input,
         }),
       );
@@ -250,7 +253,7 @@ describe('ExplainDecision — dry run writes nothing and matches EvaluateAndBind
     '$name: ExplainDecision and EvaluateAndBind agree on outcome, matched rules and reason codes (quickstart 31)',
     async ({ input }) => {
       const explained = await withCorrelation('corr-explain-cmp', () =>
-        explainDecision({ rulesets, actions, autonomyGrants, budgets }, CONTEXT, {
+        explainDecision({ rulesets, actions, autonomyGrants, budgets, actionLimits }, CONTEXT, {
           decisionInput: input,
         }),
       );

@@ -5,6 +5,7 @@ import type { ReadOnlyBudgetRepository } from '../../domain/budget-repository.js
 import type { Decision, EvaluationTrace } from '../../domain/evaluate.js';
 import type { PolicyActionRepository } from '../../domain/policy-action-repository.js';
 import type { ReadOnlyPolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
+import type { ReadOnlyActionLimitRepository } from '../../domain/action-limit.js';
 import { resolveRulesetAndEvaluate } from '../resolve-ruleset-and-evaluate.js';
 
 /**
@@ -33,6 +34,8 @@ export interface ExplainDecisionRepos {
   /** Read side only (T056): a dry run resolves the tenant's real, current budget figures — the
    *  same derived aggregate an enforcing evaluation reads — and charges nothing. */
   readonly budgets: ReadOnlyBudgetRepository;
+  /** Read side only (T054): the cooldown counts and bounds, unlocked — a dry run records nothing. */
+  readonly actionLimits: ReadOnlyActionLimitRepository;
 }
 
 export async function explainDecision(

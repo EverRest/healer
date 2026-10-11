@@ -1,4 +1,5 @@
 import { HealerError, type TenantScoped } from '@healer/shared';
+import type { ActionLimitQuery, CooldownGroup } from './action-limit.js';
 import type { DecisionInput } from './decision-input.js';
 import type { BudgetState, Decision } from './evaluate.js';
 
@@ -33,8 +34,8 @@ export interface NewRecordedDecision {
   readonly targetRef?: string;
   readonly fingerprint?: string;
   readonly binding: DecisionBinding;
-  /** Set for a decision that charges (declares a cost): the digest of the caller's request with
-   *  the resolved fields and the instant removed — the idempotency key of the charge (T060). */
+  /** The digest of the caller's request (charged or not) with
+   *  the resolved fields and the instant removed — the idempotency key of the step (T060, T054). */
   readonly requestKey?: string;
 }
 
@@ -117,6 +118,16 @@ export interface PolicyDecisionRepository {
   /** Persists the decision and publishes `PolicyDecisionRecorded` through the outbox, in one
    *  transaction (FR-001, FR-017). */
   record(where: TenantScoped<NewRecordedDecision>): Promise<RecordedDecision>;
+
+  /** `record` for a decision that is subject to an action limit (FR-014, T054): in one transaction,
+   *  under the scope's advisory lock, resolve the cooldown group, hand it to `build`, and insert
+   *  what `build` returns. Without the lock two concurrent proposals both count the same history
+   *  and both mint an ALLOW (READ COMMITTED does not stop a read-then-write). Wait bounded; past
+   *  it, `ActionLimitContentionError`. */
+  recordLimited(
+    where: TenantScoped<ActionLimitQuery>,
+    build: (cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
+  ): Promise<RecordedDecision>;
 
   /**
    * Single-use consumption (T023, hardened batch 9 C1(a)): checked in this order, atomically

@@ -1,4 +1,5 @@
 import { HealerError, type TenantScoped } from '@healer/shared';
+import type { ActionLimitQuery, CooldownGroup } from './action-limit.js';
 import type { NewAuditEntry } from './audit-entry.js';
 import type { BudgetPeriod } from './budget-bounds.js';
 import type { ScopeFigures } from './budget-figures.js';
@@ -112,10 +113,15 @@ export interface BudgetRepository extends ReadOnlyBudgetRepository {
    * state): a retry of the same step returns the live allowed decision already minted instead of
    * charging again. The lock wait is bounded; past it the call fails with `BudgetContentionError`
    * (retryable) rather than queueing a pooled connection behind everyone ahead of it.
+   *
+   * After the budget lock it takes the action-limit lock for `limit`'s scope and resolves the
+   * cooldown group in the same transaction (FR-014, T054). Lock order is always budget, then
+   * limit — never the reverse.
    */
   bindCharged(
     where: TenantScoped<BudgetQuery>,
-    decide: (budget: ResolvedBudget) => TenantScoped<NewRecordedDecision>,
+    limit: TenantScoped<ActionLimitQuery>,
+    decide: (budget: ResolvedBudget, cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
   ): Promise<{ readonly budget: ResolvedBudget; readonly decision: RecordedDecision }>;
 
   /** T064: writes the `budget_degradation` evidence record and the idempotency mark for a step,

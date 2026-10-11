@@ -18,10 +18,12 @@ import {
   type PolicyActionRepository,
   type PolicyRulesetRepository,
   type ReadOnlyAutonomyGrantRepository,
+  type ReadOnlyActionLimitRepository,
   type ReadOnlyBudgetRepository,
 } from '@healer/domain-policy';
 import {
   AUTONOMY_GRANT_REPOSITORY,
+  ACTION_LIMIT_REPOSITORY,
   BUDGET_REPOSITORY,
   resolveTenant,
   UUID_PATTERN,
@@ -48,6 +50,7 @@ export class PolicyEvaluationController {
     @Inject(AUTONOMY_GRANT_REPOSITORY)
     private readonly autonomyGrants: ReadOnlyAutonomyGrantRepository,
     @Inject(BUDGET_REPOSITORY) private readonly budgets: ReadOnlyBudgetRepository,
+    @Inject(ACTION_LIMIT_REPOSITORY) private readonly actionLimits: ReadOnlyActionLimitRepository,
   ) {}
 
   @Post('dry-run')
@@ -83,6 +86,7 @@ export class PolicyEvaluationController {
           actions: this.actions,
           autonomyGrants: this.autonomyGrants,
           budgets: this.budgets,
+          actionLimits: this.actionLimits,
         },
         context,
         {

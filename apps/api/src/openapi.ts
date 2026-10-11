@@ -17,6 +17,7 @@ import type {
   PolicyActionRepository,
   PolicyDecisionRepository,
   AgentRunRepository,
+  ReadOnlyActionLimitRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
 import {
@@ -73,8 +74,12 @@ const noopPolicyRulesets: PolicyRulesetRepository = {
   list: () => Promise.resolve([]),
   publish: () => Promise.reject(new Error('not implemented for contract generation')),
 };
+const noopActionLimits: ReadOnlyActionLimitRepository = {
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 const noopPolicyDecisions: PolicyDecisionRepository = {
   record: () => Promise.reject(new Error('not implemented for contract generation')),
+  recordLimited: () => Promise.reject(new Error('not implemented for contract generation')),
   consume: () => Promise.reject(new Error('not implemented for contract generation')),
   findById: () => Promise.resolve(null),
   list: () => Promise.resolve([]),
@@ -180,6 +185,7 @@ export async function buildOpenApiDocument(): Promise<OpenAPIObject> {
     noopDraftReview,
     noopBoundaryRejections,
     noopAgentRuns,
+    noopActionLimits,
   );
   const app = await NestFactory.create(ApiModule, { logger: false });
   configureApiPrefix(app);

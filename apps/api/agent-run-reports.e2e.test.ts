@@ -14,6 +14,7 @@ import {
 } from '@healer/domain-issues';
 import { PrismaEvidenceGraphRepository, PrismaEvidenceRepository } from '@healer/domain-evidence';
 import {
+  PrismaActionLimitRepository,
   PrismaAgentRunRepository,
   PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
@@ -133,6 +134,7 @@ describe('POST /runners/agent-run-reports (012 T094)', () => {
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
       new PrismaAgentRunRepository(prisma),
+      new PrismaActionLimitRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

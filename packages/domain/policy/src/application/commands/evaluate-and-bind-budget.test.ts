@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { EMPTY_COOLDOWN } from '../../domain/test-support/fake-budget-repository.js';
+import type { CooldownGroup } from '../../domain/action-limit.js';
 import { TenantContext, type TenantScoped } from '@healer/shared';
 import type { ResolvedBudget } from '../../domain/budget-repository.js';
 import type { PolicyAction } from '../../domain/policy-action-repository.js';
@@ -59,6 +61,12 @@ class RecordingDecisions implements PolicyDecisionRepository {
       ceilingApplied: where.decision.ceilingApplied,
       evaluatedAt: where.decision.evaluatedAt,
     };
+  }
+  async recordLimited(
+    _where: unknown,
+    build: (cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
+  ): Promise<RecordedDecision> {
+    return this.record(build(EMPTY_COOLDOWN));
   }
   async consume(): Promise<void> {}
   async findById(): Promise<null> {
@@ -224,7 +232,7 @@ describe('evaluateAndBind — budget resolution (T056, T060, T066)', () => {
       expect(result.autonomyEpoch).toBe(7n);
     });
 
-    it('a charged step carries a request key; a step that charges nothing does not', async () => {
+    it('every step carries a request key, charged or not (T054: a retry must be idempotent)', async () => {
       const { repos, decisions } = reposWith(roomyBudget());
       await evaluateAndBind(repos, CONTEXT, { decisionInput: buildDecisionInput() });
       await evaluateAndBind(repos, CONTEXT, {
@@ -233,7 +241,7 @@ describe('evaluateAndBind — budget resolution (T056, T060, T066)', () => {
         }),
       });
       expect(decisions.recorded[0]?.requestKey).toMatch(/^[0-9a-f]{64}$/);
-      expect(decisions.recorded[1]?.requestKey).toBeUndefined();
+      expect(decisions.recorded[1]?.requestKey).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it("the caller's statement that a proposal escalates survives resolution; the count does not", async () => {

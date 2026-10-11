@@ -18,6 +18,7 @@ import type {
   PolicyActionRepository,
   PolicyDecisionRepository,
   AgentRunRepository,
+  ReadOnlyActionLimitRepository,
   PolicyRulesetRepository,
 } from '@healer/domain-policy';
 import type {
@@ -65,8 +66,12 @@ const noopPolicyRulesets: PolicyRulesetRepository = {
   list: () => Promise.resolve([]),
   publish: () => Promise.reject(new Error('not implemented in this test')),
 };
+const noopActionLimits: ReadOnlyActionLimitRepository = {
+  resolve: () => Promise.reject(new Error('not implemented for contract generation')),
+};
 const noopPolicyDecisions: PolicyDecisionRepository = {
   record: () => Promise.reject(new Error('not implemented in this test')),
+  recordLimited: () => Promise.reject(new Error('not implemented in this test')),
   consume: () => Promise.reject(new Error('not implemented in this test')),
   findById: () => Promise.resolve(null),
   list: () => Promise.resolve([]),
@@ -169,6 +174,7 @@ describe('api boots and serves health/ready over HTTP', () => {
       noopDraftReview,
       noopBoundaryRejections,
       noopAgentRuns,
+      noopActionLimits,
     );
     app = await NestFactory.create(ApiModule, { logger: false });
     configureApiPrefix(app);

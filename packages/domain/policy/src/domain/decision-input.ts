@@ -25,6 +25,14 @@ const impactClosureSchema = z
   })
   .strict();
 
+const cooldownBoundsSchema = z
+  .object({
+    ratePerWindow: z.number().int().min(1),
+    cooldownSeconds: z.number().int().nonnegative(),
+    attemptCap: z.number().int().min(1),
+  })
+  .strict();
+
 export const decisionInputSchema = z
   .object({
     action: z
@@ -98,11 +106,21 @@ export const decisionInputSchema = z
         degradationStep: z.number().int().nonnegative(),
       })
       .strict(),
+    // Resolved by the binder from `policy_decision` history and `policy.action_limit`, never
+    // supplied (FR-014, C-82): the counts AND the bounds they are compared against are baked into
+    // the stored input so a replay needs no second lookup. Absent `bounds` = no limit applies.
     cooldown: z
       .object({
+        /** Counted allows with `evaluated_at > asOf - windowSeconds`. */
         recentAllowCount: z.number().int().nonnegative(),
+        /** The window `recentAllowCount` was counted over (the bound's `window_seconds`). */
         windowSeconds: z.number().int().nonnegative(),
+        /** Counted allows over all time. */
         attemptCount: z.number().int().nonnegative(),
+        /** Seconds from the latest counted allow to `min(evaluatedAt, database now)` — a future
+         *  instant cannot shorten the cooldown; absent when none exists. */
+        secondsSinceLastAllow: z.number().int().nonnegative().optional(),
+        bounds: cooldownBoundsSchema.optional(),
       })
       .strict(),
     escalation: z

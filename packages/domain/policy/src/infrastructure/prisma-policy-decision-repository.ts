@@ -1,6 +1,7 @@
 import { currentCorrelationId, NotFoundError, type TenantScoped } from '@healer/shared';
 import { Prisma, type PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction } from '@healer/events';
+import type { ActionLimitQuery, CooldownGroup } from '../domain/action-limit.js';
 import { policyDecisionRecordedEvent } from '../domain/events.js';
 import { decisionInputSchema, type DecisionInput } from '../domain/decision-input.js';
 import type { BudgetState } from '../domain/evaluate.js';
@@ -17,6 +18,7 @@ import {
   type StoredDecision,
 } from '../domain/policy-decision-repository.js';
 import type { ReasonCode } from '../domain/reason-code.js';
+import { lockActionLimit, readActionLimit } from './action-limit-counts.js';
 
 /** `record` publishes `PolicyDecisionRecorded` — a missing correlation scope is a caller error,
  *  the same rule every other outbox-publishing write in this package follows. */
@@ -27,6 +29,9 @@ export function assertCorrelated(): void {
     );
   }
 }
+
+// The lock wait is bounded (BUDGET_LOCK_WAIT_MS); this only has to cover it plus the work.
+const LIMITED_TX = { maxWait: 10_000, timeout: 30_000 } as const;
 
 interface DecisionRow {
   readonly id: string;
@@ -96,11 +101,11 @@ export async function recordDecisionInTx(
   return toDomain(created);
 }
 
-/** The live (not invalidated) allowed decision already minted for this charged step, if any — what
- *  makes `EvaluateAndBind` idempotent for a step that declares a cost (T060). Only a decision
+/** The live (not invalidated) allowed decision already minted for this step, if any — what
+ *  makes `EvaluateAndBind` idempotent (T060; charged or not since T054). Only a decision
  *  bound to a run *and* a state with a request key can be matched; anything else is a new
  *  request. The partial unique index in migration 20261003110000 backstops this lookup. */
-export async function findLiveChargedDecision(
+export async function findLiveStepDecision(
   tx: Prisma.TransactionClient,
   where: TenantScoped<NewRecordedDecision>,
 ): Promise<RecordedDecision | null> {
@@ -206,6 +211,21 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
   async record(where: TenantScoped<NewRecordedDecision>): Promise<RecordedDecision> {
     assertCorrelated();
     return this.prisma.$transaction((tx) => recordDecisionInTx(tx, where));
+  }
+
+  async recordLimited(
+    where: TenantScoped<ActionLimitQuery>,
+    build: (cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
+  ): Promise<RecordedDecision> {
+    assertCorrelated();
+    return this.prisma.$transaction(async (tx) => {
+      await lockActionLimit(tx, where);
+      const built = build(await readActionLimit(tx, where));
+      // A retry of the same step returns the live allow already minted, under the lock so two
+      // retries cannot both miss it; the retry is not counted against itself.
+      const existing = await findLiveStepDecision(tx, built);
+      return existing ?? (await recordDecisionInTx(tx, built));
+    }, LIMITED_TX);
   }
 
   async consume(where: TenantScoped<ConsumeDecisionInput>): Promise<void> {

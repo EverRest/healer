@@ -36,7 +36,7 @@ attempt to pass model-reported confidence: **the field does not exist** (FR-003,
 | reversibility | `reversible`, `hasTestedUndo` | derived from 010's catalogue (010 FR-002, FR-003) |
 | autonomy | resolved grant level for the scope | this feature |
 | budget | consumed, limit, `declaredMaxCost`, degradation step | **resolved, not supplied**: aggregated from 012 FR-036 for the issue and run the evaluation is bound to. The caller's `consumed`, `limit` and `degradationStep` are ignored and replaced; only `declaredMaxCost` is the step's own. Dry run and enforcing evaluation resolve the same figures when given the same binding |
-| cooldown | `recentAllowCount`, `windowSeconds`, `attemptCount` — counted over `policy_decision` history for `(actionKey, targetRef, fingerprint)` | this feature (R-13, C-11) |
+| cooldown | `recentAllowCount`, `windowSeconds`, `attemptCount`, `secondsSinceLastAllow?`, `bounds?` (`ratePerWindow`, `cooldownSeconds`, `attemptCap`) — counted over `policy_decision` history for `(actionKey, targetRef, fingerprint)` | **resolved, not supplied** (R-13, C-11, C-82): the whole group is overwritten and stored with the decision, so a replay needs neither `policy_decision` history nor `action_limit`. Counted rows are `outcome = allow` with `invalidated_reason` null (live or consumed), with no upper bound on `evaluated_at`. `recentAllowCount` counts those with `evaluated_at > evaluatedAt − windowSeconds`; `windowSeconds` is the bound's window (the product default's when no row); `attemptCount` counts all windows; `secondsSinceLastAllow` is absent when none exists. `bounds` come from `action_limit`, else the `reversible_remediation` product default, else are absent (= no limit) |
 | escalation | `attemptCount`, `escalating?` | `attemptCount` is **resolved from 012's `workflow_run`** — counted from that run's transitions into `escalating`, not stored as a counter here (FR-013); the caller's value is ignored. **Nothing produces that state yet** (006/008/012 own the escalation flow), so the count is 0 today. `escalating` is the calling feature's structural statement that *this proposal is an escalation*; absent means false |
 | time | `evaluatedAt` | the caller — the evaluator reads no clock, so a decision replays |
 
@@ -83,9 +83,12 @@ free-text field. Each of those is a route for collected content to reach a decis
 3. fold                   max over ALLOW < REQUIRE_APPROVAL < DENY, seeded DENY   (FR-005, FR-006)
 4. ceiling                min(level, ACTION_CEILING(actionClass, hasTestedUndo))  (FR-008)
 5. budget                 exhausted → DENY(BUDGET_EXHAUSTED); degraded annotates  (FR-011, FR-012)
-6. cooldown               rate, cooldown and attempt-cap counts over the window for
-                          (actionKey, targetRef, fingerprint) → DENY(RATE_LIMITED ·
-                          COOLDOWN · ATTEMPT_CAP_REACHED)                         (FR-014)
+6. cooldown               rate, cooldown and attempt-cap counts for (actionKey, targetRef,
+                          fingerprint) against cooldown.bounds → DENY(RATE_LIMITED ·
+                          COOLDOWN · ATTEMPT_CAP_REACHED); no bounds = no-op      (FR-014)
+                          RATE_LIMITED: recentAllowCount >= ratePerWindow;
+                          COOLDOWN: secondsSinceLastAllow < cooldownSeconds;
+                          ATTEMPT_CAP_REACHED: attemptCount >= attemptCap
 7. escalation cap         an *escalating* proposal whose escalation.attemptCount has reached
                           budget_limit.escalation_attempt_cap → DENY(ESCALATION_CAP_REACHED);
                           other proposals are never refused here, so a cap of 0 stops

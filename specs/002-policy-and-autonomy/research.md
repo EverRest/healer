@@ -269,7 +269,10 @@ here. This is recorded as a cross-spec item in the plan hand-off, not resolved u
 
 **Decision**: FR-014's rate limits, cooldowns and attempt caps are predicates over `policy_decision`
 history — the count of consumed `ALLOW` decisions for `(action_key, target_ref, fingerprint)` within
-the window — evaluated in the same query that loads the rule set. The bounds themselves are
+the window — evaluated in the same query that loads the rule set. (**As built, T054:** the counted
+rows are allows that are *not invalidated*, i.e. live or consumed, and the counts are resolved in the
+same evaluation and baked into `decision_input` rather than read in the rule-set query — pending
+Pavlo, QUESTIONS.md "002 Phase 5".) The bounds themselves are
 `policy.action_limit`; **no other feature stores or enforces them** (C-11), and 010 projects only the
 refusal reason codes it shows a human. Redis stays where 012 put it: HTTP throttling and transient
 state.

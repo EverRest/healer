@@ -25,6 +25,9 @@ export const AUTONOMY_GRANT_REPOSITORY = Symbol('AUTONOMY_GRANT_REPOSITORY');
  *  figures) and `BudgetsController` both inject it. */
 export const BUDGET_REPOSITORY = Symbol('BUDGET_REPOSITORY');
 
+/** The dry run's unlocked read of the cooldown counts and bounds (FR-014, T054). */
+export const ACTION_LIMIT_REPOSITORY = Symbol('ACTION_LIMIT_REPOSITORY');
+
 export const MAX_ACTOR_LENGTH = 128;
 
 /** `X-Actor-Id` — same caller-asserted stub convention as `IssuesController.close` (001 T057). */

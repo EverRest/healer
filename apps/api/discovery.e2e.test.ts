@@ -19,9 +19,11 @@ import {
   PrismaBudgetLimitRepository,
   PrismaBudgetRepository,
   PrismaPolicyActionRepository,
+  PrismaActionLimitRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
 } from '@healer/domain-policy';
+import { PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import {
   PrismaDiscoveryRepository,
   PrismaDraftReviewRepository,
@@ -165,6 +167,8 @@ describe('/discovery/* (004 T033, FR-009, FR-010, FR-011)', () => {
       new PrismaGraphReadRepository(prisma),
       new PrismaDiscoveryRepository(prisma),
       new PrismaDraftReviewRepository(prisma),
+      new PrismaBoundaryRejectionRepository(prisma),
+      new PrismaActionLimitRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

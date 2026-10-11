@@ -31,6 +31,7 @@ import {
   PrismaApprovalLifecycleRepository,
   PrismaAutonomyGrantRepository,
   PrismaBudgetLimitRepository,
+  PrismaActionLimitRepository,
   PrismaBudgetRepository,
   PrismaPolicyActionRepository,
   PrismaPolicyDecisionRepository,
@@ -40,6 +41,7 @@ import {
   type AutonomyGrantRepository,
   type BudgetLimitRepository,
   type BudgetRepository,
+  type ReadOnlyActionLimitRepository,
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type PolicyRulesetRepository,
@@ -100,6 +102,7 @@ import {
   BUDGET_REPOSITORY,
   BudgetsController,
 } from './policy/budgets.controller.js';
+import { ACTION_LIMIT_REPOSITORY } from './policy/policy-http.js';
 import {
   APPROVAL_LIFECYCLE_REPOSITORY,
   ApprovalsController,
@@ -168,6 +171,7 @@ export function createApiModule(
   draftReview: DraftReviewRepository,
   boundaryRejections: BoundaryRejectionRepository,
   agentRuns: AgentRunRepository,
+  actionLimits: ReadOnlyActionLimitRepository,
 ): Type<unknown> {
   @Module({
     controllers: [
@@ -209,6 +213,7 @@ export function createApiModule(
       { provide: DRAFT_REVIEW_REPOSITORY, useValue: draftReview },
       { provide: BOUNDARY_REJECTION_REPOSITORY, useValue: boundaryRejections },
       { provide: AGENT_RUN_REPOSITORY, useValue: agentRuns },
+      { provide: ACTION_LIMIT_REPOSITORY, useValue: actionLimits },
     ],
   })
   class ApiModule {}
@@ -253,6 +258,7 @@ export async function bootstrap(): Promise<void> {
     new PrismaDraftReviewRepository(prisma, characteristicVocabulary),
     new PrismaBoundaryRejectionRepository(prisma),
     new PrismaAgentRunRepository(prisma),
+    new PrismaActionLimitRepository(prisma),
   );
   const app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
   configureApiPrefix(app);

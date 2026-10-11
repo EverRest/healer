@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { currentCorrelationId, type TenantScoped } from '@healer/shared';
+import { currentCorrelationId, TenantIsolationError, type TenantScoped } from '@healer/shared';
 import type { Prisma, PrismaClient } from '@healer/prisma-client';
 import { enqueue, PrismaOutboxTransaction, type DomainEvent } from '@healer/events';
 import {
@@ -10,17 +10,20 @@ import {
   type MarkDegradationResult,
   type ResolvedBudget,
 } from '../domain/budget-repository.js';
-import { BUDGET_LOCK_WAIT_MS, MAX_EVALUATION_SKEW_MS } from '../domain/budget-bounds.js';
+import { MAX_EVALUATION_SKEW_MS } from '../domain/budget-bounds.js';
 import { EXHAUSTED_ENTRY } from '../domain/degradation.js';
 import { budgetDegradedEvent, budgetExhaustedEvent } from '../domain/events.js';
 import type {
   NewRecordedDecision,
   RecordedDecision,
 } from '../domain/policy-decision-repository.js';
+import type { ActionLimitQuery, CooldownGroup } from '../domain/action-limit.js';
+import { isLockTimeout, takeBoundedLock } from './advisory-lock.js';
+import { lockActionLimit, readActionLimit } from './action-limit-counts.js';
 import { resolveBudget } from './budget-aggregate.js';
 import {
   assertCorrelated,
-  findLiveChargedDecision,
+  findLiveStepDecision,
   recordDecisionInTx,
 } from './prisma-policy-decision-repository.js';
 
@@ -65,12 +68,6 @@ export function degradationEvidenceId(m: {
 // budget only has to cover that plus the work: a flood queues for seconds, never for a minute of
 // pooled connections.
 const CHARGE_TX = { maxWait: 10_000, timeout: 30_000 } as const;
-
-/** Postgres `lock_not_available` (55P03), however Prisma wraps it. */
-function isLockTimeout(error: unknown): boolean {
-  const text = `${(error as { message?: string })?.message ?? ''} ${JSON.stringify((error as { meta?: unknown })?.meta ?? '')}`;
-  return text.includes('55P03') || /lock timeout/i.test(text);
-}
 
 export interface PrismaBudgetRepositoryOptions {
   /** How far an enforcing evaluation's instant may be from the database clock; `Infinity`
@@ -120,19 +117,13 @@ export class PrismaBudgetRepository implements BudgetRepository {
 
   /** Takes the tenant's budget lock, waiting at most `BUDGET_LOCK_WAIT_MS`. */
   private async lock(tx: Prisma.TransactionClient, tenantId: string): Promise<void> {
-    await tx.$executeRaw`SELECT set_config('lock_timeout', ${`${BUDGET_LOCK_WAIT_MS}ms`}, true)`;
-    try {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${budgetLockKey(tenantId)}, 0))`;
-    } catch (error) {
-      if (isLockTimeout(error)) throw new BudgetContentionError();
-      throw error;
-    }
-    await tx.$executeRaw`SELECT set_config('lock_timeout', '0', true)`;
+    await takeBoundedLock(tx, budgetLockKey(tenantId), () => new BudgetContentionError());
   }
 
   async bindCharged(
     where: TenantScoped<BudgetQuery>,
-    decide: (budget: ResolvedBudget) => TenantScoped<NewRecordedDecision>,
+    limit: TenantScoped<ActionLimitQuery>,
+    decide: (budget: ResolvedBudget, cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
   ): Promise<{ readonly budget: ResolvedBudget; readonly decision: RecordedDecision }> {
     assertCorrelated();
     const result = await this.prisma
@@ -144,10 +135,13 @@ export class PrismaBudgetRepository implements BudgetRepository {
           { ...where, enforcing: true },
           this.maxSkewMs,
         );
-        const built = decide(budget);
+        // Budget lock first, limit lock second — never the reverse (no deadlock between charges).
+        if (limit.tenantId !== where.tenantId) throw new TenantIsolationError('limit scope tenant');
+        await lockActionLimit(tx, limit);
+        const built = decide(budget, await readActionLimit(tx, limit));
         // A retry of the same step: return the live allowed decision already minted instead of
         // charging a second time. Under the lock, so two retries cannot both miss it.
-        const existing = await findLiveChargedDecision(tx, built);
+        const existing = await findLiveStepDecision(tx, built);
         if (existing !== null) return { budget, decision: existing };
         return { budget, decision: await recordDecisionInTx(tx, built) };
       }, CHARGE_TX)

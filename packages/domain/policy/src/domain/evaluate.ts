@@ -3,7 +3,7 @@ import type { DecisionInput } from './decision-input.js';
 import { foldOutcomes, type Outcome } from './outcome-lattice.js';
 import { matchesConjunction } from './predicates/evaluate-predicate.js';
 import type { ReasonCode } from './reason-code.js';
-import type { CooldownBounds, ResolvedRuleset, Rule } from './rule.js';
+import type { ResolvedRuleset, Rule } from './rule.js';
 
 // T012: pure `evaluate(ruleset, input) → { decision, trace }`, the six ordered steps of
 // contracts/evaluation.md. No clock, no repository, no network, no model — every varying input
@@ -128,17 +128,13 @@ function applyEscalationCap(
   };
 }
 
-// Step 6: rate, cooldown and attempt-cap counts over the window for
-// `(actionKey, targetRef, fingerprint)` (FR-014, R-13, C-11). Bounds are resolved alongside the
-// rule set (`ResolvedRuleset.cooldownBounds`) — absent when the tenant has none configured for
-// this action, in which case there is nothing to enforce.
-function applyCooldown(
-  current: StepResult,
-  input: DecisionInput,
-  bounds: CooldownBounds | undefined,
-): StepResult {
-  if (!bounds) return current;
+// Step 6: rate, cooldown and attempt-cap counts for `(actionKey, targetRef, fingerprint)`
+// (FR-014, R-13, C-11). Counts and bounds are both inputs, resolved by the binder and stored with
+// the decision (C-82); absent `bounds` means no limit applies to this action, so nothing to enforce.
+function applyCooldown(current: StepResult, input: DecisionInput): StepResult {
   const { cooldown } = input;
+  const { bounds } = cooldown;
+  if (!bounds) return current;
   let result = current;
   if (cooldown.attemptCount >= bounds.attemptCap) {
     result = {
@@ -149,16 +145,10 @@ function applyCooldown(
   if (cooldown.recentAllowCount >= bounds.ratePerWindow) {
     result = { outcome: 'deny', reasonCodes: addReasonCode(result.reasonCodes, 'RATE_LIMITED') };
   }
-  // AMBIGUITY FOR T054 (flagged in the batch-3 report, not resolved here): this reads
-  // `windowSeconds` as "time elapsed since the most recent relevant decision," compared against
-  // `cooldownSeconds`. contracts/evaluation.md's field-group table and data-model.md's
-  // `action_limit.window_seconds` (paired with `rate_per_window`, used above for RATE_LIMITED)
-  // read more naturally as "the aggregation window `recentAllowCount` was counted over" — a
-  // different quantity from "seconds since the last allow." `DecisionInput.windowSeconds` is
-  // already committed as part of the closed schema (T006), so whichever meaning is correct has
-  // to be decided deliberately when T054 builds the real `action_limit` resolution, not inferred
-  // from this placeholder's behaviour.
-  if (cooldown.recentAllowCount >= 1 && cooldown.windowSeconds < bounds.cooldownSeconds) {
+  if (
+    cooldown.secondsSinceLastAllow !== undefined &&
+    cooldown.secondsSinceLastAllow < bounds.cooldownSeconds
+  ) {
     result = { outcome: 'deny', reasonCodes: addReasonCode(result.reasonCodes, 'COOLDOWN') };
   }
   return result;
@@ -195,7 +185,7 @@ export function evaluate(
   step = applyCeiling(step, input);
   const ceilingApplied = step.outcome !== foldResult;
   step = applyBudget(step, input);
-  step = applyCooldown(step, input, ruleset.cooldownBounds);
+  step = applyCooldown(step, input);
   step = applyEscalationCap(step, input, ruleset.escalationAttemptCap);
 
   const trace: EvaluationTrace = {

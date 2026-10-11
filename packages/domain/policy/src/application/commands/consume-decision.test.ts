@@ -17,6 +17,9 @@ class FakeDecisionRepo implements PolicyDecisionRepository {
   async record(): Promise<RecordedDecision> {
     throw new Error('not used by this test');
   }
+  async recordLimited(): Promise<RecordedDecision> {
+    throw new Error('not used by this test');
+  }
   async consume(where: TenantScoped<ConsumeDecisionInput>): Promise<void> {
     this.calls.push(where);
     this.effect();

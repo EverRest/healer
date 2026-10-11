@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { EMPTY_COOLDOWN } from '../../domain/test-support/fake-budget-repository.js';
+import type { CooldownGroup } from '../../domain/action-limit.js';
 import { TenantContext, type TenantScoped } from '@healer/shared';
 import type { ActionClass } from '../../domain/action-class.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
@@ -92,6 +94,12 @@ class FakeDecisionRepo implements PolicyDecisionRepository {
       evaluatedAt: where.decision.evaluatedAt,
     };
   }
+  async recordLimited(
+    _where: unknown,
+    build: (cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
+  ): Promise<RecordedDecision> {
+    return this.record(build(EMPTY_COOLDOWN));
+  }
   async consume(): Promise<void> {
     throw new Error('not used by this test');
   }
@@ -162,6 +170,32 @@ class FakeAutonomyGrantRepo implements ReadOnlyAutonomyGrantRepository {
     ];
   }
 }
+
+describe('evaluateAndBind overwrites the cooldown group (T054, C-82)', () => {
+  it("the stored decision_input carries the resolved group, never the caller's", async () => {
+    const decisions = new FakeDecisionRepo();
+    const callerClaim = {
+      recentAllowCount: 99,
+      windowSeconds: 1,
+      attemptCount: 99,
+      bounds: { ratePerWindow: 1, cooldownSeconds: 0, attemptCap: 1 },
+    };
+    await evaluateAndBind(
+      {
+        rulesets: new FakeRulesetRepo(published()),
+        decisions,
+        autonomyEpochs: new FakeEpochRepo(0n),
+        actions: new FakeActionRepo(),
+        autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeBudgetRepository(decisions),
+      },
+      CONTEXT,
+      { decisionInput: buildDecisionInput({ cooldown: callerClaim }) },
+    );
+    expect(decisions.recorded[0]?.decisionInput.cooldown).toEqual(EMPTY_COOLDOWN);
+    expect(decisions.recorded[0]?.decision.outcome).toBe('allow');
+  });
+});
 
 describe('evaluateAndBind (T021)', () => {
   it('resolves the current ruleset, evaluates, and persists the decision bound to the workflow run/state', async () => {

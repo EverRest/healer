@@ -19,6 +19,7 @@ import {
   PrismaBudgetRepository,
   PrismaAutonomyGrantRepository,
   PrismaPolicyActionRepository,
+  PrismaActionLimitRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
   SEED_POLICY_ACTIONS,
@@ -94,6 +95,7 @@ describe('/approvals (002 T075)', () => {
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
       new PrismaAgentRunRepository(prisma),
+      new PrismaActionLimitRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);

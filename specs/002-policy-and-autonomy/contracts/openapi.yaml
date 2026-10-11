@@ -222,14 +222,33 @@ components:
           type: object
           additionalProperties: false
           description: >
-            Counted over policy_decision history for (actionKey, targetRef, fingerprint) — this
-            feature is the only enforcement point for rate limits, cooldowns and attempt caps (C-11,
-            R-13).
+            Resolved, not supplied: the caller's values are replaced. Counted over policy_decision
+            history for (actionKey, targetRef, fingerprint) — this feature is the only enforcement
+            point for rate limits, cooldowns and attempt caps (C-11, R-13). Stored with the decision
+            so a replay needs no second lookup (C-82).
           properties:
-            recentAllowCount: { type: integer }
-            windowSeconds: { type: integer }
+            recentAllowCount:
+              {
+                type: integer,
+                description: 'counted allows with evaluated_at inside windowSeconds',
+              }
+            windowSeconds:
+              { type: integer, description: 'the window recentAllowCount was counted over' }
             attemptCount:
-              { type: integer, description: 'consumed ALLOW decisions for this scope, all windows' }
+              {
+                type: integer,
+                description: 'counted ALLOW decisions for this scope, all windows: consumed or still live (not invalidated)',
+              }
+            secondsSinceLastAllow:
+              { type: integer, description: 'absent when no counted allow exists for the scope' }
+            bounds:
+              type: object
+              additionalProperties: false
+              description: 'from action_limit, else the reversible_remediation product default; absent = no limit applies'
+              properties:
+                ratePerWindow: { type: integer, minimum: 1 }
+                cooldownSeconds: { type: integer, minimum: 0 }
+                attemptCap: { type: integer, minimum: 1 }
         escalation:
           type: object
           additionalProperties: false

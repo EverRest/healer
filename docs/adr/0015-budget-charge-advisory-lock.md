@@ -71,3 +71,15 @@ inside **one database transaction** that first takes `pg_advisory_xact_lock(hash
   charge for the same step must invalidate the old decision first.
 - − The lock is a pattern this repository did not have; a second use of it needs its own paragraph
   here, not a copy.
+
+## Also used by: action limits (T054, FR-014)
+
+The cooldown counts (rate, cooldown, attempt cap over `policy_decision` history) are the same
+read-then-write: two concurrent proposals for one `(action, target, fingerprint)` both count zero
+prior allows and both mint an ALLOW. The same pattern closes it — a transaction-scoped
+`pg_advisory_xact_lock` keyed `policy.action_limit:<tenant>:<action>:<target>:<fingerprint>`, taken
+for counts-then-insert, same bounded wait (`BUDGET_LOCK_WAIT_MS`), failing retryably with
+`ActionLimitContentionError`. An advisory lock rather than `FOR UPDATE` for the same reason as the
+budget: no row is guaranteed (an action without an `action_limit` row runs on the product default).
+The scope key is far narrower than the tenant, so unrelated actions and targets do not queue. A charge
+takes the budget lock and then the limit lock, never the reverse, so the two cannot deadlock.

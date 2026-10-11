@@ -14,6 +14,7 @@ import type {
   PublishedRuleset,
 } from '../../domain/policy-ruleset-repository.js';
 import {
+  FakeActionLimitRepository,
   FakeReadOnlyBudgetRepository,
   roomyBudget,
 } from '../../domain/test-support/fake-budget-repository.js';
@@ -148,6 +149,7 @@ describe('ExplainDecision — structural read-only guarantee (T026, R-08, quicks
       actions: new FakeActionRepo(),
       autonomyGrants: new FakeAutonomyGrantRepo(),
       budgets: new FakeReadOnlyBudgetRepository(),
+      actionLimits: new FakeActionLimitRepository(),
     };
     // @ts-expect-error — `rulesets` is `ReadOnlyPolicyRulesetRepository`; `publish` is not a
     // member of that type. If this stops being a type error (e.g. someone widens
@@ -178,6 +180,7 @@ describe('explainDecision resolves the same binding as the enforcing path (R-08,
     actions: new FakeActionRepo(),
     autonomyGrants: new FakeAutonomyGrantRepo(),
     budgets,
+    actionLimits: new FakeActionLimitRepository(),
   });
 
   it('names the issue and the run to the budget resolver, at the input instant', async () => {
@@ -221,6 +224,38 @@ describe('explainDecision resolves the same binding as the enforcing path (R-08,
   });
 });
 
+describe('explainDecision resolves the cooldown group, never trusts the caller (T054, C-82)', () => {
+  const limited = {
+    recentAllowCount: 1,
+    windowSeconds: 3600,
+    attemptCount: 1,
+    secondsSinceLastAllow: 10,
+    bounds: { ratePerWindow: 1, cooldownSeconds: 0, attemptCap: 5 },
+  };
+  const repos = (group: typeof limited | undefined) => ({
+    rulesets: new ReadOnlyFakeRulesetRepo(published()),
+    actions: new FakeActionRepo(),
+    autonomyGrants: new FakeAutonomyGrantRepo(),
+    budgets: new FakeReadOnlyBudgetRepository(),
+    actionLimits: new FakeActionLimitRepository(group),
+  });
+
+  it('the resolved counts and bounds decide: RATE_LIMITED', async () => {
+    const result = await explainDecision(repos(limited), CONTEXT, {
+      decisionInput: buildDecisionInput(),
+    });
+    expect(result.decision.outcome).toBe('deny');
+    expect(result.decision.reasonCodes).toContain('RATE_LIMITED');
+  });
+
+  it("the caller's own cooldown group is ignored", async () => {
+    const result = await explainDecision(repos(undefined), CONTEXT, {
+      decisionInput: buildDecisionInput({ cooldown: limited }),
+    });
+    expect(result.decision.outcome).toBe('allow');
+  });
+});
+
 describe('explainDecision (T024)', () => {
   it('returns the decision and trace for the current published ruleset, persisting nothing observable to this handler', async () => {
     const result = await explainDecision(
@@ -229,6 +264,7 @@ describe('explainDecision (T024)', () => {
         actions: new FakeActionRepo(),
         autonomyGrants: new FakeAutonomyGrantRepo(),
         budgets: new FakeReadOnlyBudgetRepository(),
+        actionLimits: new FakeActionLimitRepository(),
       },
       CONTEXT,
       { decisionInput: buildDecisionInput() },
@@ -246,6 +282,7 @@ describe('explainDecision (T024)', () => {
           actions: new FakeActionRepo(),
           autonomyGrants: new FakeAutonomyGrantRepo(),
           budgets: new FakeReadOnlyBudgetRepository(),
+          actionLimits: new FakeActionLimitRepository(),
         },
         CONTEXT,
         { decisionInput: buildDecisionInput() },
@@ -277,6 +314,7 @@ describe('explainDecision (T024)', () => {
         actions,
         autonomyGrants: new FakeAutonomyGrantRepo(),
         budgets: new FakeReadOnlyBudgetRepository(),
+        actionLimits: new FakeActionLimitRepository(),
       },
       CONTEXT,
       {
@@ -296,6 +334,7 @@ describe('explainDecision (T024)', () => {
           actions: new FakeActionRepo(new Map()),
           autonomyGrants: new FakeAutonomyGrantRepo(),
           budgets: new FakeReadOnlyBudgetRepository(),
+          actionLimits: new FakeActionLimitRepository(),
         },
         CONTEXT,
         {

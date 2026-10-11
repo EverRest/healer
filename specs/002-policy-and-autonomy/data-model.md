@@ -266,9 +266,28 @@ enforced and still be explicable a year later.
 `updated_at`, `updated_by`. PK `(tenant_id, action_key)`.
 
 Counts are **not** stored: they are aggregated from `policy_decision` history for
-`(action_key, target_ref, fingerprint)` in the same query that loads the rule set (R-13). Values are
+`(action_key, target_ref, fingerprint)` in one statement with this row (R-13), and the counts **and**
+the bounds are written into the decision's `decision_input.cooldown` (C-82). Values are
 placeholders until stage-0 supplies grounds for them; the *existence* of each bound is not
 configurable. 010 keeps no limit store and projects only the refusal reason codes.
+
+- **Constraints** (migration `20261009000000_action_limit`, literals mirrored by `ACTION_LIMIT_MINIMA`):
+  `rate_per_window >= 1`, `window_seconds >= 1`, `cooldown_seconds >= 0`, `attempt_cap >= 1`.
+  No write endpoint yet: rows are seeded by SQL.
+- **Counted rows**: `policy_decision` with the same tenant, `action_key`, `target_ref`, `fingerprint`
+  (null matches null), `outcome = allow` and `invalidated_reason IS NULL` — consumed or still-live
+  allows (so N parallel proposals cannot each mint an allow before any is consumed; an abandoned or
+  revoked one stops counting). No upper bound on `evaluated_at`. A refusal is not counted.
+- **Default bounds**: no row and class `reversible_remediation` → `DEFAULT_REMEDIATION_ACTION_LIMIT`
+  (rate 1 per 3600 s window, cooldown 3600 s, attempt cap 3 — placeholders, QUESTIONS.md "002 Phase 5").
+  Any other class with no row: no bounds.
+- **Idempotent retry**: a decision bound to a run and state carries a `request_key` whether or not it
+  charges; under the lock a retry returns the live allow already minted for it, uncounted against
+  itself. Counts are measured from `LEAST(evaluatedAt, now())` so a future instant cannot shorten
+  the window or cooldown.
+- **Serialisation**: counts-then-insert runs in one transaction under
+  `pg_advisory_xact_lock(hashtextextended('policy.action_limit:<tenant>:<action>:<target>:<fingerprint>', 0))`
+  (ADR 0015's pattern; bounded wait, `ActionLimitContentionError` → 429). Lock order: budget, then limit.
 
 Consumption is **not** stored. It is aggregated from `agent_run` and `workflow_run` (012 FR-036,
 R-10). Default values are placeholders until the stage-0 benchmark exists.

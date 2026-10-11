@@ -1,4 +1,9 @@
 import { HealerError, scope, type TenantContext } from '@healer/shared';
+import {
+  actionLimitQueryOf,
+  type CooldownGroup,
+  type ReadOnlyActionLimitRepository,
+} from '../domain/action-limit.js';
 import type { DecisionInput } from '../domain/decision-input.js';
 import { bindingBudget } from '../domain/budget-figures.js';
 import type {
@@ -70,6 +75,8 @@ export interface ResolveRulesetAndEvaluateRepos extends PrepareEvaluationRepos {
    *  the derived aggregate, never trusted from the caller — the same move `autonomyGrants` makes
    *  for `autonomy.level` and `actions` makes for `actionClass`. */
   readonly budgets: ReadOnlyBudgetRepository;
+  /** T054: the cooldown counts and bounds, resolved the same way (FR-014, C-82). */
+  readonly actionLimits: ReadOnlyActionLimitRepository;
 }
 
 /** What `evaluate()` needs once everything except the budget is resolved. The budget is the one
@@ -96,12 +103,15 @@ export interface EvaluatedWithBudget {
 export function evaluatePrepared(
   prepared: PreparedEvaluation,
   budget: ResolvedBudget,
+  cooldown: CooldownGroup,
 ): EvaluatedWithBudget {
   const declared = prepared.decisionInput.budget.declaredMaxCost;
   const bound = bindingBudget(budget.scopes, declared);
   const decisionInput: DecisionInput = {
     ...prepared.decisionInput,
     budget: bound.budget,
+    // Counts and bounds are resolved from history and `action_limit`, never the caller's (C-82).
+    cooldown,
     // The count is resolved from the run, never the caller's; whether the proposal *is* an
     // escalation is the caller's structural statement and is kept.
     escalation: {
@@ -173,7 +183,10 @@ export async function resolveRulesetAndEvaluate(
   const budget = await repos.budgets.resolve(
     scope(context, { ...binding, asOf: decisionInput.evaluatedAt }),
   );
-  return evaluatePrepared(prepared, budget);
+  const cooldown = await repos.actionLimits.resolve(
+    scope(context, actionLimitQueryOf(prepared.decisionInput)),
+  );
+  return evaluatePrepared(prepared, budget, cooldown);
 }
 
 /** Everything except the budget: registry class, grant level, current rule set. */

@@ -1901,3 +1901,19 @@ stage 1 is the `/investigate` MVP and `make intake-smoke`.
   `make knowledge-corpus` (the disagreement corpus).
 - Not built: phase 3 onwards (anchor resolution, adoption writers T025/T026, retrieval).
   Judgment calls and four decisions for Pavlo are in QUESTIONS.md, "005 Phases 1–2".
+
+## 0.59.0 — 2026-10-11
+
+**002 Phase 5 — rate limits, cooldowns and attempt caps** (T054, T055, T085, FR-014).
+
+- `DecisionInput.cooldown` is resolved, not supplied: the binder reads the `policy.action_limit`
+  row and the three counts (rate window, all-time attempts, seconds since the last counted allow)
+  in one statement, under a per-scope advisory lock in the transaction that records the decision
+  (ADR 0015, second use), and stores counts and bounds with the decision so a replay needs neither
+  table (C-82). A refusal (`RATE_LIMITED`, `COOLDOWN`, `ATTEMPT_CAP_REACHED`) is itself a recorded
+  decision. The dry run reads the same counts unlocked.
+- `reversible_remediation` actions with no `action_limit` row run on placeholder default bounds
+  (1 per hour, cooldown 1 h, 3 attempts); other classes are unlimited until a row exists.
+- `ResolvedRuleset.cooldownBounds` removed; `evaluate()` reads `input.cooldown.bounds`.
+- Migration `20261009000000_action_limit`: CHECK constraints only. No schema change, no write
+  endpoint yet. Judgment calls in QUESTIONS.md "002 Phase 5".

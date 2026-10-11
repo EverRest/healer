@@ -1,4 +1,9 @@
 import type { TenantScoped } from '@healer/shared';
+import type {
+  ActionLimitQuery,
+  CooldownGroup,
+  ReadOnlyActionLimitRepository,
+} from '../action-limit.js';
 import type { ScopeFigures } from '../budget-figures.js';
 import type {
   BudgetQuery,
@@ -14,6 +19,23 @@ import type {
   PolicyDecisionRepository,
   RecordedDecision,
 } from '../policy-decision-repository.js';
+
+/** No history, no bounds: what an action with nothing configured and nothing counted resolves to. */
+export const EMPTY_COOLDOWN: CooldownGroup = {
+  recentAllowCount: 0,
+  windowSeconds: 3600,
+  attemptCount: 0,
+};
+
+/** `ReadOnlyActionLimitRepository` returning a fixed group (default: nothing counted, no bounds). */
+export class FakeActionLimitRepository implements ReadOnlyActionLimitRepository {
+  readonly queries: ActionLimitQuery[] = [];
+  constructor(private readonly group: CooldownGroup = EMPTY_COOLDOWN) {}
+  async resolve(where: TenantScoped<ActionLimitQuery>): Promise<CooldownGroup> {
+    this.queries.push(where);
+    return this.group;
+  }
+}
 
 /** Generous figures matching `buildDecisionInput`'s own budget group (consumed 0 of 100), so a
  *  test that is not about budgets sees the same outcome whether the figures were resolved or
@@ -68,11 +90,12 @@ export class FakeBudgetRepository implements BudgetRepository {
 
   async bindCharged(
     where: TenantScoped<BudgetQuery>,
-    decide: (budget: ResolvedBudget) => TenantScoped<NewRecordedDecision>,
+    _limit: TenantScoped<ActionLimitQuery>,
+    decide: (budget: ResolvedBudget, cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,
   ): Promise<{ readonly budget: ResolvedBudget; readonly decision: RecordedDecision }> {
     this.queries.push(where);
     this.chargedBinds += 1;
-    const decision = await this.decisions.record(decide(this.budget));
+    const decision = await this.decisions.record(decide(this.budget, EMPTY_COOLDOWN));
     return { budget: this.budget, decision };
   }
 

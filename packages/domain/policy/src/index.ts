@@ -248,3 +248,13 @@ export {
   type RecordAgentRunReportInput,
 } from './application/commands/record-agent-run-report.js';
 export { PrismaAgentRunRepository } from './infrastructure/prisma-agent-run-repository.js';
+export {
+  ACTION_LIMIT_MINIMA,
+  actionLimitLockKey,
+  ActionLimitContentionError,
+  DEFAULT_REMEDIATION_ACTION_LIMIT,
+  type ActionLimitQuery,
+  type CooldownGroup,
+  type ReadOnlyActionLimitRepository,
+} from './domain/action-limit.js';
+export { PrismaActionLimitRepository } from './infrastructure/action-limit-counts.js';

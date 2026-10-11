@@ -43,7 +43,7 @@ is a guard nobody knows works.
 | 26 | Degradation order | cross the soft threshold under a 400-issue flood | declared order applied in order; one evidence record per step; spend inside the period budget (FR-012, SC-006) |
 | 27 | No budget at midnight | start a workflow at 23:55 and run past 00:00 | charges stay in the pinned period key; no fresh budget |
 | 28 | Escalation cap | fail repeatedly until the cap | escalation stops; evidence and ruled-out hypotheses handed to a human (FR-013) |
-| 29 | Cooldown | propose the same action against the same target repeatedly | refused after the limit, and the refusal is a recorded decision (FR-014, R-13) |
+| 29 | Cooldown | propose the same action against the same target repeatedly | refused after the limit, and the refusal is a recorded decision (FR-014, R-13) — `action-limit.e2e.test.ts` |
 | 30 | Dry run writes nothing | run the full dry-run matrix, diff the database | zero rows written anywhere (FR-019) |
 | 31 | Dry run is the same path | compare dry-run and enforcing traces for identical inputs | identical outcome, matched rules and reason codes (R-08, 011 FR-003) |
 | 32 | Simulator cannot mutate | search for a code path by which `ExplainDecision` could write | none exists — structural, not a flag (011 FR-004, FR-005) |

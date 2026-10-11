@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createLogger, scope, type TenantContext } from '@healer/shared';
+import { actionLimitQueryOf, type CooldownGroup } from '../../domain/action-limit.js';
 import type { DecisionInput } from '../../domain/decision-input.js';
 import type { AutonomyEpochRepository } from '../../domain/autonomy-epoch-repository.js';
 import type { ReadOnlyAutonomyGrantRepository } from '../../domain/autonomy-grant-repository.js';
@@ -95,11 +96,13 @@ export async function evaluateAndBind(
     enforcing: true,
   });
   const charges = input.decisionInput.budget.declaredMaxCost > 0;
-  const requestKey = charges ? computeRequestKey(input.decisionInput) : undefined;
+  // Every step that is bound to a run and state is idempotent, charged or not: a job that runs
+  // twice gets its own live allow back instead of being refused by it (FR-014, jobs may run twice).
+  const requestKey = computeRequestKey(input.decisionInput);
 
   let refusedBy: MarkDegradationCommand['refusedBy'];
-  const build = (budget: ResolvedBudget): NewRecordedDecision => {
-    const { decision, decisionInput, budgetState } = evaluatePrepared(prepared, budget);
+  const build = (budget: ResolvedBudget, cooldown: CooldownGroup): NewRecordedDecision => {
+    const { decision, decisionInput, budgetState } = evaluatePrepared(prepared, budget, cooldown);
     if (decision.reasonCodes.includes('BUDGET_EXHAUSTED') && budgetState.binding !== undefined) {
       const { scopeType, scopeId, periodKey } = budgetState.binding;
       refusedBy = { scopeType, scopeId, periodKey };
@@ -114,22 +117,29 @@ export async function evaluateAndBind(
       targetRef: decisionInput.target.targetRef,
       fingerprint: decisionInput.target.fingerprint,
       binding,
-      ...(requestKey !== undefined ? { requestKey } : {}),
+      requestKey,
     };
   };
 
   // A step that declares a cost is a *charge*: the decision's declared maximum has to be visible
   // to the next evaluation the moment this one commits, so resolve-and-persist run under one
   // serialization lock (T060). A step that declares none charges nothing and needs no lock.
+  // Either way the cooldown counts are read under the action-limit lock, in the transaction that
+  // inserts the decision (FR-014, T054): the lock is what makes the next proposal count this one.
+  const limitQuery = actionLimitQueryOf(prepared.decisionInput);
   let budget: ResolvedBudget;
   let recorded: RecordedDecision;
   if (charges) {
-    ({ budget, decision: recorded } = await repos.budgets.bindCharged(query, (b) =>
-      scope(context, build(b)),
+    ({ budget, decision: recorded } = await repos.budgets.bindCharged(
+      query,
+      scope(context, limitQuery),
+      (b, cooldown) => scope(context, build(b, cooldown)),
     ));
   } else {
     budget = await repos.budgets.resolve(query); // `enforcing`: instant, issue and run are checked
-    recorded = await repos.decisions.record(scope(context, build(budget)));
+    recorded = await repos.decisions.recordLimited(scope(context, limitQuery), (cooldown) =>
+      scope(context, build(budget, cooldown)),
+    );
   }
 
   // After the commit, so best-effort: the decision exists and a retry would charge again, which is

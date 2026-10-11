@@ -31,6 +31,7 @@ import {
   PrismaBudgetLimitRepository,
   PrismaBudgetRepository,
   PrismaPolicyActionRepository,
+  PrismaActionLimitRepository,
   PrismaPolicyDecisionRepository,
   PrismaPolicyRulesetRepository,
   type AutonomyGrantRepository,
@@ -40,6 +41,7 @@ import {
   type PolicyActionRepository,
   type PolicyDecisionRepository,
   type AgentRunRepository,
+  type ReadOnlyActionLimitRepository,
   type PolicyRulesetRepository,
   PrismaAgentRunRepository,
 } from '@healer/domain-policy';
@@ -162,6 +164,7 @@ describe('POST /ingest/signals (001 T019/T020/T021, FR-004, FR-019)', () => {
       new PrismaDraftReviewRepository(prisma),
       new PrismaBoundaryRejectionRepository(prisma),
       new PrismaAgentRunRepository(prisma),
+      new PrismaActionLimitRepository(prisma),
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
@@ -431,8 +434,12 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
     list: () => Promise.resolve([]),
     publish: () => Promise.reject(new Error('not implemented in this test')),
   };
+  const noopActionLimits: ReadOnlyActionLimitRepository = {
+    resolve: () => Promise.reject(new Error('not implemented in this test')),
+  };
   const noopPolicyDecisions: PolicyDecisionRepository = {
     record: () => Promise.reject(new Error('not implemented in this test')),
+    recordLimited: () => Promise.reject(new Error('not implemented in this test')),
     consume: () => Promise.reject(new Error('not implemented in this test')),
     findById: () => Promise.resolve(null),
     list: () => Promise.resolve([]),
@@ -493,6 +500,7 @@ describe('POST /ingest/signals when the signal queue is unreachable (001 T019, F
       noopDraftReview,
       noopBoundaryRejections,
       noopAgentRuns,
+      noopActionLimits,
     );
     app = await NestFactory.create<NestExpressApplication>(ApiModule, { logger: false });
     configureApiPrefix(app);
