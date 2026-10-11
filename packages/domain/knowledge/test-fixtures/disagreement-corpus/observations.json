@@ -1,0 +1,60 @@
+[
+  {
+    "kind": "trace_shape",
+    "spans": [
+      {
+        "name": "payment.authorize",
+        "durationMs": 120,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      },
+      {
+        "name": "payment.authorize.retry",
+        "durationMs": 110,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      },
+      {
+        "name": "payment.authorize.retry",
+        "durationMs": 115,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      },
+      {
+        "name": "payment.authorize.retry",
+        "durationMs": 105,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "OK"
+      }
+    ]
+  },
+  {
+    "kind": "trace_shape",
+    "spans": [
+      {
+        "name": "payment.authorize",
+        "durationMs": 130,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      },
+      {
+        "name": "payment.authorize.retry",
+        "durationMs": 100,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      },
+      {
+        "name": "payment.authorize.retry",
+        "durationMs": 112,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      },
+      {
+        "name": "payment.authorize.retry",
+        "durationMs": 108,
+        "serviceEdge": "checkout-api->payments",
+        "statusCode": "ERROR"
+      }
+    ]
+  }
+]

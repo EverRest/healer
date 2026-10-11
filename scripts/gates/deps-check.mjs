@@ -54,6 +54,8 @@ const ALLOWED_DEPENDENCIES = new Set([
   '@nestjs/swagger',
   'reflect-metadata',
   'rxjs',
+  // ADR 0017: YAML front-matter parser for the repository-markdown adapter (005).
+  'yaml',
 ]);
 
 // ADR 0004: the only Postgres extensions this project may depend on.

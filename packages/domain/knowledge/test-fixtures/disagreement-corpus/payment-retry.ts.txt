@@ -1,0 +1,2 @@
+// Fixture: stands in for a source file in the customer's repository (not compiled).
+export const MAX_PAYMENT_RETRIES = 3;

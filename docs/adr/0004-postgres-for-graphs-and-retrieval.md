@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-23
+Accepted — 2026-09-23. Amended 2026-10-10 (005 R-10): the full-text configuration is named below.
 
 ## Context
 
@@ -22,6 +22,26 @@ this ADR:
 |-----------|----------|
 | `vector` | semantic retrieval over knowledge sections (005), secondary index only |
 | `pg_trgm` | deterministic near-duplicate detection and the lexical retrieval path (005) |
+
+Built-in, not an extension (nothing to `CREATE EXTENSION`, listed so the dependency surface is complete):
+
+| Facility | Used for |
+|----------|----------|
+| full-text configuration `simple` | the `tsvector` lexical path over knowledge sections (005); language-neutral (no stemming, no stop words) and deterministic — the same text yields the same lexemes on every Postgres build and locale, so SC-005 ranking is reproducible |
+
+A language-specific configuration (`english`, …) is a new row here, because it changes what matches.
+
+### Amendment — 2026-10-10
+
+005 (knowledge and expected behaviour) names its Postgres facilities explicitly: extensions `vector`
+and `pg_trgm` (unchanged) and the built-in `simple` text-search configuration. No new extension is
+approved by this amendment.
+
+What enforces what: the dependency gate (`scripts/gates/deps-check.mjs`) checks only the
+`extensions = [...]` list in `schema.prisma` against `vector` and `pg_trgm`. It does **not** check
+the text-search configuration. Today the `simple` claim is enforced by review alone; asserting that
+the generated `search_vector` uses the `simple` regconfig belongs in the 005 schema migration test
+(owned by the schema work) and is a follow-up, not a gate that exists.
 
 ## Consequences
 

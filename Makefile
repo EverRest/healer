@@ -9,7 +9,7 @@
 
 .PHONY: help bootstrap graph-fixtures ci secret-scan deps-check db-check format-check lint typecheck build test-unit test-e2e \
 	contracts-check gate-data-model gate-isolation gate-undo gate-ceiling gate-evidence gate-architecture-agnostic gate-graph-confirm-capability gate-no-send \
-	gate-agent-scope gate-red-first gate-coverage-completeness check-confirmation-actors check-graph-fact-coverage runner-contract-test runner-compat-test runner-build runner-diagnostics runner-resolve-ref context-marker-corpus
+	gate-agent-scope gate-red-first gate-coverage-completeness check-confirmation-actors check-graph-fact-coverage runner-contract-test runner-compat-test runner-build runner-diagnostics runner-resolve-ref context-marker-corpus knowledge-corpus
 
 # T072: every target above gets one `## description` comment on its own line, and this parses
 # them — a target added without one is a target `make help` silently forgets, so the check is
@@ -142,6 +142,9 @@ runner-diagnostics: ## Signal a running runner (SIGUSR2) and print its support d
 
 context-marker-corpus: ## Seeded PII/secret markers through a full collection — 0 may cross the boundary (003 SC-001)
 	pnpm run context-marker-corpus
+
+knowledge-corpus: ## Disagreement corpus: wiki says 5, code says 3, traces say 3 (005 SC-006)
+	pnpm run knowledge-corpus
 
 # `make runner-resolve-ref <uuid>` — the uuid is read as a second goal, so it needs a no-op target
 # of its own; scoped to this goal so a mistyped target elsewhere still fails loudly.

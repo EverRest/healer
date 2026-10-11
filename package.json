@@ -51,7 +51,8 @@
     "runner-build": "node scripts/runner-build.mjs",
     "runner-diagnostics": "node scripts/runner-diagnostics.mjs",
     "runner-resolve-ref": "node scripts/runner-resolve-ref.mjs",
-    "context-marker-corpus": "vitest run --project unit apps/runner/src/collection/marker-corpus.test.ts"
+    "context-marker-corpus": "vitest run --project unit apps/runner/src/collection/marker-corpus.test.ts",
+    "knowledge-corpus": "vitest run --project unit packages/domain/knowledge/test-fixtures/disagreement-corpus/corpus.test.ts"
   },
   "devDependencies": {
     "@healer/domain-architecture": "workspace:*",

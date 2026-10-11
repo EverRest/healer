@@ -1,0 +1,10 @@
+{
+  "extends": "../../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "../dist/test-fixtures",
+    "types": ["node"]
+  },
+  "include": ["disagreement-corpus/index.ts", "disagreement-corpus/corpus.test.ts"],
+  "references": [{ "path": "../../../boundary-contract" }]
+}

@@ -224,7 +224,7 @@ Published through the transactional outbox (012 FR-031).
 | `ExpectationAdopted` | a human adoption writes a grant | `anchorGrantId`, `expectedBehaviorVersionId`, `actorRef` | 008, 011, dashboard |
 | `ExpectationAdoptionRevoked` | a human revokes | `anchorGrantId`, `revokedBy`, `reason` | 008, dashboard |
 | `KnowledgeDriftFindingRaised` | drift is raised | `findingId`, `kind`, `issueId`, `documentVersionId?`, `expectedBehaviorVersionId?` | 001, dashboard |
-| `DocumentVersionIngested` | a new version syncs | `documentId`, `versionNo`, `sourceModifiedAt` | dashboard |
+| `DocumentVersionIngested` | a new version syncs | `documentId`, `versionNo`, `sourceModifiedAt?` | dashboard |
 
 `ExpectationAdopted` is a fact about a human act, which is why it is the one event in this feature
 that changes what a verification may do.

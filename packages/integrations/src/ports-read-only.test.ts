@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import type { GitlabProjectReader } from './gitlab/gitlab-adapter.js';
 import type { KubernetesReader } from './kubernetes/kubernetes-adapter.js';
 import type { TraceReader } from './otel/otel-adapter.js';
+import type { GitlabMarkdownReader } from './gitlab/gitlab-markdown-source.js';
+import type {
+  GitHistoryReader,
+  IssueReader,
+  MergeRequestReader,
+} from './gitlab/gitlab-knowledge-readers.js';
+import type { TestNameReader } from './openapi/openapi-candidates.js';
 
 /**
  * Type-level proof that each discovery port is read-only by construction (FR-022): the interface
@@ -57,6 +64,47 @@ type TraceKeysExact = Equals<keyof TraceReader, 'serviceEdges'>;
 const gitlabKeysExact: GitlabKeysExact = true;
 const kubernetesKeysExact: KubernetesKeysExact = true;
 const traceKeysExact: TraceKeysExact = true;
+
+// 005 T003 knowledge ports: exact key sets, plus no key may contain a write/approval verb (R-02:
+// Healer's credential holds no approval permission, so approving must be unrepresentable).
+type WriteVerb =
+  'approve' | 'merge' | 'comment' | 'write' | 'create' | 'update' | 'delete' | 'push' | 'post';
+type NoWriteVerb<P> = [
+  Extract<Lowercase<keyof P & string>, `${string}${WriteVerb}${string}`>,
+] extends [never]
+  ? true
+  : false;
+// `listMergeRequests` contains "merge" as a noun: the verb check applies to everything except it.
+type NoWriteVerbExceptList<P> = NoWriteVerb<Omit<P, 'listMergeRequests'>>;
+
+const markdownKeysExact: Equals<
+  keyof GitlabMarkdownReader,
+  'resolveRef' | 'entryKind' | 'listTree' | 'readFile' | 'lastCommitTouching'
+> = true;
+const historyKeysExact: Equals<keyof GitHistoryReader, 'listCommits'> = true;
+const mrKeysExact: Equals<keyof MergeRequestReader, 'listMergeRequests'> = true;
+const issueKeysExact: Equals<keyof IssueReader, 'listIssues'> = true;
+const testNameKeysExact: Equals<keyof TestNameReader, 'listTestNames'> = true;
+const noWriteVerbs: [
+  NoWriteVerb<GitlabMarkdownReader>,
+  NoWriteVerb<GitHistoryReader>,
+  NoWriteVerbExceptList<MergeRequestReader>,
+  NoWriteVerb<IssueReader>,
+  NoWriteVerb<TestNameReader>,
+] = [true, true, true, true, true];
+
+describe('knowledge ports are read-only by construction (005 T003, R-02)', () => {
+  it('compiles only because each port exposes exactly its read methods and no write verb', () => {
+    expect([
+      markdownKeysExact,
+      historyKeysExact,
+      mrKeysExact,
+      issueKeysExact,
+      testNameKeysExact,
+    ]).toEqual([true, true, true, true, true]);
+    expect(noWriteVerbs).toEqual([true, true, true, true, true]);
+  });
+});
 
 describe('discovery ports are read-only by construction (A2, FR-022)', () => {
   it('compiles only because the stubs above satisfy the real read-only interfaces', () => {

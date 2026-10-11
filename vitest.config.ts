@@ -63,6 +63,9 @@ const HEAVY_E2E = [
   'budget-flood.e2e.test.ts',
   // 002 T080: p95 latency assertions against the plan's budgets; only meaningful on a quiet box.
   'policy-performance.e2e.test.ts',
+  // 005 T012: builds a 3 000-row HNSW index (1024-d, row-at-a-time inserts) next to a 20-row one;
+  // ~27 s alone, ~88 s when it shares the box with the rest of the e2e project.
+  'packages/domain/knowledge/src/infrastructure/section-embedding.e2e.test.ts',
 ];
 
 function e2eProject(name: string, include: string[], exclude: string[], groupOrder: number) {

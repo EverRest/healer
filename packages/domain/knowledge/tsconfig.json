@@ -4,5 +4,25 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  // e2e tests import the shared testcontainers helpers from the repo-root `test/`, which is outside
+  // this package's rootDir; vitest runs them, tsc does not build them.
+  "exclude": ["src/**/*.e2e.test.ts"],
+  "references": [
+    {
+      "path": "../evidence"
+    },
+    {
+      "path": "../../events"
+    },
+    {
+      "path": "../../prisma-client"
+    },
+    {
+      "path": "../../shared"
+    },
+    {
+      "path": "test-fixtures"
+    }
+  ]
 }

@@ -40,5 +40,6 @@ Agent instructions in [AGENTS.md](../AGENTS.md).
 | [0014](adr/0014-runner-artifact-build-and-versioning.md) | Runner artifact build, versioning and packaging |
 | [0015](adr/0015-budget-charge-advisory-lock.md) | The budget charge takes a bounded, transaction-scoped advisory lock |
 | [0016](adr/0016-chat-channel-agent-intake.md) | A chat channel is the intake and report surface for agents; confirmation by risk, Slack second — Proposed (revised 2026-10-11, 014) |
+| [0017](adr/0017-yaml-front-matter-parser.md) | `yaml` for repository front matter |
 | [0018](adr/0018-tenant-sweeps-bullmq-job-schedulers.md) | Per-tenant sweeps are BullMQ job schedulers that fan out one idempotent job per tenant |
 | [0019](adr/0019-oidc-identity-token-verification.md) | Verifying a host-issued OIDC identity token on the executor callback (`jose` recommended) — Proposed |

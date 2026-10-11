@@ -13,5 +13,16 @@
   },
   "scripts": {
     "typecheck": "tsc --build tsconfig.json"
+  },
+  "dependencies": {
+    "@healer/domain-evidence": "workspace:^",
+    "@healer/events": "workspace:*",
+    "@healer/prisma-client": "workspace:*",
+    "@healer/shared": "workspace:*",
+    "yaml": "^2.9.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@healer/boundary-contract": "workspace:*"
   }
 }

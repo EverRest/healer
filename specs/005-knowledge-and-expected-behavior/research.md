@@ -109,9 +109,11 @@ shape, it has a recall bug attached — a small tenant whose sections never ente
 gets zero results and no error. Partitioning makes the isolation structural and the recall
 per-tenant correct, at the cost of one index per tenant, which at tens of tenants is nothing.
 
-The same reasoning does not apply to the lexical and structural paths: those are ordinary btree and
-GIN scans where `tenant_id` leads the index, so the predicate is applied inside the scan rather than
-after it.
+The same reasoning does not apply to the lexical and structural paths. Structural lookups are btree
+scans where `tenant_id` leads the index. The lexical path is a GIN index on `search_vector` plus a
+btree led by `tenant_id` (a composite GIN with `tenant_id` leading needs `btree_gin`, which ADR 0004
+does not approve): GIN returns every match rather than a top-k, and ranking happens after the tenant
+predicate, so no tenant's results are crowded out by another's.
 
 **Alternatives**: one index with an over-fetch factor and a filter (still post-filtering, and the
 factor is a guess that fails for the tenant it fails for); a per-tenant table (a partition is the

@@ -148,9 +148,15 @@ describe('migrations', () => {
       ],
       { cwd: REPO_ROOT, encoding: 'utf8', env: { ...process.env, DATABASE_URL: pg.url } },
     );
+    // Prisma has no HNSW index type, so it would drop the one declared on the partitioned
+    // `section_embedding` parent (005 T011: it is what gives every tenant partition its HNSW index).
+    // This single named statement is the only index Prisma cannot model; nothing else is excused.
     const statements = output
       .split('\n')
-      .filter((line) => line.trim() && !line.trim().startsWith('--'));
+      .filter((line) => line.trim() && !line.trim().startsWith('--'))
+      .filter(
+        (line) => line.trim() !== 'DROP INDEX "knowledge"."section_embedding_embedding_hnsw_idx";',
+      );
     expect(statements).toEqual([]);
   });
 
@@ -216,7 +222,7 @@ describe('migrations', () => {
       pg,
       `select coalesce(string_agg(c.relname, ','), '') from pg_class c
        join pg_namespace n on n.oid = c.relnamespace
-       where c.relkind = 'r' and n.nspname in ('workflow','prompt','tenant','runner','agent','architecture','context')`,
+       where c.relkind = 'r' and n.nspname in ('workflow','prompt','tenant','runner','agent','architecture','context','knowledge')`,
     );
     expect(remaining).toBe('');
 
@@ -233,6 +239,10 @@ describe('migrations', () => {
     expect(architectureSchemaStillExists).toBe('0');
     // Same for "context" (003): its down.sql drops its own schema.
     expect(await query(pg, `select count(*) from pg_namespace where nspname = 'context'`)).toBe(
+      '0',
+    );
+    // Same for "knowledge" (005): its down.sql drops its own schema.
+    expect(await query(pg, `select count(*) from pg_namespace where nspname = 'knowledge'`)).toBe(
       '0',
     );
   });

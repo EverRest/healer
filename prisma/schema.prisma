@@ -14,7 +14,7 @@ datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
   extensions = [vector, pg_trgm]
-  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events", "architecture", "policy", "context"]
+  schemas    = ["workflow", "prompt", "tenant", "runner", "agent", "issue", "evidence", "audit", "events", "architecture", "policy", "context", "knowledge"]
 }
 
 // ─────────────────────────────── workflow execution ───────────────────────────────
@@ -2124,4 +2124,396 @@ model BoundaryRejection {
   @@index([tenantId, receivedAt])
   @@map("boundary_rejection")
   @@schema("context")
+}
+
+// ──────────────── 005 knowledge and expected behaviour (schema `knowledge`) ────────────────
+// data-model.md. Cross-feature references (`component_node_id`, `feature_node_id`,
+// `seeding_session_id`) carry no FK on purpose: those tables belong to 004 / a later phase and are
+// referenced, never redefined. `current_version_id` FKs are DEFERRABLE INITIALLY DEFERRED in the
+// migration (parent and first version are inserted together); Prisma cannot express that.
+
+enum KnowledgeSourceKind {
+  repository_markdown
+  git_history
+  merge_request
+  ticket
+  incident_history
+  openapi
+  test_names
+  runbook
+  postmortem
+  hosted_wiki
+
+  @@map("knowledge_source_kind")
+  @@schema("knowledge")
+}
+
+enum KnowledgeConnectionState {
+  connected
+  disconnected
+  error
+
+  @@map("knowledge_connection_state")
+  @@schema("knowledge")
+}
+
+enum KnowledgeSyncState {
+  idle
+  syncing
+  failed
+
+  @@map("knowledge_sync_state")
+  @@schema("knowledge")
+}
+
+enum KnowledgeDocumentClass {
+  expectation
+  runbook
+  postmortem
+  design_doc
+  readme
+  ticket
+  merge_request
+  api_description
+  test_manifest
+
+  @@map("knowledge_document_class")
+  @@schema("knowledge")
+}
+
+/// Documents and constraints (FR-007): three values. An expected-behaviour version has only the
+/// first two (`ExpectationProvenance`) — adoption is a grant, not a property of the version.
+enum KnowledgeProvenance {
+  human_authored
+  machine_generated
+  machine_generated_adopted
+
+  @@map("knowledge_provenance")
+  @@schema("knowledge")
+}
+
+enum ExpectationProvenance {
+  human_authored
+  machine_generated
+
+  @@map("expectation_provenance")
+  @@schema("knowledge")
+}
+
+enum KnowledgeAvailability {
+  available
+  unavailable
+  deleted_at_source
+
+  @@map("knowledge_availability")
+  @@schema("knowledge")
+}
+
+enum ExpectedBehaviorState {
+  draft
+  adopted
+  superseded
+  retired
+
+  @@map("expected_behavior_state")
+  @@schema("knowledge")
+}
+
+enum DuplicateMethod {
+  content_hash
+  trigram
+
+  @@map("duplicate_method")
+  @@schema("knowledge")
+}
+
+enum AdoptionActorType {
+  human
+
+  @@map("adoption_actor_type")
+  @@schema("knowledge")
+}
+
+enum ConstraintScopeKind {
+  feature
+  component
+  expected_behavior
+
+  @@map("constraint_scope_kind")
+  @@schema("knowledge")
+}
+
+enum ConstraintValueType {
+  int
+  decimal
+  bool
+  duration
+  string
+  enum
+
+  @@map("constraint_value_type")
+  @@schema("knowledge")
+}
+
+/// `implemented = false` is the visible gap for a declared-but-unbuilt kind (C-06). The migration's
+/// CHECK forbids `hosted_wiki` with `implemented = true`; there is no default, so a source row must
+/// state it.
+model KnowledgeSource {
+  id                   String                   @id @db.Uuid
+  tenantId             String                   @map("tenant_id") @db.Uuid
+  kind                 KnowledgeSourceKind
+  adapterKey           String                   @map("adapter_key")
+  connectionState      KnowledgeConnectionState @map("connection_state")
+  syncState            KnowledgeSyncState       @map("sync_state")
+  lastSuccessfulSyncAt DateTime?                @map("last_successful_sync_at") @db.Timestamptz(6)
+  documentClasses      String[]                 @map("document_classes")
+  implemented          Boolean
+
+  documents KnowledgeDocument[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, kind])
+  @@map("knowledge_source")
+  @@schema("knowledge")
+}
+
+model KnowledgeDocument {
+  id               String                 @id @db.Uuid
+  tenantId         String                 @map("tenant_id") @db.Uuid
+  sourceId         String                 @map("source_id") @db.Uuid
+  externalRef      String                 @map("external_ref")
+  title            String
+  documentClass    KnowledgeDocumentClass @map("document_class")
+  provenance       KnowledgeProvenance
+  currentVersionId String                 @map("current_version_id") @db.Uuid
+  duplicateGroupId String?                @map("duplicate_group_id") @db.Uuid
+  /// `architecture.graph_node` (004) — never a service name. No FK: referenced, not owned.
+  componentNodeId  String?                @map("component_node_id") @db.Uuid
+  availability     KnowledgeAvailability
+  sourceModifiedAt DateTime?              @map("source_modified_at") @db.Timestamptz(6)
+  lastSyncedAt     DateTime?              @map("last_synced_at") @db.Timestamptz(6)
+  lastVerifiedAt   DateTime?              @map("last_verified_at") @db.Timestamptz(6)
+  /// The named human owner every generated draft must have (FR-021, D-23).
+  ownerRef         String?                @map("owner_ref")
+
+  source         KnowledgeSource   @relation(fields: [sourceId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  currentVersion DocumentVersion   @relation("DocumentCurrentVersion", fields: [currentVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  duplicateGroup DuplicateGroup?   @relation("DuplicateGroupMembers", fields: [duplicateGroupId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  versions       DocumentVersion[] @relation("DocumentVersions")
+  canonicalOf    DuplicateGroup[]  @relation("DuplicateGroupCanonical")
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, sourceId, externalRef])
+  @@index([tenantId, documentClass])
+  @@index([tenantId, componentNodeId])
+  @@map("knowledge_document")
+  @@schema("knowledge")
+}
+
+/// Append-only: UPDATE/DELETE/TRUNCATE rejected by trigger (migration 20261006010000).
+model DocumentVersion {
+  id               String    @id @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  documentId       String    @map("document_id") @db.Uuid
+  versionNo        Int       @map("version_no")
+  contentHash      String    @map("content_hash")
+  capturedAt       DateTime  @map("captured_at") @db.Timestamptz(6)
+  sourceModifiedAt DateTime? @map("source_modified_at") @db.Timestamptz(6)
+  /// Git commit author for repository sources (R-02).
+  authorRef        String?   @map("author_ref")
+  commitSha        String?   @map("commit_sha")
+  supersedesId     String?   @map("supersedes_id") @db.Uuid
+
+  document     KnowledgeDocument         @relation("DocumentVersions", fields: [documentId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  supersedes   DocumentVersion?          @relation("DocumentVersionSupersedes", fields: [supersedesId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  supersededBy DocumentVersion[]         @relation("DocumentVersionSupersedes")
+  currentOf    KnowledgeDocument[]       @relation("DocumentCurrentVersion")
+  sections     DocumentSection[]
+  expectations ExpectedBehaviorVersion[]
+  constraints  KnowledgeConstraint[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, documentId, versionNo])
+  @@map("document_version")
+  @@schema("knowledge")
+}
+
+/// `search_vector` is a GENERATED column (`to_tsvector('simple', ...)` over the heading path and
+/// content) created in the migration; Prisma cannot express it and never writes it. The
+/// `dbgenerated()` default is only there so `migrate diff` agrees with the generated column.
+model DocumentSection {
+  id                String                   @id @db.Uuid
+  tenantId          String                   @map("tenant_id") @db.Uuid
+  documentVersionId String                   @map("document_version_id") @db.Uuid
+  ordinal           Int
+  headingPath       String[]                 @map("heading_path")
+  content           String
+  charStart         Int                      @map("char_start")
+  charEnd           Int                      @map("char_end")
+  searchVector      Unsupported("tsvector")? @default(dbgenerated()) @map("search_vector")
+
+  documentVersion DocumentVersion    @relation(fields: [documentVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  embeddings      SectionEmbedding[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, documentVersionId, ordinal])
+  @@index([searchVector], type: Gin)
+  @@map("document_section")
+  @@schema("knowledge")
+}
+
+/// LIST-partitioned on `tenant_id` (R-05); one partition + HNSW index per tenant, created by
+/// `knowledge.ensure_section_embedding_partition`. Holds no content. Prisma cannot query the vector
+/// column: read and write through the `$queryRaw` repository, which takes a `TenantContext`.
+model SectionEmbedding {
+  tenantId  String                      @map("tenant_id") @db.Uuid
+  sectionId String                      @map("section_id") @db.Uuid
+  embedding Unsupported("vector(1024)")
+  modelRef  String                      @map("model_ref")
+  builtAt   DateTime                    @map("built_at") @db.Timestamptz(6)
+
+  section DocumentSection @relation(fields: [sectionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@id([tenantId, sectionId])
+  @@map("section_embedding")
+  @@schema("knowledge")
+}
+
+model DuplicateGroup {
+  id                  String          @id @db.Uuid
+  tenantId            String          @map("tenant_id") @db.Uuid
+  canonicalDocumentId String          @map("canonical_document_id") @db.Uuid
+  method              DuplicateMethod
+  threshold           Decimal         @db.Decimal(5, 4)
+  detectedAt          DateTime        @map("detected_at") @db.Timestamptz(6)
+
+  canonical KnowledgeDocument   @relation("DuplicateGroupCanonical", fields: [canonicalDocumentId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  members   KnowledgeDocument[] @relation("DuplicateGroupMembers")
+
+  @@unique([id, tenantId])
+  @@index([tenantId, canonicalDocumentId])
+  @@map("duplicate_group")
+  @@schema("knowledge")
+}
+
+model ExpectedBehavior {
+  id               String                @id @db.Uuid
+  tenantId         String                @map("tenant_id") @db.Uuid
+  stableKey        String                @map("stable_key")
+  featureNodeId    String?               @map("feature_node_id") @db.Uuid
+  componentNodeId  String?               @map("component_node_id") @db.Uuid
+  /// Display and lifecycle queries only. **Not what makes an anchor** — no anchor query reads it (R-01).
+  state            ExpectedBehaviorState
+  currentVersionId String                @map("current_version_id") @db.Uuid
+  seedingSessionId String?               @map("seeding_session_id") @db.Uuid
+  createdAt        DateTime              @map("created_at") @db.Timestamptz(6)
+
+  currentVersion ExpectedBehaviorVersion   @relation("ExpectationCurrentVersion", fields: [currentVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  versions       ExpectedBehaviorVersion[] @relation("ExpectationVersions")
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, stableKey])
+  @@map("expected_behavior")
+  @@schema("knowledge")
+}
+
+/// Append-only: UPDATE/DELETE/TRUNCATE rejected by trigger (migration 20261006010000).
+model ExpectedBehaviorVersion {
+  id                 String                @id @db.Uuid
+  tenantId           String                @map("tenant_id") @db.Uuid
+  expectedBehaviorId String                @map("expected_behavior_id") @db.Uuid
+  versionNo          Int                   @map("version_no")
+  description        String
+  contentHash        String                @map("content_hash")
+  documentVersionId  String                @map("document_version_id") @db.Uuid
+  provenance         ExpectationProvenance
+  extractionKey      String?               @map("extraction_key")
+  extractionRule     String?               @map("extraction_rule")
+  sourceArtifactRef  String?               @map("source_artifact_ref")
+  createdAt          DateTime              @map("created_at") @db.Timestamptz(6)
+
+  expectedBehavior ExpectedBehavior   @relation("ExpectationVersions", fields: [expectedBehaviorId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  documentVersion  DocumentVersion    @relation(fields: [documentVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  currentOf        ExpectedBehavior[] @relation("ExpectationCurrentVersion")
+  anchorGrant      AnchorGrant?
+  adoptions        AdoptionRecord[]
+
+  @@unique([id, tenantId])
+  @@unique([tenantId, expectedBehaviorId, versionNo])
+  @@map("expected_behavior_version")
+  @@schema("knowledge")
+}
+
+/// The table Principle II rests on. The revocation record is the three `revoked_*` columns and
+/// nothing else (FR-013). Immutable except a one-time NULL -> set of those three, by trigger.
+model AnchorGrant {
+  id                        String    @id @db.Uuid
+  tenantId                  String    @map("tenant_id") @db.Uuid
+  expectedBehaviorVersionId String    @unique @map("expected_behavior_version_id") @db.Uuid
+  adoptionRecordId          String    @map("adoption_record_id") @db.Uuid
+  grantedAt                 DateTime  @map("granted_at") @db.Timestamptz(6)
+  revokedAt                 DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokedBy                 String?   @map("revoked_by")
+  revocationReason          String?   @map("revocation_reason")
+
+  expectedBehaviorVersion ExpectedBehaviorVersion @relation(fields: [expectedBehaviorVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  adoptionRecord          AdoptionRecord          @relation(fields: [adoptionRecordId, expectedBehaviorVersionId, tenantId], references: [id, expectedBehaviorVersionId, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  constraints             KnowledgeConstraint[]
+
+  @@unique([id, tenantId])
+  // Required by Prisma for the one-to-one relation over the composite FK; the plain `@unique` above
+  // is the stated rule (one grant per adopted version).
+  @@unique([expectedBehaviorVersionId, tenantId])
+  // Anchor lookup is `WHERE tenant_id = $1 AND revoked_at IS NULL`.
+  @@index([tenantId, revokedAt])
+  @@map("anchor_grant")
+  @@schema("knowledge")
+}
+
+/// Append-only. `actor_type = 'human'` by CHECK; `actor_ref` is non-empty by CHECK. That the
+/// approver is not Healer's own service identity is configuration (R-17) and is checked in the
+/// adoption command (T026), not here.
+model AdoptionRecord {
+  id                        String            @id @db.Uuid
+  tenantId                  String            @map("tenant_id") @db.Uuid
+  expectedBehaviorVersionId String            @map("expected_behavior_version_id") @db.Uuid
+  actorType                 AdoptionActorType @map("actor_type")
+  actorRef                  String            @map("actor_ref")
+  approvalRef               String?           @map("approval_ref")
+  mergeCommitSha            String?           @map("merge_commit_sha")
+  seededFrom                Json              @map("seeded_from")
+  adoptedAt                 DateTime          @map("adopted_at") @db.Timestamptz(6)
+
+  expectedBehaviorVersion ExpectedBehaviorVersion @relation(fields: [expectedBehaviorVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  grants                  AnchorGrant[]
+
+  @@unique([id, tenantId])
+  // Backs AnchorGrant's composite FK: a grant can only cite an adoption of the SAME version.
+  @@unique([id, expectedBehaviorVersionId, tenantId])
+  @@index([tenantId, expectedBehaviorVersionId])
+  @@map("adoption_record")
+  @@schema("knowledge")
+}
+
+/// Deliberately NO unique index on (tenant_id, scope_ref, name): a conflict must be representable
+/// so it can be reported (FR-015, R-07).
+model KnowledgeConstraint {
+  id                String              @id @db.Uuid
+  tenantId          String              @map("tenant_id") @db.Uuid
+  scopeKind         ConstraintScopeKind @map("scope_kind")
+  /// Polymorphic on `scope_kind`; no FK.
+  scopeRef          String              @map("scope_ref") @db.Uuid
+  name              String
+  valueType         ConstraintValueType @map("value_type")
+  valueJson         Json                @map("value_json")
+  documentVersionId String              @map("document_version_id") @db.Uuid
+  provenance        KnowledgeProvenance
+  anchorGrantId     String?             @map("anchor_grant_id") @db.Uuid
+
+  documentVersion DocumentVersion @relation(fields: [documentVersionId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+  anchorGrant     AnchorGrant?    @relation(fields: [anchorGrantId, tenantId], references: [id, tenantId], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([tenantId, scopeKind, scopeRef, name])
+  @@map("knowledge_constraint")
+  @@schema("knowledge")
 }

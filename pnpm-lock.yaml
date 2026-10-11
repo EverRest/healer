@@ -247,7 +247,30 @@ importers:
         specifier: workspace:*
         version: link:../../workflow
 
-  packages/domain/knowledge: {}
+  packages/domain/knowledge:
+    dependencies:
+      '@healer/domain-evidence':
+        specifier: workspace:^
+        version: link:../evidence
+      '@healer/events':
+        specifier: workspace:*
+        version: link:../../events
+      '@healer/prisma-client':
+        specifier: workspace:*
+        version: link:../../prisma-client
+      '@healer/shared':
+        specifier: workspace:*
+        version: link:../../shared
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@healer/boundary-contract':
+        specifier: workspace:*
+        version: link:../../boundary-contract
 
   packages/domain/policy:
     dependencies:
@@ -287,6 +310,9 @@ importers:
       '@healer/domain-architecture':
         specifier: workspace:*
         version: link:../domain/architecture
+      '@healer/domain-knowledge':
+        specifier: workspace:*
+        version: link:../domain/knowledge
 
   packages/llm: {}
 
