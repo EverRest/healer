@@ -4543,3 +4543,16 @@ until then); it is run by hand today and is red on any pre-migration `estimated`
 ## Decisions waiting on Pavlo — 012 T094 (index; detail in "012 T093-T095" above)
 
 1. Wire `check:budget-reconcile` into `make ci`? It is run by hand and not scheduled; it is red on pre-migration `estimated` `agent_run` rows by design (C-93), so wiring it needs those rows adopted or removed first.
+
+## 012 T094 — post-push security review (2026-10-11)
+
+An automated review of the pushed T094 commit named a possible budget-enforcement gap in
+`recordAgentRunReport` ("gate-action field mismatch") and two further items with no detail. What the
+code does check: the referenced decision is the tenant's, `allow`, not invalidated, for the same issue
+and workflow-run correlation, and not already landed by a finished run. What it does **not** check:
+that the decision's `action_key` is an agent step. A report can therefore release the open charge of
+any same-issue, same-run `allow` decision that carries a `reservedSpend`. Only steps that declared a
+maximum spend carry one (AI steps), so the exposure is a *wrong AI step's* reservation, not an
+unbounded bypass. Closing it needs the agent-step action keys to exist as a closed list in 002 (none
+does today) — **needs-Pavlo/002 owner**: define that list, then add the `action_key` check and its
+failing-first test. The other two items are unread until the full review text is available.
