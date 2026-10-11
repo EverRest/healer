@@ -1040,6 +1040,9 @@ model PolicyDecision {
   /// unique index (tenant, run, state, request_key) is created in the migration — Prisma cannot
   /// declare a partial index.
   requestKey        String?       @map("request_key")
+  /// The autonomy epoch the evaluation read; `consume` refuses NULL or lower than the tenant's
+  /// current epoch (a revocation kills every earlier allow). NULL on history and on a deny.
+  autonomyEpoch     BigInt?       @map("autonomy_epoch")
 
   approvalRequests ApprovalRequest[]
 

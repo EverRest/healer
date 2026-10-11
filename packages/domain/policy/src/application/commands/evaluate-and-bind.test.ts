@@ -246,6 +246,24 @@ describe('evaluateAndBind (T021)', () => {
     expect(result.autonomyEpoch).toBe(3n);
   });
 
+  it('persists the epoch the evaluation read on the decision it records', async () => {
+    const decisions = new FakeDecisionRepo();
+    const result = await evaluateAndBind(
+      {
+        rulesets: new FakeRulesetRepo(published()),
+        decisions,
+        autonomyEpochs: new FakeEpochRepo(3n),
+        actions: new FakeActionRepo(),
+        autonomyGrants: new FakeAutonomyGrantRepo(),
+        budgets: new FakeBudgetRepository(decisions),
+      },
+      CONTEXT,
+      { decisionInput: buildDecisionInput() },
+    );
+    expect(decisions.recorded[0]?.autonomyEpoch).toBe(result.autonomyEpoch);
+    expect(decisions.recorded[0]?.autonomyEpoch).toBe(3n);
+  });
+
   it('refuses to evaluate when no ruleset has ever been published for the tenant', async () => {
     await expect(
       evaluateAndBind(

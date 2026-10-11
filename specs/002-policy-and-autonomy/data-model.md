@@ -119,6 +119,7 @@ write that makes revocation immediate.
 | ceiling_applied | bool | true when the clamp changed the outcome (R-05) |
 | budget_state | jsonb | consumed, limit, declared max of the next step, degradation step |
 | request_key | text? | a step's idempotency key (charged or not): the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step that is still allowed returns the decision it already minted instead of charging twice (T060); a retry is re-evaluated first |
+| autonomy_epoch | bigint? | the tenant's `autonomy_epoch` the evaluation read (before it resolved anything), written at insert and frozen like every column but the two below. `consume` refuses a decision whose epoch is NULL (history, a lapse deny) or lower than the tenant's current epoch, read in the same transaction (`DECISION_NOT_ALLOWED`, computed reason `epoch_stale`; not a stored `invalidated_reason`) |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
 | invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `charge_abandoned` · `run_terminal` — **not** digest_mismatch (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays issued and retriable with the correct digest, never invalidated |
@@ -285,8 +286,8 @@ configurable. 010 keeps no limit store and projects only the refusal reason code
   whether or not it charges. A retry is evaluated afresh (grants, ruleset, limits and budget are
   re-read), with the live allow already minted for that key left out of the rate, cooldown,
   attempt-cap and open-charge figures, so it neither counts nor refuses itself while every other
-  decision still counts. That allow is returned only if the fresh decision also allows; otherwise the
-  fresh refusal is recorded as a new row and the old allow stays live and consumable (QUESTIONS.md 002 Phase 5, item 13), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`; a revocation or a
+  decision still counts. That allow is returned only if the fresh decision also allows and its `autonomy_epoch` is not stale (NULL, or lower than the epoch the fresh evaluation read); a stale allow is invalidated (`epoch_bump`) in the same transaction, whatever the fresh outcome, and a fresh allow replaces it. Otherwise the
+  fresh refusal is recorded as a new row and the old allow stays live and consumable (QUESTIONS.md 002 Phase 5, item 13(a): refusals not caused by an epoch change), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`; a revocation or a
   tightened limit reaches the retry. A row with a NULL run, state or key is a different step and counts. Counts are measured from `LEAST(evaluatedAt, now())` so a future instant cannot shorten
   the window or cooldown.
 - **Serialisation**: counts-then-insert runs in one transaction under

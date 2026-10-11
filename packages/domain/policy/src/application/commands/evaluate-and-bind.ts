@@ -48,16 +48,9 @@ const defaultLog = createLogger({ serviceName: 'domain-policy' });
 export interface EvaluateAndBindResult {
   readonly decision: RecordedDecision;
   /**
-   * The tenant's current `autonomy_epoch` (0 when no row exists — no revocation has ever
-   * happened, indistinguishable from "the mechanism doesn't exist yet" until Phase 4's
-   * `GrantAutonomy`/`RevokeAutonomy` land). Returned rather than persisted onto `policy_decision`:
-   * data-model.md's own `policy_decision` column list has no `autonomy_epoch` field — only
-   * `approval_request` does, for the epoch-staleness check at approval redemption (R-07), which
-   * is a different mechanism from this batch's single-use consumption (T023 checks only
-   * `consumed_at` and `proposal_digest`, per contracts/evaluation.md and the brief). Adding a
-   * column contracts/evaluation.md's prose gestures at but data-model.md never lists is a schema
-   * change this batch does not make; Phase 4 is where the epoch mechanism — and whatever column
-   * it actually needs — gets built deliberately, not by a drive-by migration here.
+   * The autonomy epoch this evaluation was made under (0 when no row exists — no revocation has
+   * ever happened). The same value is persisted on the decision (`policy_decision.autonomy_epoch`),
+   * which is what lets `consume` refuse a decision a later revocation has withdrawn (R-13).
    */
   readonly autonomyEpoch: bigint;
 }
@@ -66,8 +59,7 @@ export interface EvaluateAndBindResult {
  * `EvaluateAndBind` (T021, contracts/evaluation.md). Resolves the tenant's current published
  * ruleset (step 1), calls the pure `evaluate()` batch 3 already built and proved, then persists
  * the decision bound to the workflow run/state and the proposal's own digest, and reads the
- * tenant's autonomy epoch (see `EvaluateAndBindResult`'s doc comment for why that value is
- * returned rather than written to a column that does not exist).
+ * tenant's autonomy epoch, which is recorded on the decision (see `EvaluateAndBindResult`).
  *
  * `evaluate()` itself is untouched — this only resolves its inputs and persists its output.
  */
@@ -118,6 +110,7 @@ export async function evaluateAndBind(
       fingerprint: decisionInput.target.fingerprint,
       binding,
       requestKey,
+      autonomyEpoch,
     };
   };
 

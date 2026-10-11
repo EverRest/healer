@@ -88,8 +88,8 @@ takes the budget lock and then the limit lock, never the reverse, so the two can
 A retried step (same tenant, run, state and request key) is **revalidated on replay**, under the same
 locks: the evaluation is done afresh, with that step's own earlier live allow left out of the rate,
 cooldown, attempt-cap and open-charge figures (so a retry never counts or refuses itself, while every
-distinct step still counts). The earlier allow is returned only if the fresh decision also allows;
-otherwise the fresh refusal is recorded as a new decision and the old allow stays live and consumable (QUESTIONS.md 002 Phase 5, item 13), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`. Without
+distinct step still counts). The earlier allow is returned only if the fresh decision also allows and its autonomy epoch is not stale (an allow minted under an earlier epoch is invalidated `epoch_bump` instead, whatever the fresh outcome);
+otherwise the fresh refusal is recorded as a new decision and the old allow stays live and consumable (QUESTIONS.md 002 Phase 5, item 13(a): refusals not caused by an epoch change), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`. Without
 this, a revocation, a lowered level or a tightened limit would not reach a retried step, because the
 request key leaves out the autonomy level, the counts and the time. A row with a NULL run, state or
 request key is a different step and counts (`IS DISTINCT FROM`, never `NOT (a = x AND ...)`, which

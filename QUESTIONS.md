@@ -4778,11 +4778,16 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
     whoever holds its id, and each further refused retry adds another refusal row; (b) a returned
     old allow keeps its original `decision_input` (evaluated instant, counts) even though the fresh
     one was computed later. **Needs Pavlo: should a refused retry invalidate the old allow?** It
-    needs a new `invalidated_reason` value, which is a closed list. After a refusal the old allow
-    can still be consumed, as before this change: `consume` checks only `consumed_at`,
-    `invalidated_reason`, `outcome` and the digest, and revocation invalidates only approval-linked
-    decisions. It also still counts against other steps and holds its open charge until
-    `releaseAbandonedCharges`.
+    needs a new `invalidated_reason` value, which is a closed list.
+    **13(a), part CLOSED (epoch binding, Pavlo approved):** every decision now records the autonomy
+    epoch it was evaluated under; `consume` refuses a NULL or lower-than-current epoch (computed
+    reason `epoch_stale`, no new stored reason), and a replay that finds a stale live allow
+    invalidates it with the existing `epoch_bump`, whether the fresh decision allows (a new allow
+    replaces it) or refuses. A revocation or level change (anything that bumps the epoch) can no
+    longer leave a consumable allow behind. **13(a), part STILL OPEN:** a refusal that is not caused
+    by an epoch change (a tightened `action_limit`, a lowered budget) leaves the old allow live,
+    consumable, counted against other steps and holding its open charge until
+    `releaseAbandonedCharges`; closing it still needs a new closed `invalidated_reason`.
     (c) **F3:** a returned old allow hides the fresh evaluation: no row, no audit entry, so a step
     may run under ruleset v2 while the audited decision says v1. (d) **F4:** each refused retry
     inserts a refusal row and an outbox event, bounded only by the caller's retry policy. Neither is
@@ -4800,9 +4805,9 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
    wording makes the limit toothless until an executor consumes allows.
 3. A write path for `action_limit` (PUT + audit entry) — not built; who owns it, and does a limit
    change need the same audit as a budget change (FR-020)?
-4. After a retried step is refused on re-evaluation, its earlier live allow is left as it was
-   (still live, still consumable). Invalidate it, which needs a new closed `invalidated_reason`
-   (item 13)?
+4. After a retried step is refused on re-evaluation for a reason that is not an epoch change (cap,
+   budget), its earlier live allow is left as it was (still live, still consumable). Invalidate
+   it, which needs a new closed `invalidated_reason` (item 13(a); the epoch-change case is closed)?
 5. F3: a returned old allow leaves no row or audit entry of the fresh evaluation (ruleset version
    can differ from the audited one). Record it?
 6. F4: each refused retry inserts a refusal row and an outbox event, unbounded except by the

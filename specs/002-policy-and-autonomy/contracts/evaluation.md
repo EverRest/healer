@@ -110,8 +110,8 @@ what any rule says.
 **A retried step is re-evaluated.** `EvaluateAndBind` for a decision bound to a run and a state whose
 request key already has a live `ALLOW` does the whole evaluation again (grants, ruleset, limits,
 budget), with that `ALLOW` left out of the budget's open charges and out of the step 6 counts, under
-the same locks. It returns the earlier decision only if the fresh outcome is also `ALLOW`; otherwise
-it records the fresh refusal as a new decision and leaves the earlier `ALLOW` as it was: it stays live and consumable (QUESTIONS.md 002 Phase 5, item 13), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`. Every other
+the same locks. It returns the earlier decision only if the fresh outcome is also `ALLOW` and the earlier one is not stale (its `autonomyEpoch` is NULL or lower than the epoch the fresh evaluation read); a stale earlier `ALLOW` is invalidated (`epoch_bump`) in the same transaction whatever the fresh outcome, and a fresh `ALLOW` replaces it. Otherwise
+it records the fresh refusal as a new decision and leaves the earlier `ALLOW` as it was: it stays live and consumable (QUESTIONS.md 002 Phase 5, item 13(a): refusals not caused by an epoch change), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`. Every other
 decision, including a different step for the same action and target, counts as usual.
 
 ## `EvaluationTrace`
@@ -132,6 +132,11 @@ autonomyEpoch)` and is valid for exactly one execution:
 - a decision whose own `outcome` is not `allow`, or one since invalidated, is never consumable —
   `DECISION_NOT_ALLOWED`, checked before the digest comparison, inside the same lock as the
   single-use check;
+- a decision evaluated under an earlier autonomy epoch than the tenant's current one, or with no
+  epoch recorded, is never consumable either — `DECISION_NOT_ALLOWED` (computed reason
+  `epoch_stale`, read in the same transaction; no new stored `invalidated_reason`). The epoch is the
+  one the evaluation read first, recorded on the decision, so a revocation withdraws every allow
+  minted before it, not only the approval-linked ones;
 - **a decision is never carried across a wait.** Evaluation happens inside the job that performs the
   action, immediately before it, which is how a revoked grant takes effect at the next guarded step
   with no push mechanism (R-07, and the same instinct as 010 FR-004 for preconditions).

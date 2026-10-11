@@ -37,6 +37,9 @@ export interface NewRecordedDecision {
   /** The digest of the caller's request (charged or not) with
    *  the resolved fields and the instant removed — the idempotency key of the step (T060, T054). */
   readonly requestKey?: string;
+  /** The autonomy epoch the evaluation read (before it resolved anything). Absent only on a
+   *  decision that authorizes nothing (a lapse); an allow without it is refused at `consume`. */
+  readonly autonomyEpoch?: bigint;
 }
 
 export interface ConsumeDecisionInput {
@@ -96,17 +99,19 @@ export class DigestMismatchError extends HealerError {
  *  the raw `UPDATE` would hit that constraint as an unhandled Postgres error instead of a typed
  *  one. One class covers both: to the caller, either reason means "this decision never authorized
  *  the action," which is the fact that matters. */
+const DECISION_NOT_ALLOWED_MESSAGE = {
+  outcome: (id: string) => `policy decision ${id} did not resolve to allow and cannot be consumed`,
+  invalidated: (id: string) => `policy decision ${id} has been invalidated and cannot be consumed`,
+  epoch_stale: (id: string) =>
+    `policy decision ${id} was evaluated under an earlier autonomy epoch and cannot be consumed`,
+} as const;
+
 export class DecisionNotAllowedError extends HealerError {
   constructor(
     readonly decisionId: string,
-    readonly reason: 'outcome' | 'invalidated',
+    readonly reason: 'outcome' | 'invalidated' | 'epoch_stale',
   ) {
-    super(
-      'DECISION_NOT_ALLOWED',
-      reason === 'outcome'
-        ? `policy decision ${decisionId} did not resolve to allow and cannot be consumed`
-        : `policy decision ${decisionId} has been invalidated and cannot be consumed`,
-    );
+    super('DECISION_NOT_ALLOWED', DECISION_NOT_ALLOWED_MESSAGE[reason](decisionId));
     this.name = 'DecisionNotAllowedError';
   }
 }
@@ -124,7 +129,9 @@ export interface PolicyDecisionRepository {
    *  what `build` returns. Without the lock two concurrent proposals both count the same history
    *  and both mint an ALLOW (READ COMMITTED does not stop a read-then-write). A replay of a step
    *  (`where.step`) is evaluated afresh with its own earlier live allow left out of the counts; that
-   *  allow is returned only if the fresh decision also allows, else the refusal is recorded. Wait
+   *  allow is returned only if the fresh decision also allows, else the refusal is recorded; an earlier
+   *  live allow whose epoch is stale (NULL or lower than the fresh evaluation's) is invalidated
+   *  (`epoch_bump`) instead of returned, whatever the fresh outcome. Wait
    *  bounded; past it, `ActionLimitContentionError`. */
   recordLimited(
     where: TenantScoped<ActionLimitQuery>,
@@ -136,8 +143,10 @@ export interface PolicyDecisionRepository {
    * against concurrent consumption of the same decision, then sets `consumed_at` —
    * `consumed_at IS NULL` else `DecisionAlreadyConsumedError`; `invalidated_reason IS NULL` else
    * `DecisionNotAllowedError('invalidated')`; `outcome === 'allow'` else
-   * `DecisionNotAllowedError('outcome')`; `proposal_digest === presentedDigest` else
-   * `DigestMismatchError`. The outcome/invalidated checks come before the digest check
+   * `DecisionNotAllowedError('outcome')`; `autonomy_epoch` not NULL and not lower than the
+   * tenant's current epoch (read in the same transaction) else
+   * `DecisionNotAllowedError('epoch_stale')`; `proposal_digest === presentedDigest` else
+   * `DigestMismatchError`. The outcome/invalidated/epoch checks come before the digest check
    * deliberately: whether this decision ever authorized anything is a fact about the decision
    * itself, independent of what the caller presents. Throws `NotFoundError` (`@healer/shared`)
    * for a decision id that does not resolve under this tenant.

@@ -1917,3 +1917,15 @@ stage 1 is the `/investigate` MVP and `make intake-smoke`.
 - `ResolvedRuleset.cooldownBounds` removed; `evaluate()` reads `input.cooldown.bounds`.
 - Migration `20261009000000_action_limit`: CHECK constraints only. No schema change, no write
   endpoint yet. Judgment calls in QUESTIONS.md "002 Phase 5".
+
+## Unreleased — policy decision epoch binding
+
+- `policy.policy_decision.autonomy_epoch` (nullable bigint): the autonomy epoch the evaluation read,
+  written at insert. `consume` refuses a decision whose epoch is NULL or lower than the tenant's
+  current epoch (`DECISION_NOT_ALLOWED`, computed reason `epoch_stale`; no new stored
+  `invalidated_reason`), so a revocation withdraws every earlier allow, not only approval-linked ones.
+- A replayed step that finds a stale live allow invalidates it (`epoch_bump`) in the same
+  transaction, whether the fresh evaluation allows (a new allow replaces it) or refuses. A refusal
+  not caused by an epoch change still leaves the old allow live (QUESTIONS.md 002 Phase 5, 13(a)).
+- Migration `20261012000000_policy_decision_autonomy_epoch`. History rows have a NULL epoch and are
+  therefore not consumable.

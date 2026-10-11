@@ -85,6 +85,7 @@ export async function recordDecisionInTx(
       budgetState: where.budgetState as unknown as Prisma.InputJsonValue,
       evaluatedAt: where.decision.evaluatedAt,
       requestKey: where.requestKey ?? null,
+      autonomyEpoch: where.autonomyEpoch ?? null,
     },
   });
   await enqueue(
@@ -101,14 +102,15 @@ export async function recordDecisionInTx(
   return toDomain(created);
 }
 
-/** The live (not invalidated) allowed decision already minted for this step, if any — what
- *  makes `EvaluateAndBind` idempotent (T060; charged or not since T054). Only a decision
- *  bound to a run *and* a state with a request key can be matched; anything else is a new
- *  request. The partial unique index in migration 20261003110000 backstops this lookup. */
+/** The live (not invalidated) allowed decision already minted for this step, if any, with the
+ *  epoch it was evaluated under — what makes `EvaluateAndBind` idempotent (T060; charged or not
+ *  since T054). Only a decision bound to a run *and* a state with a request key can be matched;
+ *  anything else is a new request. The partial unique index in migration 20261003110000
+ *  backstops this lookup. */
 export async function findLiveStepDecision(
   tx: Prisma.TransactionClient,
   where: TenantScoped<NewRecordedDecision>,
-): Promise<RecordedDecision | null> {
+): Promise<{ decision: RecordedDecision; autonomyEpoch: bigint | null; consumed: boolean } | null> {
   const { workflowRunId, workflowState } = where.binding;
   if (
     where.requestKey === undefined ||
@@ -127,22 +129,49 @@ export async function findLiveStepDecision(
       invalidatedReason: null,
     },
   });
-  return row === null ? null : toDomain(row);
+  return row === null
+    ? null
+    : {
+        decision: toDomain(row),
+        autonomyEpoch: row.autonomyEpoch,
+        consumed: row.consumedAt !== null,
+      };
 }
 
-/** What a (re)evaluated step becomes: its earlier live allow if the fresh decision *also* allows,
- *  otherwise the fresh decision, recorded as a new row. The earlier allow is not touched: it stays
- *  live and consumable, still counts against other steps and holds its open charge until
- *  `releaseAbandonedCharges` (QUESTIONS.md 002 Phase 5, item 13). The fresh decision was built from counts that left that allow out, so this never
- *  refuses a retry for its own sake (FR-014). Under the caller's lock, so two retries cannot both
- *  miss the allow. */
+/** What a (re)evaluated step becomes. Its earlier live allow comes back only if the fresh decision
+ *  *also* allows and the allow is not stale; otherwise the fresh decision is recorded as a new row.
+ *  A stale allow (its epoch is NULL or lower than the epoch the fresh evaluation read: a revocation
+ *  or level change since) is invalidated (`epoch_bump`) in this transaction whatever the fresh
+ *  outcome, so it dies with the revocation and the partial unique index lets a fresh allow replace
+ *  it. An allow that is not stale stays live and consumable when the fresh decision refuses for
+ *  another reason (a tightened cap): it still counts against other steps and holds its open charge
+ *  until `releaseAbandonedCharges` (QUESTIONS.md 002 Phase 5, item 13). The fresh decision was
+ *  built from counts that left that allow out, so this never refuses a retry for its own sake
+ *  (FR-014). Under the caller's lock, so two retries cannot both miss the allow. */
 export async function recordOrReplayInTx(
   tx: Prisma.TransactionClient,
   built: TenantScoped<NewRecordedDecision>,
 ): Promise<RecordedDecision> {
-  if (built.decision.outcome === 'allow') {
-    const existing = await findLiveStepDecision(tx, built);
-    if (existing !== null) return existing;
+  const live = await findLiveStepDecision(tx, built);
+  if (live !== null) {
+    // A consumed allow already ran: it is neither stale nor replaceable, and comes back as before.
+    const stale =
+      !live.consumed &&
+      (live.autonomyEpoch === null ||
+        built.autonomyEpoch === undefined ||
+        live.autonomyEpoch < built.autonomyEpoch);
+    if (!stale && built.decision.outcome === 'allow') return live.decision;
+    if (stale) {
+      await tx.policyDecision.updateMany({
+        where: {
+          tenantId: built.tenantId,
+          id: live.decision.id,
+          consumedAt: null,
+          invalidatedReason: null,
+        },
+        data: { invalidatedReason: 'epoch_bump' },
+      });
+    }
   }
   return recordDecisionInTx(tx, built);
 }
@@ -211,6 +240,7 @@ interface LockedDecisionRow {
   readonly proposal_digest: string;
   readonly outcome: string;
   readonly invalidated_reason: string | null;
+  readonly autonomy_epoch: bigint | null;
 }
 
 /**
@@ -246,7 +276,7 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
     const { tenantId, decisionId, presentedDigest } = where;
     await this.prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<LockedDecisionRow[]>`
-        SELECT consumed_at, proposal_digest, outcome, invalidated_reason
+        SELECT consumed_at, proposal_digest, outcome, invalidated_reason, autonomy_epoch
         FROM "policy"."policy_decision"
         WHERE tenant_id = ${tenantId}::uuid AND id = ${decisionId}::uuid
         FOR UPDATE`;
@@ -257,6 +287,13 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
         throw new DecisionNotAllowedError(decisionId, 'invalidated');
       }
       if (row.outcome !== 'allow') throw new DecisionNotAllowedError(decisionId, 'outcome');
+      // Fail closed: NULL (history, or never stamped) is as stale as an older epoch. The tenant's
+      // epoch is read in this transaction; no row means no revocation has ever happened (0).
+      const [current] = await tx.$queryRaw<{ epoch: bigint }[]>`
+        SELECT epoch FROM "policy"."autonomy_epoch" WHERE tenant_id = ${tenantId}::uuid`;
+      if (row.autonomy_epoch === null || row.autonomy_epoch < (current?.epoch ?? 0n)) {
+        throw new DecisionNotAllowedError(decisionId, 'epoch_stale');
+      }
       if (row.proposal_digest !== presentedDigest) throw new DigestMismatchError(decisionId);
       await tx.policyDecision.update({
         where: { id: decisionId },
