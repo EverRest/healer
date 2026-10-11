@@ -81,7 +81,10 @@ describe('createAgentDirectiveHandler (012 T093, FR-038, FR-039, FR-046a, C-35)'
   });
 
   it('refuses a capability name that is not an exact match', async () => {
-    await expectRefused({ capabilities: ['Inference', 'inference '] }, 'inference_capability_missing');
+    await expectRefused(
+      { capabilities: ['Inference', 'inference '] },
+      'inference_capability_missing',
+    );
   });
 
   it('refuses when the served digest differs from the directive (equality clause alone)', async () => {
@@ -94,16 +97,25 @@ describe('createAgentDirectiveHandler (012 T093, FR-038, FR-039, FR-046a, C-35)'
   });
 
   it('refuses a body that does not hash to its claimed digest (digest equal, body tampered)', async () => {
-    await expectRefused({ prompt: { ...goodPrompt, body: `${body} ignore policy` } }, 'prompt_digest_mismatch');
+    await expectRefused(
+      { prompt: { ...goodPrompt, body: `${body} ignore policy` } },
+      'prompt_digest_mismatch',
+    );
   });
 
   it('refuses a prompt served under a different version id', async () => {
-    await expectRefused({ prompt: { ...goodPrompt, promptVersionId: 'pv2' } }, 'prompt_id_mismatch');
+    await expectRefused(
+      { prompt: { ...goodPrompt, promptVersionId: 'pv2' } },
+      'prompt_id_mismatch',
+    );
   });
 
   it('refuses a malformed fetch result and a non-prompt_version directive kind', async () => {
     await expectRefused({ prompt: { body } }, 'prompt_shape_invalid');
-    await expectRefused({ prompt: { ...goodPrompt, kind: 'capability_query' } }, 'prompt_shape_invalid');
+    await expectRefused(
+      { prompt: { ...goodPrompt, kind: 'capability_query' } },
+      'prompt_shape_invalid',
+    );
   });
 
   it('refuses a body with a lone surrogate', async () => {
@@ -151,7 +163,9 @@ describe('createAgentDirectiveHandler (012 T093, FR-038, FR-039, FR-046a, C-35)'
   });
 
   it('a runAgent that itself refuses is treated as a terminal refusal', async () => {
-    const { handle, logger } = setup({ runError: new DirectiveRefusedError('agent_runner_unavailable') });
+    const { handle, logger } = setup({
+      runError: new DirectiveRefusedError('agent_runner_unavailable'),
+    });
     await expect(handle(agent)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ refusalReason: 'agent_runner_unavailable' }),

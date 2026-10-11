@@ -107,13 +107,13 @@ describe('createRunnerDirectiveHandler (012 T093 — the agent gate is wired fai
     );
     await Promise.resolve(
       handle({
-          kind: 'agent_directive',
-          agentKind: 'verifier',
-          promptVersionId: 'pv1',
-          promptDigest: 'd1',
-          inputRefs: {},
-          budget: { tokens: 1, cost: 1, wallClockMs: 1 },
-          toolScope: [],
+        kind: 'agent_directive',
+        agentKind: 'verifier',
+        promptVersionId: 'pv1',
+        promptDigest: 'd1',
+        inputRefs: {},
+        budget: { tokens: 1, cost: 1, wallClockMs: 1 },
+        toolScope: [],
       }),
     );
     expect(warnSpy).toHaveBeenCalledWith(

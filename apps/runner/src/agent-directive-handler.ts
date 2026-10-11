@@ -74,7 +74,11 @@ async function verifiedPrompt(
 ): Promise<VerifiedPrompt> {
   const fetched = await stage('prompt_fetch', () => fetchPrompt(directive.promptVersionId));
   const parsed = ControlPlaneDirective.safeParse(fetched);
-  if (!parsed.success || parsed.data.kind !== 'prompt_version' || /\p{Surrogate}/u.test(parsed.data.body)) {
+  if (
+    !parsed.success ||
+    parsed.data.kind !== 'prompt_version' ||
+    /\p{Surrogate}/u.test(parsed.data.body)
+  ) {
     throw new DirectiveRefusedError('prompt_shape_invalid');
   }
   const prompt = parsed.data;

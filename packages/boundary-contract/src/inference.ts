@@ -32,7 +32,10 @@ export function directiveRefusal(
   directive: ControlPlaneDirective,
   declaredCapabilities: readonly string[],
 ): DirectiveRefusalReason | undefined {
-  if (directive.kind === 'agent_directive' && !declaredCapabilities.includes(INFERENCE_CAPABILITY)) {
+  if (
+    directive.kind === 'agent_directive' &&
+    !declaredCapabilities.includes(INFERENCE_CAPABILITY)
+  ) {
     return 'inference_capability_missing';
   }
   return undefined;
