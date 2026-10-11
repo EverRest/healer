@@ -37,6 +37,45 @@ export const SEED_POLICY_ACTIONS: readonly Omit<PolicyAction, 'introducedAt'>[] 
     mutating: true,
     owningSpec: '010',
   },
+  // The rest of 010's action catalogue (T084): keys must match action-catalogue.md exactly
+  // (catalogue-registry.contract.test.ts). `deployment.restore_dispatch_version` is undo-only,
+  // not proposable, but is a catalogue key and so registered too.
+  {
+    actionKey: 'deployment.restore_dispatch_version',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'workload.restart',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'feature_flag.disable',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'service.scale',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'queue.drain',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'job.retry',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
   // `PublishRuleset` audits as `policy.publish_ruleset` (`publish-ruleset.ts`'s
   // `PUBLISH_RULESET_AUDIT_ACTION`) — batch 9 I1, review finding: unregistered, this tripped
   // batch 8's own `check:policy-coverage` LEFT-join fix on every ruleset publish, including this

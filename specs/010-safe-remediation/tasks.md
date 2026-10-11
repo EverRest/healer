@@ -189,7 +189,7 @@ size, at the wrong moment.
   eligibility evaluated as the **conjunction** of a stored opt-in row and every declaration the action
   requires. A **test** per action asserts that an opt-in without its declaration, and a declaration
   without its opt-in, both refuse `TARGET_NOT_ELIGIBLE` (FR-015, R-17, data-model)
-- [ ] T073 [P] `remediation_action_bound` — blast radius and verification window only — as deterministic functions over stored bounds, with the existence of each bound not configurable. **`remediation_limit` is deleted**: rate per hour, cooldown, attempt cap and the recurrence window are 002's, evaluated inside the policy decision over the `targetRef` and `fingerprint` supplied on `DecisionInput`, and appear here only as projected refusal reason codes `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP`. A **test** asserts this schema stores none of the four (FR-013, C-11, IV)
+- [ ] T073 [P] `remediation_action_bound` — blast radius and verification window only — as deterministic functions over stored bounds, with the existence of each bound not configurable. **`remediation_limit` is deleted**: rate per hour, cooldown, attempt cap and the recurrence window are 002's, evaluated inside the policy decision over the `targetRef` and `fingerprint` supplied on `DecisionInput`, and appear here only as projected refusal reason codes `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED`. A **test** asserts this schema stores none of the four (FR-013, C-11, IV)
 - [ ] T074 [P] Continuous check `check:target-serialisation` — at most one live mutation per target (R-07, FR-012)
 
 **Checkpoint**: an action applies only where a human opted in, and only at a size that was evaluated.

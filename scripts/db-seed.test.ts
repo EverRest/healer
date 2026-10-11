@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SEED_POLICY_ACTIONS as REGISTRY_SEED } from '@healer/domain-policy';
-import { SEED_POLICY_ACTIONS as BOOTSTRAP_SEED } from './db-seed.mjs';
+import { assertSeedRowMatches, SEED_POLICY_ACTIONS as BOOTSTRAP_SEED } from './db-seed.mjs';
 
 /**
  * `db-seed.mjs` duplicates `SEED_POLICY_ACTIONS` by hand instead of importing
@@ -14,5 +14,25 @@ import { SEED_POLICY_ACTIONS as BOOTSTRAP_SEED } from './db-seed.mjs';
 describe('db-seed.mjs policy_action rows mirror @healer/domain-policy (002 T014)', () => {
   it('matches SEED_POLICY_ACTIONS exactly', () => {
     expect(BOOTSTRAP_SEED).toEqual(REGISTRY_SEED);
+  });
+});
+
+// `upsert … update: {}` keeps a pre-existing row as is; drift from the seed must be loud.
+describe('assertSeedRowMatches', () => {
+  const seed = {
+    actionKey: 'a.b',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  };
+
+  it('accepts a matching row', () => {
+    expect(() => assertSeedRowMatches({ ...seed, introducedAt: new Date() }, seed)).not.toThrow();
+  });
+
+  it('throws naming the key and each differing field', () => {
+    expect(() =>
+      assertSeedRowMatches({ ...seed, actionClass: 'read_only', mutating: false }, seed),
+    ).toThrow(/a\.b.*actionClass.*mutating/);
   });
 });

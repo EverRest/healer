@@ -38,7 +38,7 @@ Column meanings are fixed:
 **Rate limits, cooldowns and attempt caps are not in this list (C-11).** They are 002's, evaluated
 inside the policy decision over the `targetRef` and `fingerprint` this feature supplies on
 `DecisionInput`, and they reach the tenant here only as a **projection**: a `POLICY_DENY` whose reason
-code is `RATE_LIMITED`, `COOLDOWN` or `ATTEMPT_CAP` is recorded on the attempt under that code, so
+code is `RATE_LIMITED`, `COOLDOWN` or `ATTEMPT_CAP_REACHED` is recorded on the attempt under that code, so
 "nothing happened and here is why" still reads the same. Evaluating them a second time in this feature
 would be two stores with two keys, neither authoritative.
 

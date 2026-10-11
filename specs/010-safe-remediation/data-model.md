@@ -90,7 +90,7 @@ feature supplies on `DecisionInput` (002 `contracts/evaluation.md`). This schema
 them and no second enforcement point: Principle IV puts every limit in the deterministic engine that
 already writes a trace and a reason code, and two stores with two keys will disagree with neither
 being authoritative. What remains here is the **projection**: the refusal reason codes
-`RATE_LIMITED`, `COOLDOWN` and `ATTEMPT_CAP` recorded on `remediation_attempt.refusal_reason` when
+`RATE_LIMITED`, `COOLDOWN` and `ATTEMPT_CAP_REACHED` recorded on `remediation_attempt.refusal_reason` when
 002's decision carries the corresponding reason code, so a tenant reading an attempt still learns why
 nothing happened (002 FR-015).
 
@@ -122,7 +122,7 @@ One proposal and everything that happened to it.
 | undo_directive | jsonb | fully resolved at dispatch, literal parameters (R-05) |
 | blast_radius | jsonb | computed and bounded at proposal (R-12) |
 | revision_ref_at_dispatch | text? | (R-13) |
-| refusal_reason | text? | which precondition, eligibility gap, block or policy reason code refused it; `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP` are projections of 002's decision, not evaluated here (C-11) |
+| refusal_reason | text? | which precondition, eligibility gap, block or policy reason code refused it; `RATE_LIMITED` · `COOLDOWN` · `ATTEMPT_CAP_REACHED` are projections of 002's decision, not evaluated here (C-11) |
 | mitigation | bool | true once verified; never resolves a code problem (R-11) |
 | proposed_at, dispatched_at?, result_at?, verified_at? | timestamptz | |
 | time_to_verified_remediation_ms | bigint? | issue creation → `improved` (R-15, D-19a) |
@@ -212,7 +212,7 @@ dry_run:  proposed ──▶ planned | refused     (never leaves the plan() capa
 - No `remediation_target_eligibility` row exists for `deployment.restore_dispatch_version`, and no
   attempt with that action key exists in `mode` other than `undo` (C-15).
 - No rate limit, cooldown, attempt cap or recurrence window is stored in this schema; a
-  `refusal_reason` of `RATE_LIMITED`, `COOLDOWN` or `ATTEMPT_CAP` always resolves to a 002 decision
+  `refusal_reason` of `RATE_LIMITED`, `COOLDOWN` or `ATTEMPT_CAP_REACHED` always resolves to a 002 decision
   carrying that reason code (C-11).
 - Every read and every dispatch is constrained by `tenant_id` from the authenticated context; a
   foreign target or attempt returns not-found (FR-024).

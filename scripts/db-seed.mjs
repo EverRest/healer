@@ -31,6 +31,43 @@ export const SEED_POLICY_ACTIONS = [
     mutating: true,
     owningSpec: '010',
   },
+  // The rest of 010's action catalogue (T084); `deployment.restore_dispatch_version` is undo-only.
+  {
+    actionKey: 'deployment.restore_dispatch_version',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'workload.restart',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'feature_flag.disable',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'service.scale',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'queue.drain',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
+  {
+    actionKey: 'job.retry',
+    actionClass: 'reversible_remediation',
+    mutating: true,
+    owningSpec: '010',
+  },
   {
     actionKey: 'policy.publish_ruleset',
     actionClass: 'read_only',
@@ -93,6 +130,17 @@ export const SEED_POLICY_ACTIONS = [
 // anyway, but a stable literal keeps a fresh seed and a re-run reporting the same value.
 const POLICY_ACTIONS_INTRODUCED_AT = new Date('2026-01-01T00:00:00Z');
 
+// `update: {}` keeps an existing row; an old row that disagrees with the seed must fail loudly,
+// not be silently kept (or silently rewritten).
+export function assertSeedRowMatches(row, seed) {
+  const differing = ['actionClass', 'mutating', 'owningSpec'].filter((f) => row[f] !== seed[f]);
+  if (differing.length > 0) {
+    throw new Error(
+      `db-seed: policy_action ${seed.actionKey} differs from the seed on ${differing.join(', ')}`,
+    );
+  }
+}
+
 if (isMainModule(import.meta.url)) {
   const prisma = new PrismaClient();
   try {
@@ -104,11 +152,12 @@ if (isMainModule(import.meta.url)) {
     process.stdout.write(`db-seed: tenant ${LOCAL_DEV_TENANT_ID} (local-dev) ready\n`);
 
     for (const action of SEED_POLICY_ACTIONS) {
-      await prisma.policyAction.upsert({
+      const row = await prisma.policyAction.upsert({
         where: { actionKey: action.actionKey },
         update: {},
         create: { ...action, introducedAt: POLICY_ACTIONS_INTRODUCED_AT },
       });
+      assertSeedRowMatches(row, action);
     }
     process.stdout.write(
       `db-seed: policy_action registry (${SEED_POLICY_ACTIONS.length} rows) ready\n`,

@@ -46,7 +46,7 @@ components:
             # evaluated here — remediation_limit is deleted (C-11)
             - RATE_LIMITED
             - COOLDOWN
-            - ATTEMPT_CAP
+            - ATTEMPT_CAP_REACHED
             - PRECONDITION_FAILED
             - BLAST_RADIUS_EXCEEDED
             - CAPABILITY_UNAVAILABLE

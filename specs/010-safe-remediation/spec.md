@@ -280,7 +280,7 @@ remediable. A proposal exceeding a bound is refused, not truncated.
   002 FR-014), scoped by the `targetRef` and `fingerprint` this feature supplies on `DecisionInput`.
   This feature MUST supply both scoping fields, MUST refuse the action when the resulting decision
   denies it, and MUST record the refusal under the projected reason code — `RATE_LIMITED`, `COOLDOWN`
-  or `ATTEMPT_CAP` — so the tenant learns why nothing happened. It MUST NOT store or evaluate those
+  or `ATTEMPT_CAP_REACHED` — so the tenant learns why nothing happened. It MUST NOT store or evaluate those
   limits a second time (C-11).
 - **FR-014**: Every action MUST declare a blast-radius limit — replica delta, message count,
   affected targets, flag scope — and a proposal exceeding it MUST be refused, never truncated to fit.

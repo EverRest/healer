@@ -150,7 +150,7 @@ recorded but is not the counting key.
 not own the counter. Every proposal supplies `targetRef` and `fingerprint` on `DecisionInput`, and the
 cap, cooldown, rate limit and recurrence window are 002's stored configuration evaluated in its
 decision (002 FR-013, FR-014). `remediation_limit` is deleted, and this feature keeps only the
-projection: an attempt refused by a decision carrying `ATTEMPT_CAP`, `COOLDOWN` or `RATE_LIMITED` is
+projection: an attempt refused by a decision carrying `ATTEMPT_CAP_REACHED`, `COOLDOWN` or `RATE_LIMITED` is
 recorded under that code. SC-011 is then a property of 002's decisions read through this feature's
 attempt rows, which is also why it is stated over groups rather than over issues.
 
