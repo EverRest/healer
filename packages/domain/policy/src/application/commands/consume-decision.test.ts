@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { TenantContext, type TenantScoped } from '@healer/shared';
 import {
   DecisionAlreadyConsumedError,
+  DecisionNotAllowedError,
   DigestMismatchError,
   type ConsumeDecisionInput,
   type PolicyDecisionRepository,
@@ -57,5 +58,17 @@ describe('consumeDecision (T023)', () => {
     await expect(
       consumeDecision(repo, CONTEXT, { decisionId: 'd1', presentedDigest: 'wrong' }),
     ).rejects.toThrow(DigestMismatchError);
+  });
+
+  it.each([
+    ['outcome', /did not resolve to allow/],
+    ['invalidated', /has been invalidated/],
+    ['epoch_stale', /earlier autonomy epoch/],
+  ] as const)('a %s refusal is one error code with its own reason and message', (reason, text) => {
+    const error = new DecisionNotAllowedError('d1', reason);
+    expect(error.code).toBe('DECISION_NOT_ALLOWED');
+    expect(error.reason).toBe(reason);
+    expect(error.message).toMatch(text);
+    expect(error.message).toContain('d1');
   });
 });
