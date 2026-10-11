@@ -271,6 +271,16 @@ Proposed, pending the owner's confirmation; see [ADR 0016](adr/0016-chat-channel
 | C-94 | A report from a **revoked** runner is still recorded | The spend already happened and is real; refusing the report hides it from the budget and from support. Revocation stops the runner's *future* work (its credential), it does not un-spend. The runner is still resolved only inside the authenticated tenant's own registrations |
 | C-95 | Cost `reported` by a runner is stored as reported and labelled `reported`; there is no `measured` value until reconciliation against provider usage per tenant key (C-34) exists | No provider usage source exists, so any `measured` label would be a claim nothing can check — the failure the repository's "every guarantee names its reader" rule exists to prevent |
 
+## 014 chat-agent-intake (2026-10-11)
+
+Proposed, pending the owner's confirmation; cited by [014 spec.md](../specs/014-chat-agent-intake/spec.md)
+Clarifications and [ADR 0016](adr/0016-chat-channel-agent-intake.md) (revised).
+
+| ID | Decision | Consequence |
+|----|----------|-------------|
+| C-96 | **Proposed.** The first release of the chat intake investigates and fixes Healer itself — its repository, CI runs and logs, issues and pull requests, specifications. Customer incidents through the product pipeline (006–008) come later as one more executor behind 014's executor contract | The executor contract names no product (014 FR-020), so the product pipeline is added as an adapter rather than a second intake. Until then nothing from the channel reaches a customer's repository |
+| C-97 | **Proposed.** Confirmation by risk: `/investigate` (read-only, under a hard budget and timeout, with a token that cannot write) starts at once; anything that creates a branch or a pull request starts only after the allowlisted owner confirms a card. Amends ADR 0016's and C-91's confirm-everything and 012 FR-063 | The read-only grant is enforced by the host token, not the card, so the card is kept only where it prevents a write. Relaxing confirmation for writes stays a new decision |
+
 ## Deliberately unset
 
 `false-fix rate`, `30-day revert rate`, `per-incident cost ceiling`, escalation attempt cap —

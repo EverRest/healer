@@ -1867,3 +1867,15 @@ not been executed. Recorded in 012's tasks.md rather than left implicit.
   cost is recorded as reported; reconciliation against provider usage is not built (T094 stays open).
   `check:budget-reconcile` refuses `estimated`; decisions C-93–C-95.
 - Runbook `docs/runbooks/provider-key-rotation.md`.
+
+## 0.57.1 — 2026-10-11
+
+**014 chat-agent-intake — specified, planned, tasked (no code).** Post a task or a question in Telegram
+(Slack second) and an agent picks it up: `/investigate` (read-only, starts at once), `/fix` and `/task`
+(card, owner confirms, pull request under ADR 0011's gates), findings as signals. 104 tasks in four stages;
+stage 1 is the `/investigate` MVP and `make intake-smoke`.
+
+- ADR 0016 revised (confirm by risk; Slack second); ADR 0019 drafted (OIDC identity-token
+  verification — Proposed, no dependency added); C-96 and C-97 Proposed; glossary gains the intake terms.
+- 012 FR-001 and plan gain `packages/domain/intake`; 012 T098/T102/T103/T104 are marked superseded.
+- Open items that need a human before stage 1 ships: QUESTIONS.md "014" and research U-01..U-08.

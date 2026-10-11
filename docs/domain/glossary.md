@@ -64,6 +64,18 @@ is a defect — the whole point of this page is to make that visible.
 | **Derivation artifact** | 011 | The committed export of a derivation, under `docs/derivations/`, that a build with no database can resolve. The row stays the authority; the artifact is provenance, and the two are reconciled in both directions (C-30) |
 | **Clamp** | 002, 006, 007, 009, 011 | A product bound configuration cannot cross, written as a literal plus a constant in code with a test asserting they agree. Used where lowering a value is individually rational and collectively removes a stop rule — `min_real_yield`, the predicate 2 trust floor, per-rung repeat counts, the escalation cap and budgets, the hypothesis threshold (C-32) |
 
+## Agent work and intake
+
+| Term | Owner | Meaning |
+|------|-------|---------|
+| **Task** | 012 | One line in a feature's `tasks.md`, addressed by its identifier (`T042`). The unit of agent-authored work (012 FR-053). Never a chat request and never a BullMQ job |
+| **Work item** | 014 | One request from the chat channel — kind `investigate` · `fix` · `task` · `finding` — with a closed state. Backed by a GitHub Issue for `fix`, `task` and `finding`; a `task` naming a `tasks.md` line is also addressed by that identifier, and the line is never written. Not a 001 `Issue`; a Healer issue may later mirror it (012 T101) |
+| **Work job** | 014 | One execution attempt of a work item on an executor, with its grant, run binding and outcome. Not a BullMQ job, which is a queue entry inside the control plane |
+| **Finding** | 014 | A chat post classified by structure as material rather than a request — forwarded, pasted or from a bot. Enters 001 ingestion as a signal and becomes a work item of kind `finding`; the 001 issue the signal creates keeps 001's own `IssueKind`. Never dispatched as a task |
+| **Card** | 014 | The confirmation message for a `fix` or `task` work item: single-use, bound to the owner, a time to live and the content hash it shows |
+| **Executor** | 014 | Where a work job runs, behind one contract with dispatch, cancel and an authenticated callback — GitHub Actions first; a self-hosted worker, Healer's own runner and the product pipeline later |
+| **Channel** | 014 | The chat surface a work item came from and reports to — Telegram first (a private group: a broadcast channel carries no sender id), Slack second |
+
 ## Deployment
 
 | Term | Owner | Meaning |
@@ -80,4 +92,7 @@ is a defect — the whole point of this page is to make that visible.
 | Confidence (as a gate) | A structural predicate | Model-reported confidence is never a gate predicate (constitution IV) |
 | Verified (of a merged change) | Merged | At L2 Healer neither merges nor deploys, so it never observes its own change in production (C-09) |
 | Resolved (on merge) | Resolved means production-verified | `IssueResolved` releases customer-facing drafts; firing it on merge tells people a problem is fixed before anything checked |
+| Issue (for a GitHub Issue) | "GitHub Issue", always qualified | Unqualified, "issue" is 001's aggregate. A work item's ledger entry is a GitHub Issue, and the two are different records with different owners (014) |
+| Task (for a chat request) | Work item | "Task" is a `tasks.md` line (012); a chat request is a work item even when it names a task (014) |
+| Job (unqualified) | Work job, or BullMQ job | One is an attempt on an executor, the other a queue entry; the word alone hides which one a timeout or a retry applies to |
 | Masking rejection *threshold* | Deterministic detection and a hard refusal | 008 FR-014 inspects the diff and FR-015 refuses; SC-009 is a fixture outcome. Calling it a threshold in a table of numbers to tune is how it becomes tunable |

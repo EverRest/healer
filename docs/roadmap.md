@@ -224,6 +224,7 @@ block this work.
 | 011 simulator-and-eval | Historical replay, benchmark harness, metrics | ✅ | ✅ | ✅ | ✅ |
 | 012 engineering-foundation | Monorepo, CI, lint gates, runner packaging, observability | ✅ | ✅ | ✅ | ✅ |
 | 013 regression-suite | Adopted expectations → tests → CI; a failing test becomes a `regression` issue | ✅ | ✅ | ✅ | ✅ |
+| 014 chat-agent-intake | Chat post → work item → agent job → report edited in place; absorbs 012 FR-060..FR-065 | ✅ | ✅ | — | — |
 
 Dependency order for planning: 012 → 001 → 002 → 003 → 004 → 005 → 006 → 011 → 009 → 010 → 007 → 008 → 013.
 
@@ -246,6 +247,10 @@ TDD fix + PR        L2 ceiling — human always merges
 Proposed). It lands after T084–T087 (the two agent gates) and needs the repository-level steps of
 T088–T092 and a Telegram bot token. T097 (which coding agent) blocks T089. The bridge from Healer's own
 incidents to its product `change` agent (T101) waits for 006–008 and the GitHub adapter.
+
+**Superseded 2026-10-11 by [014 chat-agent-intake](../specs/014-chat-agent-intake/plan.md)** (spec and
+plan; tasks next): confirmation by risk (C-97), Slack second, GitHub Actions as the first executor
+behind a product-neutral contract. Stage 1 is blocked on the items in its research.md "Unresolved".
 
 ## Beyond v1
 

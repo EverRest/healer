@@ -363,7 +363,8 @@ hand-crafted agent change set touching a protected path is refused by the build.
 - **FR-001**: System MUST be organised as one repository containing the applications `api`,
   `worker`, `mcp-server`, `runner` and `dashboard`; the domain packages under `packages/domain/`
   (`issues`, `evidence`, `policy`, `context`, `architecture`, `knowledge`, `diagnosis`,
-  `reproduction`, `change`, `support`, `remediation`, `evaluation`); and the shared packages
+  `reproduction`, `change`, `support`, `remediation`, `evaluation`, `intake` — the last added by
+  014); and the shared packages
   `agents`, `llm`, `code-intelligence`, `integrations`, `prompts`, `events`, `sandbox`, `workflow`,
   `boundary-contract` and `shared`. Each package MUST declare a public entry surface; imports
   reaching past it into another package's internals MUST fail the build. **This list is the

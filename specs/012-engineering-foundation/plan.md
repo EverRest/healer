@@ -103,7 +103,8 @@ packages/
 │   ├── change/              # 008
 │   ├── support/             # 009
 │   ├── remediation/         # 010
-│   └── evaluation/          # 011
+│   ├── evaluation/          # 011
+│   └── intake/              # 014 — chat intake, work items, executor and channel ports
 ├── agents/                  # investigator, change, verifier — prompts + structured output
 ├── llm/                     # provider-agnostic interface + adapters, per-tenant config
 ├── code-intelligence/       # AST, call graph, impact analysis (ts-morph)

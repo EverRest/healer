@@ -121,6 +121,12 @@ this file
 | `make runner-compat-test` | run the capability handshake across the supported version window and one version below the floor, asserting refusal (R-03) |
 | `make runner-diagnostics` | signal a running runner process (`SIGUSR2`, by PID or pidfile — no registry or query endpoint exists to find one another way) and print the support diagnostic bundle it dumps to a local file in response: versions, capability set, configuration reduced to presence-only, queue depths, timing histograms, the runner's own error signatures, and the last N exchanges as schema identifier and size — no customer data, no source, no log bodies (R-06, FR-024). Fails clearly, does not hang or fabricate output, when no runner process is found. Only reaches a runner in the caller's own PID namespace — a bare process or a container run with `--pid=host` — not one deployed normally via Compose (a separate PID namespace); reaching that case is `docker exec <container> kill -USR2 1` plus reading the dump back via `docker exec <container> cat <path>` or a mounted volume, not this command |
 
+## Feature targets
+
+| Target | Must do |
+|--------|---------|
+| `make intake-smoke` | 014's whole intake path with no real service: real API and worker in-process, disposable Postgres and Redis, a fake chat server and a fake executor host; posts `/investigate` and passes only when the one report message reaches its terminal verdict within 60 s; fails on any broken link (014 SC-007, [quickstart](../../014-chat-agent-intake/quickstart.md)). Not in `ci` until green on a clean checkout |
+
 ## Not in `ci`
 
 `make eval` is a release gate rather than a per-commit one: it costs model spend and needs the

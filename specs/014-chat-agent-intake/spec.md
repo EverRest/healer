@@ -40,7 +40,7 @@ The owner writes `/investigate why do runner heartbeats fail after a deploy?`. A
 
 ### User Story 2 - Only the owner can cause anything (Priority: P1)
 
-A stranger in the channel, a bot, a forwarded post and a forged webhook all fail to start work, and the owner sees that they were refused.
+A stranger in the channel, a bot, a forwarded post and a forged webhook all fail to start work, and each attempt is audited or counted — the stranger is never answered.
 
 **Why this priority**: A channel anyone can write to is an entry point to a model budget and, through it, to the repository. The control has to sit where the post's text cannot reach.
 
@@ -88,7 +88,7 @@ Whatever goes wrong — the host refuses the dispatch, the job hangs, a callback
 1. **Given** the executor host is unavailable, **When** dispatch fails, **Then** it is retried with backoff and then ends `failed(dispatch)`; the owner is told.
 2. **Given** a job that never reports, **When** its wall-clock budget plus a grace period passes, **Then** the tenant schedule marks it `failed(timeout)` and cancels the run.
 3. **Given** duplicate or out-of-order callbacks, **When** they arrive, **Then** the closed state graph rejects the invalid transitions and each `(job, event)` is applied once.
-4. **Given** a callback with an invalid or foreign identity token, **When** it arrives, **Then** it is refused, audited, and changes nothing.
+4. **Given** a callback with an invalid or foreign identity token, **When** it arrives, **Then** it is refused and changes nothing; a token that verifies for another run is audited, while one that fails verification names no tenant and is therefore logged and counted.
 5. **Given** a channel outage, **When** a message edit fails, **Then** the state in the database is unaffected, the edit is retried, and `/status` answers from the database.
 6. **Given** the budget is exhausted mid-run, **When** the job stops, **Then** the outcome is `stopped`, the breach is recorded, and the cost is stored as reported, never as measured.
 
@@ -155,7 +155,7 @@ Adding Slack, a self-hosted worker or Healer's own runner means writing one adap
 
 - **FR-001**: A chat post MUST be classified by structure, never by its wording: a leading command (`/investigate`, `/fix`, `/task`, `/status`, `/cancel`, `/help`), a reply to a card or report, a button press, or — failing those — a finding (forwarded or pasted material, a post from a bot) or an unclassified post. An unclassified post MUST get choice buttons and MUST NOT start an agent.
 - **FR-002**: The post's text MUST be stored as the work item's description and MUST reach an agent only as data in a block under a fixed prompt. It MUST NOT be able to change the prompt, the task identifier, the protected-path list, the budget, the labels or the grant (012 FR-062).
-- **FR-003**: A finding MUST enter 001 ingestion as a signal with the sender as producer and become an issue of kind `finding`. A finding MUST NOT be dispatched as a task (012 FR-061).
+- **FR-003**: A finding MUST enter 001 ingestion as a signal with the sender as producer and become a work item of kind `finding`, carried on its ledger issue as a label — 001's issue kinds are unchanged. A finding MUST NOT be dispatched as a task (012 FR-061).
 
 **Identity and authenticity**
 
@@ -188,7 +188,7 @@ Adding Slack, a self-hosted worker or Healer's own runner means writing one adap
 
 **Work items and the ledger**
 
-- **FR-021**: A work item MUST move through a closed state graph — `awaiting_confirmation → confirmed → running → reported | stopped | cancelled | expired | failed` — in which an undeclared transition cannot be expressed; `investigate` items begin at `confirmed`.
+- **FR-021**: A work item MUST move through a closed state graph — `awaiting_confirmation → confirmed → running → reported | stopped | cancelled | expired | failed` — in which an undeclared transition cannot be expressed. The arrows show the main path only: any non-terminal state may end in `cancelled`, `expired` or `failed`, `investigate` items begin at `confirmed`, and a `finding` is created already `reported`.
 - **FR-022**: A work item of kind `fix`, `task` or `finding` MUST be backed by a GitHub Issue; a planned task MUST be addressed by its `tasks.md` identifier and MUST NOT create or edit a task line (specifications are protected paths, ADR 0011). The ledger MUST be behind a port so a Healer issue can later mirror it (012 T101).
 - **FR-023**: Each work item MUST resolve to its audit entries, its jobs and its channel messages; the chat sender MUST be the audit actor.
 
@@ -228,7 +228,7 @@ Adding Slack, a self-hosted worker or Healer's own runner means writing one adap
 - **SC-005**: A duplicated update, callback or confirmation yields exactly one work item, one applied event and one job.
 - **SC-006**: 0 investigation jobs hold a write grant; 0 change jobs hold a merge or administration right.
 - **SC-007**: In the smoke run, the owner's `/investigate` reaches a terminal report message within the time budget set in planning, and the run fails on any broken link of the path.
-- **SC-008**: 100% of findings in an investigation report cite an evidence reference; a report with an uncited finding is rejected before it is shown.
+- **SC-008**: 100% of findings shown in an investigation report cite an evidence reference that resolves; a finding without one is dropped and counted before the report is shown (FR-026).
 - **SC-009**: Every new endpoint has a tenant-isolation test recognised by `gate-isolation`; the channel and executor contract suites pass for every adapter.
 
 ## Assumptions
@@ -238,6 +238,7 @@ Adding Slack, a self-hosted worker or Healer's own runner means writing one adap
 - Healer's own repository is the first tenant and project; the same work item reaches customer incidents only after 006–008 and the GitHub adapter exist (012 C-42, T101), at which point the product pipeline is a further executor behind FR-020.
 - The investigation budget, the per-task budget, the concurrency cap and the card's time to live are starting values set in planning to fail closed; they are policy data, not constants in code.
 - Owners: ingestion and issues — 001; policy and budgets — 002; the schedule — 012 C-90; the gates and protected paths — 012 US10; the executor's repository permissions — 012 R-16. This feature owns classification, the work item, the contracts, the callback route and the report.
+- Three dependencies found in planning ([plan.md](plan.md), research U-01, U-02, U-07) gate dispatch and the change flow: 002's decision input is built around a 001 issue and has no concurrency predicate (FR-012, FR-015 until then enforced by the intake's own state graph); a job's cost must reach `agent_run` to release its budget hold (FR-030); and 012 FR-053 requires a pull request to name a `tasks.md` identifier, which a `/fix` or `/task <text>` pull request does not have.
 - Slack, a self-hosted worker, Healer's own runner, the follow-up loop on a red build (012 T100) and the Healer-issue mirror are later stages (below), designed for here and not built by the first.
 
 ## Stages

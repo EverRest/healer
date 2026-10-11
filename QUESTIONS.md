@@ -4556,3 +4556,13 @@ maximum spend carry one (AI steps), so the exposure is a *wrong AI step's* reser
 unbounded bypass. Closing it needs the agent-step action keys to exist as a closed list in 002 (none
 does today) — **needs-Pavlo/002 owner**: define that list, then add the `action_key` check and its
 failing-first test. The other two items are unread until the full review text is available.
+
+## 014 chat-agent-intake plan — waiting on Pavlo (2026-10-11)
+
+Detail in [014 research.md](specs/014-chat-agent-intake/research.md) "Unresolved" (U-01..U-08) and
+plan.md "Spec inconsistencies". Not repeated here. In short: 002's decision input for a dispatch with
+no 001 issue (U-01); `agent_run.executed_in = external_host` so job cost lands in `agent_run` (U-02);
+dispatcher credential — second GitHub App or not (U-03); human-authored `test/tenant-isolation.ts`
+change (U-04); a private group, not a broadcast channel (U-05); `gate-no-send` blind to `fetch`
+(U-06); 012 FR-053/T088 and "ChatPost/ChatTask not persisted" vs 014 (U-07); ADR 0019 (U-08).
+C-96 and C-97 were added to decisions.md as **Proposed** because spec.md cites them.
