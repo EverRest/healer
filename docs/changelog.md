@@ -1927,5 +1927,12 @@ stage 1 is the `/investigate` MVP and `make intake-smoke`.
 - A replayed step that finds a stale live allow invalidates it (`epoch_bump`) in the same
   transaction, whether the fresh evaluation allows (a new allow replaces it) or refuses. A refusal
   not caused by an epoch change still leaves the old allow live (QUESTIONS.md 002 Phase 5, 13(a)).
+- `consume` reads the epoch `FOR SHARE` (the same `readEpochForShare` the approval path uses, which
+  first ensures the tenant's epoch row at 0), so a revocation cannot commit between the epoch read and
+  `consumed_at`. `RequestApproval` also requires the decision's own recorded epoch to equal the
+  current one (NULL is stale), whatever epoch the caller passes.
+- Reader: `consumeDecision` has no production caller yet, so "a revocation withdraws every earlier
+  allow" has no executor reading it until 008/010 consume decisions. Only a revocation bumps the
+  epoch; a ruleset publish or ceiling tightening does not.
 - Migration `20261012000000_policy_decision_autonomy_epoch`. History rows have a NULL epoch and are
   therefore not consumable.

@@ -35,6 +35,7 @@ import {
   moveRunToNeedsHuman,
   parkRun,
 } from './approval-run-effects.js';
+import { readEpochForShare } from './bump-autonomy-epoch.js';
 import { recordAuditEntry } from './record-audit-entry.js';
 
 function assertCorrelated(): void {
@@ -109,16 +110,6 @@ export async function lockApproval(tx: Prisma.TransactionClient, tenantId: strin
   return { locked, runId: row.workflow_run_id, decisionId: row.decision_id };
 }
 
-/** The tenant's current epoch, read `FOR SHARE` so a revocation's bump (an UPDATE of this row)
- *  cannot commit between this read and the resolution it guards. Absent row = epoch 0. */
-async function currentEpochShared(tx: Prisma.TransactionClient, tenantId: string): Promise<bigint> {
-  const rows = await tx.$queryRaw<{ epoch: bigint }[]>`
-    SELECT epoch FROM "policy"."autonomy_epoch"
-    WHERE tenant_id = ${tenantId}::uuid
-    FOR SHARE`;
-  return rows[0]?.epoch ?? 0n;
-}
-
 /**
  * `policy.approval_request` lifecycle (T070-T075): request, resolve, expire and the reads. Each
  * write is one transaction holding the row locks it reads under, and each audits (FR-017) and
@@ -170,10 +161,11 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
       const expiresAt = projectExpiry(where.requestedExpiresAt, run.deadlineAt ?? undefined);
       // The epoch the decision was made under must still be the current one, or a revocation has
       // happened since and this request would carry a post-revocation epoch it never held.
-      checkAutonomyEpoch(
-        { id: where.id, autonomyEpoch: where.autonomyEpoch },
-        await currentEpochShared(tx, tenantId),
-      );
+      const current = await readEpochForShare(tx, tenantId);
+      checkAutonomyEpoch({ id: where.id, autonomyEpoch: where.autonomyEpoch }, current);
+      // ...and so must the epoch the decision *itself* recorded: the caller's value is a claim, the
+      // decision's is a fact. NULL (history) never matches, so it is stale.
+      checkAutonomyEpoch({ id: where.id, autonomyEpoch: decision.autonomyEpoch ?? -1n }, current);
       const created = await tx.approvalRequest.create({
         data: {
           id: where.id,
@@ -207,7 +199,7 @@ export class PrismaApprovalLifecycleRepository implements ApprovalLifecycleRepos
     const { tenantId } = where;
     return this.prisma.$transaction(async (tx) => {
       const { locked, runId, decisionId } = await lockApproval(tx, tenantId, where.id);
-      const epoch = await currentEpochShared(tx, tenantId);
+      const epoch = await readEpochForShare(tx, tenantId);
       where.assertRedeemable(locked, epoch, where.resolvedAt);
       // Same lock order as `expire` (approval, then run). A terminal run has nothing left to resume.
       const run = await lockRun(tx, tenantId, runId);

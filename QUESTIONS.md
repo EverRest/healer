@@ -4783,11 +4783,20 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
     epoch it was evaluated under; `consume` refuses a NULL or lower-than-current epoch (computed
     reason `epoch_stale`, no new stored reason), and a replay that finds a stale live allow
     invalidates it with the existing `epoch_bump`, whether the fresh decision allows (a new allow
-    replaces it) or refuses. A revocation or level change (anything that bumps the epoch) can no
+    replaces it) or refuses. A revocation (the only thing that bumps the epoch; a level change is a revoke plus a grant) can no
     longer leave a consumable allow behind. **13(a), part STILL OPEN:** a refusal that is not caused
     by an epoch change (a tightened `action_limit`, a lowered budget) leaves the old allow live,
     consumable, counted against other steps and holding its open charge until
     `releaseAbandonedCharges`; closing it still needs a new closed `invalidated_reason`.
+    **13(b), found in review of the epoch binding, NOT done:** (i) the agent-run report lookup
+    (`prisma-agent-run-repository.ts` `assertReferencesResolve`) accepts an allow that `consume`
+    would refuse as `epoch_stale` and does not check `consumed_at`; (ii) `GET /policy/decisions` and
+    explain show a stale unconsumed allow as live (no epoch or stale flag); (iii) `consumeDecision`
+    has no production caller yet, so the epoch refusal has no reader (every guarantee names its
+    reader); (iv) only a revocation bumps the epoch, so a ruleset publish or ceiling tightening does
+    not stale an allow, and a level change is a revoke plus a grant; (v) a stale live allow that
+    never replays keeps counting toward the cap and its open charge until `run_terminal` or the
+    abandoned-charge sweep (fails closed, over-counts).
     (c) **F3:** a returned old allow hides the fresh evaluation: no row, no audit entry, so a step
     may run under ruleset v2 while the audited decision says v1. (d) **F4:** each refused retry
     inserts a refusal row and an outbox event, bounded only by the caller's retry policy. Neither is
@@ -4808,6 +4817,9 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
 4. After a retried step is refused on re-evaluation for a reason that is not an epoch change (cap,
    budget), its earlier live allow is left as it was (still live, still consumable). Invalidate
    it, which needs a new closed `invalidated_reason` (item 13(a); the epoch-change case is closed)?
+   Also item 13(b) (not done): agent-run lookup and `GET /policy/decisions` ignore the epoch,
+   `consumeDecision` has no production reader, only revocation bumps the epoch, stale unreplayed
+   allows over-count.
 5. F3: a returned old allow leaves no row or audit entry of the fresh evaluation (ruleset version
    can differ from the audited one). Record it?
 6. F4: each refused retry inserts a refusal row and an outbox event, unbounded except by the

@@ -235,4 +235,79 @@ describe('a decision is bound to its autonomy epoch (002 R-13)', () => {
     expect(results.filter((r) => r === 'won')).toHaveLength(1);
     expect(results.filter((r) => r instanceof DecisionAlreadyConsumedError)).toHaveLength(1);
   });
+
+  it('(k) a replay whose stale allow is consumed under it: that allow comes back, no unique violation', async () => {
+    const { tenantId, ctx, binding } = await tenant();
+    const first = (await step(ctx, binding, 0)).decision;
+    await bump(ctx);
+    const holder = await hold(h.prisma, async (tx) => {
+      await tx.$executeRaw`
+        UPDATE "policy"."policy_decision" SET consumed_at = now()
+        WHERE tenant_id = ${tenantId}::uuid AND id = ${first.id}::uuid`;
+    });
+    const pending = step(ctx, binding, 30);
+    await waitForBlocked(h.pg, 1, holder);
+    await holder.release();
+
+    expect((await pending).decision.id).toBe(first.id);
+    expect(await liveAllows(tenantId)).toBe(1);
+  });
+
+  describe('consume reads the epoch under a lock: a revocation in flight cannot be missed', () => {
+    it('(h) a bump holding the epoch row makes consume wait, then refuse the pre-bump allow', async () => {
+      const { tenantId, ctx, binding } = await tenant();
+      await bump(ctx);
+      const { decision } = await step(ctx, binding, 0);
+      const holder = await hold(
+        h.prisma,
+        async (tx) => {
+          await tx.$executeRaw`
+            SELECT 1 FROM "policy"."autonomy_epoch" WHERE tenant_id = ${tenantId}::uuid FOR UPDATE`;
+        },
+        async (tx) => {
+          await tx.$executeRaw`
+            UPDATE "policy"."autonomy_epoch" SET epoch = epoch + 1 WHERE tenant_id = ${tenantId}::uuid`;
+        },
+      );
+      const pending = consume(ctx, decision.id, decision.proposalDigest).catch((e) => e);
+      await waitForBlocked(h.pg, 1, holder);
+      await holder.release();
+
+      const refused = await pending;
+      expect(refused).toBeInstanceOf(DecisionNotAllowedError);
+      expect(refused.reason).toBe('epoch_stale');
+      expect((await row(tenantId, decision.id)).consumed_at).toBeNull();
+    });
+
+    it('(i) a tenant with no epoch row yet: the first revocation in flight is not missed either', async () => {
+      const { tenantId, ctx, binding } = await tenant();
+      const { decision } = await step(ctx, binding, 0);
+      const holder = await hold(h.prisma, async (tx) => {
+        await tx.$executeRaw`
+            INSERT INTO "policy"."autonomy_epoch" (tenant_id, epoch, bumped_at, bumped_by, bump_reason)
+            VALUES (${tenantId}::uuid, 1, now(), 'pavlo', 'first revocation')`;
+      });
+      const pending = consume(ctx, decision.id, decision.proposalDigest).catch((e) => e);
+      await waitForBlocked(h.pg, 1, holder);
+      await holder.release();
+
+      const refused = await pending;
+      expect(refused).toBeInstanceOf(DecisionNotAllowedError);
+      expect(refused.reason).toBe('epoch_stale');
+    });
+
+    it('(j) the real bump still goes 0 -> 1 on the row consume ensured, and stales the allow', async () => {
+      const { ctx, binding } = await tenant();
+      const { decision } = await step(ctx, binding, 0);
+      const other = (
+        await step(ctx, binding, 5, { issue: { state: 'diagnosed', classification: 'oom' } })
+      ).decision;
+      await consume(ctx, decision.id, decision.proposalDigest); // ensures the row at 0
+
+      expect(await bump(ctx)).toBe(1n);
+      const refused = await consume(ctx, other.id, other.proposalDigest).catch((e) => e);
+      expect(refused).toBeInstanceOf(DecisionNotAllowedError);
+      expect(refused.reason).toBe('epoch_stale');
+    });
+  });
 });

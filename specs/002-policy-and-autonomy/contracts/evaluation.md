@@ -134,7 +134,11 @@ autonomyEpoch)` and is valid for exactly one execution:
   single-use check;
 - a decision evaluated under an earlier autonomy epoch than the tenant's current one, or with no
   epoch recorded, is never consumable either — `DECISION_NOT_ALLOWED` (computed reason
-  `epoch_stale`, read in the same transaction; no new stored `invalidated_reason`). The epoch is the
+  `epoch_stale`, read `FOR SHARE` in the same transaction so a revocation's bump waits for the consume;
+  no new stored `invalidated_reason`). Only a revocation bumps the epoch (a level change is a revoke
+  plus a grant). Reader: no production executor calls `consumeDecision` yet, so until 008/010 do,
+  this refusal is guaranteed by the repository and read by nothing in production (QUESTIONS.md 002
+  Phase 5, item 13(b)). The epoch is the
   one the evaluation read first, recorded on the decision, so a revocation withdraws every allow
   minted before it, not only the approval-linked ones;
 - **a decision is never carried across a wait.** Evaluation happens inside the job that performs the

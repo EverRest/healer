@@ -971,6 +971,39 @@ describe('approval lifecycle (T070-T074)', () => {
       expect(await prisma.workflowCallback.count({ where: { runId: f.runId } })).toBe(0);
     });
 
+    it("evaluate, revoke, then RequestApproval with the CURRENT epoch -> still refused: the decision's own epoch is stale", async () => {
+      const f = await fixture();
+      await inCorrelation(() =>
+        revokeAutonomy({ grants: autonomyGrants }, f.context, {
+          grantId: f.grantId,
+          revokedBy: 'pavlo',
+        }),
+      );
+      const current = await autonomyEpochs.current(scope(f.context, {}));
+      expect(current).toBeGreaterThan(f.epoch);
+      await expect(
+        inCorrelation(() =>
+          requestApproval(repos(), f.context, {
+            decisionId: f.decisionId,
+            evidenceIds: [f.evidenceId],
+            autonomyEpoch: current,
+          }),
+        ),
+      ).rejects.toBeInstanceOf(StaleAutonomyEpochError);
+      expect(await prisma.approvalRequest.count({ where: { decisionId: f.decisionId } })).toBe(0);
+    });
+
+    it('a decision with no recorded epoch (legacy) is refused even when the caller names the current one', async () => {
+      const f = await fixture();
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+        await tx.$executeRaw`
+          UPDATE "policy"."policy_decision" SET autonomy_epoch = NULL WHERE id = ${f.decisionId}::uuid`;
+      });
+      await expect(request(f)).rejects.toBeInstanceOf(StaleAutonomyEpochError);
+      expect(await prisma.approvalRequest.count({ where: { decisionId: f.decisionId } })).toBe(0);
+    });
+
     it('records the decision-time epoch it was given', async () => {
       const f = await fixture();
       const approval = await request(f);

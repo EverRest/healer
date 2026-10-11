@@ -96,7 +96,12 @@ cannot raise a level above what either grants alone.
 
 Incremented by every grant revocation. An outstanding `approval_request` whose recorded epoch no
 longer matches is invalid at redemption (R-07). One row per tenant; the increment is the single
-write that makes revocation immediate.
+write that makes revocation immediate. Only a revocation bumps it (a level change is a revoke plus a
+new grant; publishing a ruleset or tightening a ceiling does not). A guarded write reads it
+`FOR SHARE` (`readEpochForShare`: approval request and resolve, decision consume), so a bump waits
+for it; the row is first ensured at epoch 0 (`ON CONFLICT DO NOTHING`) so a tenant that has never
+revoked has a row to lock, and the first revocation takes it 0 -> 1. `current()` still reads an absent
+row as 0.
 
 ## policy.policy_decision (append-only)
 
@@ -139,7 +144,7 @@ cooldown and attempt-cap predicates read (R-13, C-11). Index `(workflow_run_id)`
 | workflow_run_id | uuid | 012 |
 | summary | jsonb | proposed action, reason codes, ruleset version, target identifiers, impact summary, rollback plan (FR-015) — a **closed shape** built from the stored decision, never from caller input (`approvalSummarySchema`, T070/T071) |
 | evidence_ids | uuid[] | 001 — the approver sees the evidence, not a narrative |
-| autonomy_epoch | bigint | recorded at issue; re-checked at redemption (R-07) |
+| autonomy_epoch | bigint | recorded at issue; re-checked at redemption (R-07). At request time the decision's own `autonomy_epoch` must also equal the current epoch (NULL is stale), whatever epoch the caller names |
 | expires_at | timestamptz | projected onto `workflow_run.deadline_at` |
 | state | enum | `pending` · `approved` · `rejected` · `expired` · `revoked` |
 | resolved_by | text? | the human, for `approved` and `rejected` (FR-017) |

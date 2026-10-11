@@ -35,3 +35,25 @@ export async function bumpAutonomyEpochInTx(
   });
   return row.epoch;
 }
+
+/** The tenant's current epoch, read `FOR SHARE` — the one place a guarded write reads it under lock
+ *  (approval request/resolve, decision consume). A revocation's bump is an UPDATE of this row, so
+ *  it waits for every transaction that read the epoch here and cannot commit between the read and
+ *  the write it guards. A tenant with no row yet would have nothing to lock and the first
+ *  revocation's INSERT would not be blocked, so the row is ensured first at epoch 0 (no revocation
+ *  yet; `bumpAutonomyEpochInTx` takes it 0 -> 1). `ON CONFLICT DO NOTHING` also waits for an
+ *  uncommitted first-revocation insert and then reads it. */
+export async function readEpochForShare(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+): Promise<bigint> {
+  await tx.$executeRaw`
+    INSERT INTO "policy"."autonomy_epoch" (tenant_id, epoch, bumped_at, bumped_by, bump_reason)
+    VALUES (${tenantId}::uuid, 0, now(), 'system', 'initial row')
+    ON CONFLICT (tenant_id) DO NOTHING`;
+  const rows = await tx.$queryRaw<{ epoch: bigint }[]>`
+    SELECT epoch FROM "policy"."autonomy_epoch"
+    WHERE tenant_id = ${tenantId}::uuid
+    FOR SHARE`;
+  return rows[0]?.epoch ?? 0n;
+}

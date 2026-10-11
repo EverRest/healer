@@ -18,6 +18,7 @@ import {
   type StoredDecision,
 } from '../domain/policy-decision-repository.js';
 import type { ReasonCode } from '../domain/reason-code.js';
+import { readEpochForShare } from './bump-autonomy-epoch.js';
 import { lockActionLimit, readActionLimit } from './action-limit-counts.js';
 
 /** `record` publishes `PolicyDecisionRecorded` — a missing correlation scope is a caller error,
@@ -141,7 +142,7 @@ export async function findLiveStepDecision(
 /** What a (re)evaluated step becomes. Its earlier live allow comes back only if the fresh decision
  *  *also* allows and the allow is not stale; otherwise the fresh decision is recorded as a new row.
  *  A stale allow (its epoch is NULL or lower than the epoch the fresh evaluation read: a revocation
- *  or level change since) is invalidated (`epoch_bump`) in this transaction whatever the fresh
+ *  since; a level change is a revocation plus a new grant) is invalidated (`epoch_bump`) in this transaction whatever the fresh
  *  outcome, so it dies with the revocation and the partial unique index lets a fresh allow replace
  *  it. An allow that is not stale stays live and consumable when the fresh decision refuses for
  *  another reason (a tightened cap): it still counts against other steps and holds its open charge
@@ -162,7 +163,7 @@ export async function recordOrReplayInTx(
         live.autonomyEpoch < built.autonomyEpoch);
     if (!stale && built.decision.outcome === 'allow') return live.decision;
     if (stale) {
-      await tx.policyDecision.updateMany({
+      const { count } = await tx.policyDecision.updateMany({
         where: {
           tenantId: built.tenantId,
           id: live.decision.id,
@@ -171,6 +172,9 @@ export async function recordOrReplayInTx(
         },
         data: { invalidatedReason: 'epoch_bump' },
       });
+      // 0 rows: a consume committed first (this waited on its row lock), so the allow already ran
+      // and is the consumed-allow case above; inserting another allow would hit the unique index.
+      if (count === 0 && built.decision.outcome === 'allow') return live.decision;
     }
   }
   return recordDecisionInTx(tx, built);
@@ -288,10 +292,10 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
       }
       if (row.outcome !== 'allow') throw new DecisionNotAllowedError(decisionId, 'outcome');
       // Fail closed: NULL (history, or never stamped) is as stale as an older epoch. The tenant's
-      // epoch is read in this transaction; no row means no revocation has ever happened (0).
-      const [current] = await tx.$queryRaw<{ epoch: bigint }[]>`
-        SELECT epoch FROM "policy"."autonomy_epoch" WHERE tenant_id = ${tenantId}::uuid`;
-      if (row.autonomy_epoch === null || row.autonomy_epoch < (current?.epoch ?? 0n)) {
+      // epoch is read `FOR SHARE` in this transaction, so a revocation's bump waits for this
+      // consume instead of committing between the read and the `consumed_at` write.
+      const current = await readEpochForShare(tx, tenantId);
+      if (row.autonomy_epoch === null || row.autonomy_epoch < current) {
         throw new DecisionNotAllowedError(decisionId, 'epoch_stale');
       }
       if (row.proposal_digest !== presentedDigest) throw new DigestMismatchError(decisionId);
