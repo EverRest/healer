@@ -7,7 +7,8 @@ import type { StepKey } from '../domain/request-key.js';
 export function excludingStep(alias: string, step: StepKey | undefined): Prisma.Sql {
   if (step === undefined) return Prisma.empty;
   const col = (name: string) => Prisma.raw(`${alias}.${name}`);
-  return Prisma.sql`AND NOT (${col('workflow_run_id')} = ${step.workflowRunId}::uuid
-    AND ${col('workflow_state')} = ${step.workflowState}
-    AND ${col('request_key')} = ${step.requestKey})`;
+  // IS DISTINCT FROM, never `NOT (a = x AND ...)`: a NULL run, state or key makes the latter NULL and
+  // would silently drop the row from the counts. NULL means "a different step", so it counts.
+  return Prisma.sql`AND (${col('workflow_run_id')}, ${col('workflow_state')}, ${col('request_key')})
+    IS DISTINCT FROM (${step.workflowRunId}::uuid, ${step.workflowState}::text, ${step.requestKey}::text)`;
 }

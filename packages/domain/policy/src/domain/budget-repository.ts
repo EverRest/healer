@@ -113,8 +113,9 @@ export interface BudgetRepository extends ReadOnlyBudgetRepository {
    * not stop a read-then-write.
    *
    * Idempotent on the decision's `requestKey` (when it carries one and is bound to a run and
-   * state): a retry of the same step returns the live allowed decision already minted instead of
-   * charging again. The lock wait is bounded; past it the call fails with `BudgetContentionError`
+   * state): a retry of the same step is re-evaluated with its own earlier live allow left out of the
+   * open charges and the limit counts (`limit.step`), and returns that allow instead of charging
+   * again only if the fresh decision also allows; otherwise the fresh refusal is recorded. The lock wait is bounded; past it the call fails with `BudgetContentionError`
    * (retryable) rather than queueing a pooled connection behind everyone ahead of it.
    *
    * After the budget lock it takes the action-limit lock for `limit`'s scope and resolves the

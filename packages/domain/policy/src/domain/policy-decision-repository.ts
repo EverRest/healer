@@ -122,8 +122,10 @@ export interface PolicyDecisionRepository {
   /** `record` for a decision that is subject to an action limit (FR-014, T054): in one transaction,
    *  under the scope's advisory lock, resolve the cooldown group, hand it to `build`, and insert
    *  what `build` returns. Without the lock two concurrent proposals both count the same history
-   *  and both mint an ALLOW (READ COMMITTED does not stop a read-then-write). Wait bounded; past
-   *  it, `ActionLimitContentionError`. */
+   *  and both mint an ALLOW (READ COMMITTED does not stop a read-then-write). A replay of a step
+   *  (`where.step`) is evaluated afresh with its own earlier live allow left out of the counts; that
+   *  allow is returned only if the fresh decision also allows, else the refusal is recorded. Wait
+   *  bounded; past it, `ActionLimitContentionError`. */
   recordLimited(
     where: TenantScoped<ActionLimitQuery>,
     build: (cooldown: CooldownGroup) => TenantScoped<NewRecordedDecision>,

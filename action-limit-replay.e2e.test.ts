@@ -168,6 +168,52 @@ describe('a replayed step is re-evaluated (002 T054)', () => {
     expect(retry.id).toBe(first.id);
   });
 
+  describe('a row that is not this step still counts (NULL run, state or key)', () => {
+    it.each(PATHS)(
+      '%s: an unbound allow of the same proposal counts toward the cap',
+      async (_p, declared) => {
+        const { ctx, binding } = await tenant(0, 1);
+        expect((await h.bind(ctx, declared, {}, at(0), ROLLBACK)).decision.outcome).toBe('allow');
+        const bound = (await step(ctx, binding, declared, 30)).decision;
+        expect(bound.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+      },
+    );
+
+    it.each(PATHS)(
+      '%s: an allow bound to a run only counts toward the cap',
+      async (_p, declared) => {
+        const { ctx, binding } = await tenant(0, 1);
+        const runOnly = { workflowRunId: binding.workflowRunId };
+        expect((await h.bind(ctx, declared, runOnly, at(0), ROLLBACK)).decision.outcome).toBe(
+          'allow',
+        );
+        const bound = (await step(ctx, binding, declared, 30)).decision;
+        expect(bound.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+      },
+    );
+
+    it("a legacy allow with no request key counts toward another step's cap", async () => {
+      const { tenantId, ctx, binding } = await tenant(0, 1);
+      const first = (await step(ctx, binding, 0, 0)).decision;
+      await h.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SET LOCAL session_replication_role = replica`;
+        await tx.$executeRaw`
+          UPDATE "policy"."policy_decision" SET request_key = NULL
+          WHERE tenant_id = ${tenantId}::uuid AND id = ${first.id}::uuid`;
+      });
+      const bound = (await step(ctx, binding, 0, 30)).decision;
+      expect(bound.reasonCodes).toContain('ATTEMPT_CAP_REACHED');
+    });
+
+    it('an unbound open charge counts against the budget of a bound step', async () => {
+      const { ctx, binding } = await tenant();
+      await h.setLimit(ctx, { spendLimit: 1 });
+      expect((await h.bind(ctx, 1, {}, at(0), ROLLBACK)).decision.outcome).toBe('allow');
+      const bound = (await step(ctx, binding, 1, 30)).decision;
+      expect(bound.reasonCodes).toContain('BUDGET_EXHAUSTED');
+    });
+  });
+
   describe('two simultaneous identical retries', () => {
     const lockKey = (tenantId: string) =>
       actionLimitLockKey(tenantId, 'deployment.rollback', 'target-1', 'fingerprint-1');

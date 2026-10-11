@@ -4778,7 +4778,18 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
     whoever holds its id, and each further refused retry adds another refusal row; (b) a returned
     old allow keeps its original `decision_input` (evaluated instant, counts) even though the fresh
     one was computed later. **Needs Pavlo: should a refused retry invalidate the old allow?** It
-    needs a new `invalidated_reason` value, which is a closed list.
+    needs a new `invalidated_reason` value, which is a closed list. After a refusal the old allow
+    can still be consumed, as before this change: `consume` checks only `consumed_at`,
+    `invalidated_reason`, `outcome` and the digest, and revocation invalidates only approval-linked
+    decisions. It also still counts against other steps and holds its open charge until
+    `releaseAbandonedCharges`.
+    (c) **F3:** a returned old allow hides the fresh evaluation: no row, no audit entry, so a step
+    may run under ruleset v2 while the audited decision says v1. (d) **F4:** each refused retry
+    inserts a refusal row and an outbox event, bounded only by the caller's retry policy. Neither is
+    fixed. **Needs Pavlo.**
+    (e) Test honesty: the "same decision returns / cap 1", "different step still counts" and
+    concurrency tests and the `stepKeyOf` unit test were regression guards written after or
+    alongside the code, not red-first; the revocation, tightened-cap and NULL-row tests were red first.
 
 ## Decisions waiting on Pavlo — 002 Phase 5 (index; detail in the section above)
 
@@ -4792,3 +4803,7 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
 4. After a retried step is refused on re-evaluation, its earlier live allow is left as it was
    (still live, still consumable). Invalidate it, which needs a new closed `invalidated_reason`
    (item 13)?
+5. F3: a returned old allow leaves no row or audit entry of the fresh evaluation (ruleset version
+   can differ from the audited one). Record it?
+6. F4: each refused retry inserts a refusal row and an outbox event, unbounded except by the
+   caller's retry policy. Bound it?

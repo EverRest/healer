@@ -131,8 +131,9 @@ export async function findLiveStepDecision(
 }
 
 /** What a (re)evaluated step becomes: its earlier live allow if the fresh decision *also* allows,
- *  otherwise the fresh decision, recorded as a new row. The earlier allow is not touched; it stays
- *  as history. The fresh decision was built from counts that left that allow out, so this never
+ *  otherwise the fresh decision, recorded as a new row. The earlier allow is not touched: it stays
+ *  live and consumable, still counts against other steps and holds its open charge until
+ *  `releaseAbandonedCharges` (QUESTIONS.md 002 Phase 5, item 13). The fresh decision was built from counts that left that allow out, so this never
  *  refuses a retry for its own sake (FR-014). Under the caller's lock, so two retries cannot both
  *  miss the allow. */
 export async function recordOrReplayInTx(

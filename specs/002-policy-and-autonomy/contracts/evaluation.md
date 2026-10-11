@@ -111,7 +111,7 @@ what any rule says.
 request key already has a live `ALLOW` does the whole evaluation again (grants, ruleset, limits,
 budget), with that `ALLOW` left out of the budget's open charges and out of the step 6 counts, under
 the same locks. It returns the earlier decision only if the fresh outcome is also `ALLOW`; otherwise
-it records the fresh refusal as a new decision and leaves the earlier `ALLOW` as history. Every other
+it records the fresh refusal as a new decision and leaves the earlier `ALLOW` as it was: it stays live and consumable (QUESTIONS.md 002 Phase 5, item 13), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`. Every other
 decision, including a different step for the same action and target, counts as usual.
 
 ## `EvaluationTrace`

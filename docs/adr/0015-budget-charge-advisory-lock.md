@@ -39,9 +39,10 @@ inside **one database transaction** that first takes `pg_advisory_xact_lock(hash
 - **An advisory lock, not a row lock**, because no row is guaranteed to exist to lock: a tenant that
   never configured a budget runs on the fail-closed defaults and has no `budget_limit` row, and the
   policy tables carry no foreign key to `tenant`.
-- **Idempotent.** The decision carries a `request_key`; under the lock a retry of the same
-  `(tenant, run, state, request)` returns the live allowed decision already minted, so a retry after
-  a lost response does not charge twice. A partial unique index backs it.
+- **Idempotent, revalidated.** The decision carries a `request_key`; under the lock a retry of the
+  same `(tenant, run, state, request)` is evaluated afresh with its own earlier charge left out, and
+  gets the live allowed decision already minted back only if it still allows, so a retry after a lost
+  response does not charge twice. A partial unique index backs it.
 - **Released charges are a command, not a timer.** An allowed step that never starts would hold its
   charge forever; `releaseAbandonedCharges` invalidates those older than a TTL
   (`invalidated_reason = 'charge_abandoned'`). No production caller schedules it yet.
@@ -88,6 +89,8 @@ A retried step (same tenant, run, state and request key) is **revalidated on rep
 locks: the evaluation is done afresh, with that step's own earlier live allow left out of the rate,
 cooldown, attempt-cap and open-charge figures (so a retry never counts or refuses itself, while every
 distinct step still counts). The earlier allow is returned only if the fresh decision also allows;
-otherwise the fresh refusal is recorded as a new decision and the old allow stays as history. Without
+otherwise the fresh refusal is recorded as a new decision and the old allow stays live and consumable (QUESTIONS.md 002 Phase 5, item 13), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`. Without
 this, a revocation, a lowered level or a tightened limit would not reach a retried step, because the
-request key leaves out the autonomy level, the counts and the time.
+request key leaves out the autonomy level, the counts and the time. A row with a NULL run, state or
+request key is a different step and counts (`IS DISTINCT FROM`, never `NOT (a = x AND ...)`, which
+is NULL on a NULL).

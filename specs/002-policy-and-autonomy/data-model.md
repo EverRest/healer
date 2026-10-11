@@ -286,8 +286,8 @@ configurable. 010 keeps no limit store and projects only the refusal reason code
   re-read), with the live allow already minted for that key left out of the rate, cooldown,
   attempt-cap and open-charge figures, so it neither counts nor refuses itself while every other
   decision still counts. That allow is returned only if the fresh decision also allows; otherwise the
-  fresh refusal is recorded as a new row and the old allow is left as history, so a revocation or a
-  tightened limit reaches the retry. Counts are measured from `LEAST(evaluatedAt, now())` so a future instant cannot shorten
+  fresh refusal is recorded as a new row and the old allow stays live and consumable (QUESTIONS.md 002 Phase 5, item 13), still counts against other steps, and holds its open charge until `releaseAbandonedCharges`; a revocation or a
+  tightened limit reaches the retry. A row with a NULL run, state or key is a different step and counts. Counts are measured from `LEAST(evaluatedAt, now())` so a future instant cannot shorten
   the window or cooldown.
 - **Serialisation**: counts-then-insert runs in one transaction under
   `pg_advisory_xact_lock(hashtextextended('policy.action_limit:<tenant>:<action>:<target>:<fingerprint>', 0))`
