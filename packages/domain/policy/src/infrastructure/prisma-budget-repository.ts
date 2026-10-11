@@ -21,11 +21,7 @@ import type { ActionLimitQuery, CooldownGroup } from '../domain/action-limit.js'
 import { isLockTimeout, takeBoundedLock } from './advisory-lock.js';
 import { lockActionLimit, readActionLimit } from './action-limit-counts.js';
 import { resolveBudget } from './budget-aggregate.js';
-import {
-  assertCorrelated,
-  findLiveStepDecision,
-  recordDecisionInTx,
-} from './prisma-policy-decision-repository.js';
+import { assertCorrelated, recordOrReplayInTx } from './prisma-policy-decision-repository.js';
 
 /** The producer attribution on every `budget_degradation` evidence record (001 R-06): the step
  *  that wrote it, never a caller's say-so. */
@@ -132,18 +128,20 @@ export class PrismaBudgetRepository implements BudgetRepository {
         const budget = await resolveBudget(
           tx,
           where.tenantId,
-          { ...where, enforcing: true },
+          {
+            ...where,
+            enforcing: true,
+            ...(limit.step !== undefined ? { excludingStep: limit.step } : {}),
+          },
           this.maxSkewMs,
         );
         // Budget lock first, limit lock second — never the reverse (no deadlock between charges).
         if (limit.tenantId !== where.tenantId) throw new TenantIsolationError('limit scope tenant');
         await lockActionLimit(tx, limit);
         const built = decide(budget, await readActionLimit(tx, limit));
-        // A retry of the same step: return the live allowed decision already minted instead of
-        // charging a second time. Under the lock, so two retries cannot both miss it.
-        const existing = await findLiveStepDecision(tx, built);
-        if (existing !== null) return { budget, decision: existing };
-        return { budget, decision: await recordDecisionInTx(tx, built) };
+        // A retry of the same step was evaluated with its own earlier charge left out; it gets that
+        // allow back only if it still allows, instead of charging a second time.
+        return { budget, decision: await recordOrReplayInTx(tx, built) };
       }, CHARGE_TX)
       .catch((error: unknown) => {
         if (isLockTimeout(error)) throw new BudgetContentionError();

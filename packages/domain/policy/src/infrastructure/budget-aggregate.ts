@@ -20,6 +20,8 @@ import {
   type BudgetQuery,
   type ResolvedBudget,
 } from '../domain/budget-repository.js';
+import type { StepKey } from '../domain/request-key.js';
+import { excludingStep } from './step-exclusion.js';
 
 // T056 (R-10): budget state is a query. Spend is `agent_run.cost`, time is `workflow_run` elapsed;
 // nothing is stored here, so the number policy enforces and the number support reports cannot
@@ -167,6 +169,7 @@ export async function tenantConsumption(
   tenantId: string,
   window: { start: Date; end: Date },
   asOf: Date,
+  excluding?: StepKey,
 ): Promise<Consumption> {
   const [finished] = await db.$queryRaw<{ v: number }[]>`
     SELECT COALESCE(SUM(ar.cost), 0)::float8 AS v
@@ -190,7 +193,8 @@ export async function tenantConsumption(
       AND p.pinned >= ${window.start}::timestamptz AND p.pinned < ${window.end}::timestamptz
       AND NOT EXISTS (SELECT 1 FROM "agent"."agent_run" ar
                       WHERE ar.tenant_id = pd.tenant_id AND ar.policy_decision_id = pd.id
-                        AND ar.finished_at IS NOT NULL)`;
+                        AND ar.finished_at IS NOT NULL)
+      ${excludingStep('pd', excluding)}`;
   const [time] = await db.$queryRaw<{ v: number }[]>`
     SELECT COALESCE(SUM(${activeElapsedMs(asOf)}), 0)::float8 AS v
     FROM "workflow"."workflow_run" wr
@@ -204,6 +208,7 @@ export async function issueConsumption(
   tenantId: string,
   issueId: string,
   asOf: Date,
+  excluding?: StepKey,
 ): Promise<Consumption> {
   const [finished] = await db.$queryRaw<{ v: number }[]>`
     SELECT COALESCE(SUM(cost), 0)::float8 AS v FROM "agent"."agent_run"
@@ -215,7 +220,8 @@ export async function issueConsumption(
       AND pd.outcome = 'allow' AND pd.invalidated_reason IS NULL
       AND NOT EXISTS (SELECT 1 FROM "agent"."agent_run" ar
                       WHERE ar.tenant_id = pd.tenant_id AND ar.policy_decision_id = pd.id
-                        AND ar.finished_at IS NOT NULL)`;
+                        AND ar.finished_at IS NOT NULL)
+      ${excludingStep('pd', excluding)}`;
   const [time] = await db.$queryRaw<{ v: number }[]>`
     SELECT COALESCE(SUM(${activeElapsedMs(asOf)}), 0)::float8 AS v
     FROM "workflow"."workflow_run" wr
@@ -286,7 +292,7 @@ export async function resolveBudget(
         period,
         periodKeyFor(period, pinned),
         limit,
-        await tenantConsumption(db, tenantId, window, query.asOf),
+        await tenantConsumption(db, tenantId, window, query.asOf, query.excludingStep),
       ),
     );
   }
@@ -300,7 +306,7 @@ export async function resolveBudget(
         'issue',
         periodKeyFor('issue', pinned),
         limit,
-        await issueConsumption(db, tenantId, query.issueId, query.asOf),
+        await issueConsumption(db, tenantId, query.issueId, query.asOf, query.excludingStep),
       ),
     );
   }

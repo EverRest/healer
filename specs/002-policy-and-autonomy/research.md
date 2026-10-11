@@ -224,8 +224,9 @@ of a table we already have, and it has to be reconciled against that table to be
 is carried by its persisted `policy_decision` (`budget_state.reservedSpend`) as an **open charge**
 that counts against the budget until a finished `agent_run` references the decision, at which point
 the actual cost replaces it. Resolving the budget and persisting the decision happen in one
-transaction under a bounded per-tenant advisory lock (ADR 0015), and a retry of the same step returns
-the decision it already minted (`request_key`) rather than charging again. An allowed step that
+transaction under a bounded per-tenant advisory lock (ADR 0015), and a retry of the same step is
+re-evaluated with its own earlier open charge left out; it gets the decision it already minted
+(`request_key`) back, rather than charging again, only if that fresh evaluation also allows. An allowed step that
 never starts is released by `releaseAbandonedCharges` (`invalidated_reason = 'charge_abandoned'`).
 
 **Rationale**: SC-006 requires spend to stay *within* the period budget under a flood, and a check
@@ -280,6 +281,13 @@ state.
 The scope is `(action_key, target_ref, fingerprint)` rather than the component, because "the same
 remediation against the same target for the same recurring failure" is the thing that has to be
 bounded; a component-wide count would refuse an unrelated action on a busy component.
+
+**A retry counts every other decision and not itself.** A step retried with the same request key is
+evaluated afresh, with its own earlier live allow left out of the counts, and gets that allow back
+only if the fresh decision also allows. Answering a retry from the old allow would let a revocation,
+a lowered level or a tightened bound miss any step already allowed (the request key omits the level,
+the counts and the time); counting the old allow against the retry would make every retry refuse
+itself under a cap of 1.
 
 **Rationale**: a refusal is a decision, and every decision has to be explicable a year later
 (FR-017). A Redis counter is invisible in the audit trail, is lost on a flush or a failover, and

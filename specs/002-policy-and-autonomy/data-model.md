@@ -118,7 +118,7 @@ write that makes revocation immediate.
 | reason_codes | text[] | |
 | ceiling_applied | bool | true when the clamp changed the outcome (R-05) |
 | budget_state | jsonb | consumed, limit, declared max of the next step, degradation step |
-| request_key | text? | a *charged* step's idempotency key: the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step returns the decision it already minted instead of charging twice (T060) |
+| request_key | text? | a step's idempotency key (charged or not): the caller's request with every resolved field and the instant removed. Partial unique index `(tenant_id, workflow_run_id, workflow_state, request_key)` over live allowed decisions, so a retried step that is still allowed returns the decision it already minted instead of charging twice (T060); a retry is re-evaluated first |
 | evaluated_at | timestamptz | passed in, not read from a clock inside the evaluator |
 | consumed_at | timestamptz? | set when the guarded step executes against it |
 | invalidated_reason | text? | `epoch_bump` · `approval_expired` · `approval_rejected` · `charge_abandoned` · `run_terminal` — **not** digest_mismatch (C-84, QUESTIONS.md): a digest mismatch means the executor's proposal is stale, not the decision itself, so it stays issued and retriable with the correct digest, never invalidated |
@@ -281,9 +281,13 @@ configurable. 010 keeps no limit store and projects only the refusal reason code
 - **Default bounds**: no row and class `reversible_remediation` → `DEFAULT_REMEDIATION_ACTION_LIMIT`
   (rate 1 per 3600 s window, cooldown 3600 s, attempt cap 3 — placeholders, QUESTIONS.md "002 Phase 5").
   Any other class with no row: no bounds.
-- **Idempotent retry**: a decision bound to a run and state carries a `request_key` whether or not it
-  charges; under the lock a retry returns the live allow already minted for it, uncounted against
-  itself. Counts are measured from `LEAST(evaluatedAt, now())` so a future instant cannot shorten
+- **Idempotent retry, revalidated**: a decision bound to a run and state carries a `request_key`
+  whether or not it charges. A retry is evaluated afresh (grants, ruleset, limits and budget are
+  re-read), with the live allow already minted for that key left out of the rate, cooldown,
+  attempt-cap and open-charge figures, so it neither counts nor refuses itself while every other
+  decision still counts. That allow is returned only if the fresh decision also allows; otherwise the
+  fresh refusal is recorded as a new row and the old allow is left as history, so a revocation or a
+  tightened limit reaches the retry. Counts are measured from `LEAST(evaluatedAt, now())` so a future instant cannot shorten
   the window or cooldown.
 - **Serialisation**: counts-then-insert runs in one transaction under
   `pg_advisory_xact_lock(hashtextextended('policy.action_limit:<tenant>:<action>:<target>:<fingerprint>', 0))`

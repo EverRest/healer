@@ -18,7 +18,7 @@ import type {
 } from '../../domain/policy-decision-repository.js';
 import type { PolicyRulesetRepository } from '../../domain/policy-ruleset-repository.js';
 import { computeProposalDigest } from '../../domain/proposal-digest.js';
-import { computeRequestKey } from '../../domain/request-key.js';
+import { computeRequestKey, stepKeyOf } from '../../domain/request-key.js';
 import {
   NoPublishedRulesetError,
   UnregisteredActionError,
@@ -126,7 +126,11 @@ export async function evaluateAndBind(
   // serialization lock (T060). A step that declares none charges nothing and needs no lock.
   // Either way the cooldown counts are read under the action-limit lock, in the transaction that
   // inserts the decision (FR-014, T054): the lock is what makes the next proposal count this one.
-  const limitQuery = actionLimitQueryOf(prepared.decisionInput);
+  const step = stepKeyOf(binding, requestKey);
+  const limitQuery = {
+    ...actionLimitQueryOf(prepared.decisionInput),
+    ...(step !== undefined ? { step } : {}),
+  };
   let budget: ResolvedBudget;
   let recorded: RecordedDecision;
   if (charges) {

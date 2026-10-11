@@ -10,6 +10,7 @@ import {
   type ReadOnlyActionLimitRepository,
 } from '../domain/action-limit.js';
 import { takeBoundedLock } from './advisory-lock.js';
+import { excludingStep } from './step-exclusion.js';
 
 interface CountsRow {
   readonly rate_per_window: number | null;
@@ -47,7 +48,7 @@ function matches(column: 'target_ref' | 'fingerprint', value: string | undefined
  * rows are allows that were consumed or are still live (`invalidated_reason IS NULL`; consumed and
  * invalidated are mutually exclusive, `policy_decision_terminal_xor`) — a proposal that has been
  * allowed but not yet acted on counts, so N parallel proposals cannot each mint an allow before any
- * is consumed; an invalidated, never-consumed allow (abandoned, run terminal, revoked) does not. Both the window and the elapsed time are measured from `LEAST(asOf, now())`: an
+ * is consumed, except the evaluated step's own earlier allow (`where.step`); an invalidated, never-consumed allow (abandoned, run terminal, revoked) does not. Both the window and the elapsed time are measured from `LEAST(asOf, now())`: an
  * instant in the future (inside the skew an enforcing evaluation allows) must not shorten either. No upper bound
  * on `evaluated_at`: a caller-passed old instant must not hide later allows.
  */
@@ -76,6 +77,7 @@ export async function readActionLimit(
       WHERE pd.tenant_id = ${where.tenantId}::uuid AND pd.action_key = ${where.actionKey}
         AND ${matches('target_ref', where.targetRef)} AND ${matches('fingerprint', where.fingerprint)}
         AND pd.outcome = 'allow' AND pd.invalidated_reason IS NULL
+        ${excludingStep('pd', where.step)}
     ) c`;
   if (row === undefined) throw new Error('action-limit read returned no row');
   return cooldownGroupOf(

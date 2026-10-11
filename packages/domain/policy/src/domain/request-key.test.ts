@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeRequestKey } from './request-key.js';
+import { computeRequestKey, stepKeyOf } from './request-key.js';
 import { buildDecisionInput } from './test-support/fixtures.js';
 
 // T060: the idempotency key of a charged step. A retry of the same step must map to the same key
@@ -49,4 +49,23 @@ describe('computeRequestKey', () => {
   it('is a stable hex digest', () => {
     expect(computeRequestKey(base)).toMatch(/^[0-9a-f]{64}$/);
   });
+});
+
+// A step is only a step when it is bound to both a run and a state: anything less has no
+// idempotency index entry, so nothing is left out of its counts.
+describe('stepKeyOf', () => {
+  it('names the step when the decision is bound to a run and a state', () => {
+    expect(stepKeyOf({ workflowRunId: 'run-1', workflowState: 'state-1' }, 'key')).toEqual({
+      workflowRunId: 'run-1',
+      workflowState: 'state-1',
+      requestKey: 'key',
+    });
+  });
+
+  it.each([{}, { workflowRunId: 'run-1' }, { workflowState: 'state-1' }])(
+    'is none for %j',
+    (binding) => {
+      expect(stepKeyOf(binding, 'key')).toBeUndefined();
+    },
+  );
 });

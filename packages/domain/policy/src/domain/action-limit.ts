@@ -1,6 +1,7 @@
 import { HealerError, type TenantScoped } from '@healer/shared';
 import type { ActionClass } from './action-class.js';
 import type { DecisionInput } from './decision-input.js';
+import type { StepKey } from './request-key.js';
 import type { CooldownBounds } from './rule.js';
 
 // FR-014 (T054, T055, T085): rate limit, cooldown and attempt cap per `(actionKey, targetRef,
@@ -62,6 +63,10 @@ export interface ActionLimitQuery {
   readonly targetRef?: string;
   readonly fingerprint?: string;
   readonly asOf: Date;
+  /** The step being evaluated, when it is bound to a run and a state: its own earlier live allow is
+   *  left out of the counts, so a retry neither counts nor refuses itself while every other attempt
+   *  still counts. */
+  readonly step?: StepKey;
 }
 
 export function actionLimitQueryOf(input: DecisionInput): ActionLimitQuery {

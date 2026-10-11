@@ -4767,6 +4767,18 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
     charged or not, and `recordLimited` returns the live allow already minted for it, so a job that
     runs twice is not refused by its own allow. `releaseAbandonedCharges` is unchanged and touches
     only rows with `reservedSpend > 0`. Counts are measured from `LEAST(evaluatedAt, now())`.
+13. **A replayed step is re-evaluated (security review of 12).** Returning the live allow for a
+    request key skipped the evaluation, so an autonomy revocation, a lowered level or a tightened
+    `action_limit` did not reach a retried step (revocation only invalidates approval-linked
+    decisions). Now `recordLimited` and `bindCharged` (the charged path too: budget lock, then limit
+    lock) evaluate afresh with the step's own live allow left out of the counts and open charges
+    (`step` on the limit query, `excludingStep` on the budget query), and return the old allow only
+    if the fresh decision also allows; a fresh refusal is a new row. Judgment calls: (a) the old
+    allow is not invalidated when the retry is refused, so it stays live, counted and consumable by
+    whoever holds its id, and each further refused retry adds another refusal row; (b) a returned
+    old allow keeps its original `decision_input` (evaluated instant, counts) even though the fresh
+    one was computed later. **Needs Pavlo: should a refused retry invalidate the old allow?** It
+    needs a new `invalidated_reason` value, which is a closed list.
 
 ## Decisions waiting on Pavlo — 002 Phase 5 (index; detail in the section above)
 
@@ -4777,3 +4789,6 @@ cap >= 1). `DecisionInput.cooldown` gained `secondsSinceLastAllow?` and `bounds?
    wording makes the limit toothless until an executor consumes allows.
 3. A write path for `action_limit` (PUT + audit entry) — not built; who owns it, and does a limit
    change need the same audit as a budget change (FR-020)?
+4. After a retried step is refused on re-evaluation, its earlier live allow is left as it was
+   (still live, still consumable). Invalidate it, which needs a new closed `invalidated_reason`
+   (item 13)?

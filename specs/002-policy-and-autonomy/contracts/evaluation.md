@@ -107,6 +107,13 @@ Steps 3 through 7 only ever make the outcome more restrictive. Nothing after ste
 `DENY` into an `ALLOW`, which is the property that makes the ceiling un-exceedable regardless of
 what any rule says.
 
+**A retried step is re-evaluated.** `EvaluateAndBind` for a decision bound to a run and a state whose
+request key already has a live `ALLOW` does the whole evaluation again (grants, ruleset, limits,
+budget), with that `ALLOW` left out of the budget's open charges and out of the step 6 counts, under
+the same locks. It returns the earlier decision only if the fresh outcome is also `ALLOW`; otherwise
+it records the fresh refusal as a new decision and leaves the earlier `ALLOW` as history. Every other
+decision, including a different step for the same action and target, counts as usual.
+
 ## `EvaluationTrace`
 
 Returned by both callers and stored on the decision, so a simulator report (011 FR-003) and an audit

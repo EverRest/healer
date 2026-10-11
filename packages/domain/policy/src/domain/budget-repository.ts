@@ -3,6 +3,7 @@ import type { ActionLimitQuery, CooldownGroup } from './action-limit.js';
 import type { NewAuditEntry } from './audit-entry.js';
 import type { BudgetPeriod } from './budget-bounds.js';
 import type { ScopeFigures } from './budget-figures.js';
+import type { StepKey } from './request-key.js';
 import type { NewRecordedDecision, RecordedDecision } from './policy-decision-repository.js';
 
 // Ports for budget state (T056, T057, T060, T064; FR-011..FR-013, R-10..R-12). Nothing a
@@ -38,6 +39,8 @@ export interface BudgetQuery {
   readonly workflowRunId?: string;
   readonly asOf: Date;
   readonly enforcing?: boolean;
+  /** A replayed step's own earlier live allow is left out of the open charges. */
+  readonly excludingStep?: StepKey;
 }
 
 /** A charge could not take the budget lock inside its bounded wait. Retryable (HTTP 429): the

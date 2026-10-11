@@ -83,3 +83,11 @@ for counts-then-insert, same bounded wait (`BUDGET_LOCK_WAIT_MS`), failing retry
 budget: no row is guaranteed (an action without an `action_limit` row runs on the product default).
 The scope key is far narrower than the tenant, so unrelated actions and targets do not queue. A charge
 takes the budget lock and then the limit lock, never the reverse, so the two cannot deadlock.
+
+A retried step (same tenant, run, state and request key) is **revalidated on replay**, under the same
+locks: the evaluation is done afresh, with that step's own earlier live allow left out of the rate,
+cooldown, attempt-cap and open-charge figures (so a retry never counts or refuses itself, while every
+distinct step still counts). The earlier allow is returned only if the fresh decision also allows;
+otherwise the fresh refusal is recorded as a new decision and the old allow stays as history. Without
+this, a revocation, a lowered level or a tightened limit would not reach a retried step, because the
+request key leaves out the autonomy level, the counts and the time.

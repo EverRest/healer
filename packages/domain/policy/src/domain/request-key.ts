@@ -1,6 +1,23 @@
 import { createHash } from 'node:crypto';
 import { canonicalize } from './canonicalize.js';
 import type { DecisionInput } from './decision-input.js';
+import type { DecisionBinding } from './policy-decision-repository.js';
+
+/** One step of a workflow run, as the idempotency index knows it. A replay of the step is
+ *  re-evaluated with its own earlier live allow left out of every count and charge. */
+export interface StepKey {
+  readonly workflowRunId: string;
+  readonly workflowState: string;
+  readonly requestKey: string;
+}
+
+/** The step a decision is bound to; none for a decision not bound to both a run and a state. */
+export function stepKeyOf(binding: DecisionBinding, requestKey: string): StepKey | undefined {
+  const { workflowRunId, workflowState } = binding;
+  return workflowRunId === undefined || workflowState === undefined
+    ? undefined
+    : { workflowRunId, workflowState, requestKey };
+}
 
 /**
  * The idempotency key of a charged step (T060): a digest of the caller's request with every field

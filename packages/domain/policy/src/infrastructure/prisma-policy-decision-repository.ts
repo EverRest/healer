@@ -130,6 +130,22 @@ export async function findLiveStepDecision(
   return row === null ? null : toDomain(row);
 }
 
+/** What a (re)evaluated step becomes: its earlier live allow if the fresh decision *also* allows,
+ *  otherwise the fresh decision, recorded as a new row. The earlier allow is not touched; it stays
+ *  as history. The fresh decision was built from counts that left that allow out, so this never
+ *  refuses a retry for its own sake (FR-014). Under the caller's lock, so two retries cannot both
+ *  miss the allow. */
+export async function recordOrReplayInTx(
+  tx: Prisma.TransactionClient,
+  built: TenantScoped<NewRecordedDecision>,
+): Promise<RecordedDecision> {
+  if (built.decision.outcome === 'allow') {
+    const existing = await findLiveStepDecision(tx, built);
+    if (existing !== null) return existing;
+  }
+  return recordDecisionInTx(tx, built);
+}
+
 /** Every column `findById`/`list` read back (data-model.md `policy.policy_decision`) — a
  *  superset of `DecisionRow`, which is only what `record()` needs to return. */
 interface StoredDecisionRow extends DecisionRow {
@@ -221,10 +237,7 @@ export class PrismaPolicyDecisionRepository implements PolicyDecisionRepository 
     return this.prisma.$transaction(async (tx) => {
       await lockActionLimit(tx, where);
       const built = build(await readActionLimit(tx, where));
-      // A retry of the same step returns the live allow already minted, under the lock so two
-      // retries cannot both miss it; the retry is not counted against itself.
-      const existing = await findLiveStepDecision(tx, built);
-      return existing ?? (await recordDecisionInTx(tx, built));
+      return recordOrReplayInTx(tx, built);
     }, LIMITED_TX);
   }
 
