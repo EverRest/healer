@@ -1918,7 +1918,7 @@ stage 1 is the `/investigate` MVP and `make intake-smoke`.
 - Migration `20261009000000_action_limit`: CHECK constraints only. No schema change, no write
   endpoint yet. Judgment calls in QUESTIONS.md "002 Phase 5".
 
-## Unreleased — policy decision epoch binding
+## 0.59.1 — 2026-10-11 — policy decision epoch binding
 
 - `policy.policy_decision.autonomy_epoch` (nullable bigint): the autonomy epoch the evaluation read,
   written at insert. `consume` refuses a decision whose epoch is NULL or lower than the tenant's
