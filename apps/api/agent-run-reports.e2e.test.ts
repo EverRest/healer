@@ -31,6 +31,7 @@ import {
 import { PrismaBoundaryRejectionRepository } from '@healer/domain-context';
 import { PrismaClient } from '@healer/prisma-client';
 import { applySqlFile, query, startPostgres, type StartedPostgres } from '../../test/containers.js';
+import { assertTenantScopedEnqueue } from '../../test/tenant-isolation.js';
 import { seedBase, seededPromptVersionId } from '../../test/budget-fixtures.js';
 import { AgentRunReportsController } from './src/runners/agent-run-reports.controller.js';
 import { PrismaRunnerRegistrationRepository } from './src/runners/infrastructure/prisma-runner-registration-repository.js';
@@ -220,6 +221,40 @@ describe('POST /runners/agent-run-reports (012 T094)', () => {
       expect(logged.every((l) => l.runnerName === 'runner-a')).toBe(true);
       // never a payload field
       expect(JSON.stringify(logged)).not.toMatch(/claude-sonnet|argumentDigest|inputTokens|cost/);
+    });
+  });
+
+  // The route has no id to look up, so the gate's write-only helper is the fit: each tenant's own
+  // runner records a run, and each lands under its own tenant — never the other's.
+  it('a report lands under the tenant that sent it, never the other (gate-isolation)', async () => {
+    for (const tenantId of [TENANT_A, TENANT_B]) {
+      await prisma.runnerRegistration.create({
+        data: {
+          id: randomUUID(),
+          tenantId,
+          name: 'shared-name-runner',
+          protocolVersion: 1,
+          capabilities: [],
+          imageVersion: '1.0.0',
+          status: 'active',
+          lastHeartbeatAt: new Date(),
+        },
+      });
+    }
+    const reportIds = new Map<string, string>();
+    await assertTenantScopedEnqueue(app, 'POST', '/api/v1/runners/agent-run-reports', {
+      tenantA: TENANT_A,
+      tenantB: TENANT_B,
+      tenantHeader: 'X-Tenant-Id',
+      expectStatus: 201,
+      headersFor: () => ({ 'X-Runner-Name': 'shared-name-runner' }),
+      bodyFor: (marker) => {
+        const payload = body();
+        reportIds.set(marker, payload.reportId);
+        return payload;
+      },
+      tenantIdFor: async (marker) =>
+        (await prisma.agentRun.findFirst({ where: { reportId: reportIds.get(marker) } }))?.tenantId,
     });
   });
 });
