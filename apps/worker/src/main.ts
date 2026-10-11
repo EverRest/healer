@@ -27,8 +27,13 @@ import {
 import { applyEvidenceRetention, PrismaEvidenceRetentionRepository } from '@healer/domain-evidence';
 import {
   PrismaApprovalLifecycleRepository,
+  PrismaApprovalRequestRepository,
+  PrismaAutonomyEpochRepository,
+  PrismaBudgetRepository,
   PrismaPolicyDecisionRepository,
   expireDueApprovals,
+  releaseAbandonedCharges,
+  sweepRevokedApprovals,
 } from '@healer/domain-policy';
 import { createPrismaClient } from './infrastructure/prisma.js';
 import { PrismaTenantEnumerator } from './infrastructure/prisma-tenant-enumerator.js';
@@ -80,12 +85,37 @@ export function start(): { ready: Promise<void>; close: () => Promise<void> } {
     decisions: new PrismaPolicyDecisionRepository(prisma),
   };
   const tenants = new PrismaTenantEnumerator(prisma);
+  const revocationRepos = {
+    approvals: new PrismaApprovalRequestRepository(prisma),
+    autonomyEpochs: new PrismaAutonomyEpochRepository(prisma),
+  };
+  const budgetRepo = new PrismaBudgetRepository(prisma, { log: logger });
   // One body per entry of `TENANT_SWEEPS`: a sweep with no body here fails to compile.
   const sweepBodies: Record<TenantSweepName, (context: TenantContext) => Promise<object>> = {
     'approval-expiry': async (context) => {
       const { expired, skipped } = await expireDueApprovals(approvalRepos, context);
       return { expired: expired.length, skipped };
     },
+    'revoked-approvals-sweep': async (context) => {
+      const { revoked, skipped } = await sweepRevokedApprovals(revocationRepos, context);
+      return { revoked: revoked.length, skipped };
+    },
+    'abandoned-charges-release': async (context) => ({
+      released: await releaseAbandonedCharges(budgetRepo, context, { now: new Date() }),
+    }),
+    // 001 T051, R-11.
+    'staleness-sweep': async (context) => {
+      const { marked, skipped } = await markStaleIssues(issueRepo, context, new Date());
+      // A sweep that skips *everything* it found is what a broken race guard looks like — a green
+      // job that marked nothing — so it is logged at warn, not folded into the return value alone.
+      if (skipped > 0 && marked.length === 0) {
+        logger.warn({ tenantId: context.tenantId, skipped }, 'staleness sweep skipped everything');
+      }
+      return { marked: marked.length, skipped };
+    },
+    // 001 T052, R-04, FR-009.
+    'evidence-retention': async (context) =>
+      applyEvidenceRetention(retentionRepo, context, new Date(), RETENTION_BATCH),
   };
   // One producer handle per consumed queue: the scheduler registers on it and the fan-out adds to it.
   const queues = new Map(CONSUMED.map((q) => [q, createQueue(q, connection)] as const));
@@ -110,43 +140,6 @@ export function start(): { ready: Promise<void>; close: () => Promise<void> } {
           // -count the very occurrence it just recorded. Return a JSON-safe summary instead; the
           // domain result itself is for `ingestSignal`'s other, non-queue callers.
           return { issueId: result.issue.id, created: result.created };
-        }
-        // The staleness sweep (001 T051, R-11): one job per tenant, so no query in it is ever
-        // cross-tenant. Nothing schedules these yet — see QUESTIONS.md "001 T051".
-        if (queue === 'maintenance' && job.name === 'staleness-sweep') {
-          const { tenantId } = job.data as { tenantId: string };
-          const { marked, skipped } = await markStaleIssues(
-            issueRepo,
-            TenantContext.forTrustedInternalUse(tenantId),
-            new Date(),
-          );
-          // Skips are expected to be rare. A sweep that skips *everything* it found is what a
-          // broken race guard looks like — a green job that marked nothing — so it is logged
-          // at warn where an operator can see it, not folded into the return value alone.
-          const log = skipped > 0 && marked.length === 0 ? logger.warn : logger.info;
-          log.call(
-            logger,
-            { queue, jobId: job.id, correlationId, tenantId, marked: marked.length, skipped },
-            'staleness sweep finished',
-          );
-          return { marked: marked.length, skipped };
-        }
-        // Evidence retention (001 T052, R-04, FR-009): one job per tenant, like the sweep above.
-        // Also unscheduled — see QUESTIONS.md "001 T051"; retention is per tenant, so the same
-        // enumerator would feed both.
-        if (queue === 'maintenance' && job.name === 'evidence-retention') {
-          const { tenantId } = job.data as { tenantId: string };
-          const result = await applyEvidenceRetention(
-            retentionRepo,
-            TenantContext.forTrustedInternalUse(tenantId),
-            new Date(),
-            RETENTION_BATCH,
-          );
-          logger.info(
-            { queue, jobId: job.id, correlationId, tenantId, ...result },
-            'retention run',
-          );
-          return result;
         }
         // C-90 / ADR 0018: the scheduler fires the fan-out; the fan-out enqueues one job per
         // tenant and returns — it never runs a sweep and never waits.

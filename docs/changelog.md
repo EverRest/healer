@@ -1841,3 +1841,14 @@ not been executed. Recorded in 012's tasks.md rather than left implicit.
   (`approval-expiry`, every 60 s). Proven against real Postgres and Redis: tenant A's job leaves
   tenant B's due approval pending; the fan-out then expires it.
 - The other consumers are one-line registrations — listed in QUESTIONS.md "C-90".
+
+## 0.56.1 — 2026-10-11
+
+**C-90 follow-up — the remaining per-tenant sweeps are registered** (012 T109).
+
+- `TENANT_SWEEPS` gains `revoked-approvals-sweep` and `abandoned-charges-release` (002, `scheduling`,
+  60 s and 15 min) and `staleness-sweep` and `evidence-retention` (001, `maintenance`, 1 h and
+  15 min). 001's two sweeps moved from dedicated worker branches into the typed handler map; their
+  existing worker tests pass unchanged.
+- Not registered: the 012 stale-runner sweep (no body exists) and `check:stale-approvals` /
+  `check:budget-reconcile` (scripts, not per-tenant jobs) — see QUESTIONS.md "C-90".

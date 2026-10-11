@@ -4403,19 +4403,19 @@ Judgment calls:
 - **Fan-out and per-tenant jobs share one queue** (the sweep's own), so a slow sweep delays the next
   fan-out only by queue concurrency, not by a separate budget.
 
-Remaining consumers — each is one line in `TENANT_SWEEPS` plus a router branch in
-`apps/worker/src/main.ts` where none exists. Their bodies were not touched:
+Remaining consumers (2026-10-11): **registered** — 001 `staleness-sweep` (1 h) and
+`evidence-retention` (15 min, `maintenance`), 002 `revoked-approvals-sweep` (60 s) and
+`abandoned-charges-release` (15 min, `scheduling`). Intervals are judgment calls, not derived;
+change them in `TENANT_SWEEPS`. 001's two bodies moved from dedicated branches into the worker's
+handler map (same calls, same worker tests). **Not registered:**
 
-| Consumer | State |
+| Consumer | Why |
 |---|---|
-| 001 `staleness-sweep`, `evidence-retention` | worker branch exists (`maintenance`); only the `TENANT_SWEEPS` line is missing |
-| 002 `sweepRevokedApprovals` | body exists; needs a router branch + line (`scheduling`) |
-| 002 `releaseAbandonedCharges` | body exists; needs a router branch + line |
-| 012 stale-runner sweep | body not located on master; confirm owner before registering |
+| 012 stale-runner sweep | no body exists on master (`apps/api/src/runners/domain/repository.ts` only mentions it) — whoever writes it adds one line and one handler |
 | `check:stale-approvals`, `check:budget-reconcile` | CLI scripts, not per-tenant jobs — decide whether they become jobs or stay CI/cron |
 
-002's "Nothing schedules …" entries above are now stale for `expireDueApprovals` only; left as
-written (another spec's text).
+002's "Nothing schedules …" entries above are now stale for `expireDueApprovals`,
+`sweepRevokedApprovals` and `releaseAbandonedCharges`; left as written (another spec's text).
 
 Review of this batch (code-reviewer + silent-failure-hunter, opus), fixed in the same change: stale
 schedulers removed on boot; handler map `Record<TenantSweepName, …>` (a sweep with no body does not

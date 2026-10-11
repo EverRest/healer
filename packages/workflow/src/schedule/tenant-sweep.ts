@@ -11,6 +11,12 @@ import type { QueueClass } from '../queues/index.js';
  *  per-tenant job the worker routes to the sweep's body. */
 export const TENANT_SWEEPS = {
   'approval-expiry': { queue: 'scheduling', everyMs: 60_000 },
+  // A stale-epoch approval is already refused at redemption; the sweep only makes that prompt.
+  'revoked-approvals-sweep': { queue: 'scheduling', everyMs: 60_000 },
+  'abandoned-charges-release': { queue: 'scheduling', everyMs: 15 * 60_000 },
+  'staleness-sweep': { queue: 'maintenance', everyMs: 60 * 60_000 },
+  // Drains oldest-expiry first, 500 records a run (`RETENTION_BATCH`), so it runs often.
+  'evidence-retention': { queue: 'maintenance', everyMs: 15 * 60_000 },
 } as const satisfies Record<string, { queue: QueueClass; everyMs: number }>;
 
 export type TenantSweepName = keyof typeof TENANT_SWEEPS;

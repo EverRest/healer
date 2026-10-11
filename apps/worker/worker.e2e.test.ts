@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createQueue, deadLetterDepth } from '@healer/workflow';
+import { TENANT_SWEEPS, createQueue, deadLetterDepth, type QueueClass } from '@healer/workflow';
 import { PrismaClient } from '@healer/prisma-client';
 import { BullmqSignalQueue, type SignalJobData } from '@healer/domain-issues';
 import { TenantContext, scope } from '@healer/shared';
@@ -106,6 +106,39 @@ describe('apps/worker consuming the ingestion queue (001 T025, FR-019)', () => {
       await queue.close();
     }
   }, 30_000);
+
+  it("001's and 002's sweeps are scheduled on the queues that run them (C-90)", async () => {
+    const schedulers = async (name: QueueClass) => {
+      const queue = createQueue(name, { url: redis.url });
+      try {
+        return (await queue.getJobSchedulers()).map((s) => s.key).sort();
+      } finally {
+        await queue.close();
+      }
+    };
+    expect(await schedulers('maintenance')).toEqual(['evidence-retention', 'staleness-sweep']);
+    expect(await schedulers('scheduling')).toEqual([
+      'abandoned-charges-release',
+      'approval-expiry',
+      'revoked-approvals-sweep',
+    ]);
+  });
+
+  it('every tenant sweep has a scheduler on its own queue after boot (C-90, ADR 0018)', async () => {
+    for (const queueName of new Set(Object.values(TENANT_SWEEPS).map((s) => s.queue))) {
+      const queue = createQueue(queueName as QueueClass, { url: redis.url });
+      try {
+        const keys = (await queue.getJobSchedulers()).map((s) => s.key).sort();
+        const expected = Object.entries(TENANT_SWEEPS)
+          .filter(([, s]) => s.queue === queueName)
+          .map(([name]) => name)
+          .sort();
+        expect(keys).toEqual(expected);
+      } finally {
+        await queue.close();
+      }
+    }
+  });
 
   it('a staleness-sweep job on the maintenance queue marks an idle issue stale — and only that (001 T051, R-11)', async () => {
     const tenantId = '00000000-0000-0000-8000-0000000000d2';
