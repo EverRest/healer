@@ -4566,3 +4566,145 @@ dispatcher credential — second GitHub App or not (U-03); human-authored `test/
 change (U-04); a private group, not a broadcast channel (U-05); `gate-no-send` blind to `fetch`
 (U-06); 012 FR-053/T088 and "ChatPost/ChatTask not persisted" vs 014 (U-07); ADR 0019 (U-08).
 C-96 and C-97 were added to decisions.md as **Proposed** because spec.md cites them.
+
+## 005 Phases 1–2 (T001–T021) — judgment calls
+
+Built by the 005 Phase 1–2 batch: package `packages/domain/knowledge`, schema `knowledge`
+(migrations `20261006000000_knowledge_core`, `…010000_knowledge_append_only_rules`,
+`…020000_knowledge_section_embedding`), the repository-markdown ingest, the GitLab/OpenAPI read-only
+adapters, `document_excerpt` evidence recording, ADR 0017, `make knowledge-corpus`. T025–T026 are
+Phase 3 in tasks.md, not Phase 2, and are NOT in this batch (the tables exist; the writers do not).
+
+**Schema (T002, T006–T012)**
+1. `hosted_wiki` visible gap: `implemented` has no default; a CHECK makes `hosted_wiki` with
+   `implemented = true` unrepresentable. The row per tenant is created by the onboarding path
+   (nothing is seeded: the table is tenant-scoped).
+2. Full-text configuration is `simple` (language-neutral, no stemming, so `max_payment_retries`
+   stays one lexeme; built in, so ADR 0004's extension list is unchanged). `search_vector` calls an
+   IMMUTABLE wrapper `knowledge.section_search_vector`; the migration test asserts the regconfig.
+   `deps-check` does NOT read the ADR's text-search row: today `simple` is held by that test and
+   review only.
+3. Lexical GIN has no `tenant_id` leading column (a composite GIN needs `btree_gin`, not approved by
+   ADR 0004). It is a GIN on `search_vector` plus the btree `(tenant_id, document_version_id,
+   ordinal)`. tasks.md T007 and research R-06 were reworded to match data-model.md.
+4. T009 is partly deferred by construction: append-only rules are wired on the three tables that
+   exist. **T052's migration MUST add `<table>_append_only` and `<table>_no_truncate` for
+   `retrieval_query` and `retrieval_result`** and extend `knowledge-core.e2e.test.ts`.
+5. `anchor_grant`: a trigger allows one NULL→set transition of the three `revoked_*` columns,
+   freezes identity columns and `granted_at`, refuses DELETE/TRUNCATE. A grant must cite an
+   adoption record **of its own version** (composite FK `(adoption_record_id,
+   expected_behavior_version_id, tenant_id)`) — found in review: without it a never-adopted version
+   could be granted under another version's adoption.
+6. `adoption_record`: the database enforces `actor_type = 'human'` and a non-blank `actor_ref`;
+   "approver is not Healer's service identity" is configuration (R-17) and stays in T026.
+7. `section_embedding`: partitioned by `tenant_id`; the HNSW index is created once on the parent and
+   propagates (a partition without it is unrepresentable); no DEFAULT partition (an unprovisioned
+   tenant fails loudly on write and on `nearest`, `TenantPartitionMissingError`). A tiny tenant's
+   plan may use the primary key plus an exact sort instead of HNSW (better recall); T012 asserts
+   confinement for every tenant and HNSW use for the 3 000-row one. **Nothing calls
+   `ensureTenantPartition` on tenant creation yet** — tenant provisioning must.
+8. Cross-feature references (`component_node_id`, `feature_node_id`, `seeding_session_id`) carry no
+   FK. The two `current_version_id` FKs are DEFERRABLE INITIALLY DEFERRED (Prisma cannot express it;
+   documented in the schema and data-model.md).
+9. Prisma has no HNSW index type, so `migrate diff` wanted to drop the parent index; one narrow
+   filter in `prisma/migration.e2e.test.ts` excuses exactly that statement. The earlier HEAVY_E2E
+   entry was a bare filename matching no project; it is now the full path.
+
+**Ingest (T013, T017–T020)**
+10. Unknown front-matter keys are rejected (strict Zod at every level): a file claiming `author:` or
+    `modified:` fails with `FRONT_MATTER_INVALID`; the host's commit metadata is what is stored.
+11. A file with no front matter is rejected as `FRONT_MATTER_INVALID`. A README inside the configured
+    prefix would fail ingest; the per-file error policy of a sync (what it does with
+    `FRONT_MATTER_INVALID`, `STABLE_KEY_CONFLICT`, `UnsafeRepositoryPathError`) is undefined until a
+    sync job exists.
+12. `maxAliasCount: 10` is applied at `doc.toJS(...)` (yaml's typings reject it on `parseDocument`);
+    ADR 0017 amended, bound pinned by a test.
+13. Constraint `scope_ref` is a **placeholder**: a uuid derived from the normalised feature name
+    (`UNRESOLVED_FEATURE_SCOPE_NAMESPACE`). `component_node_id` / `feature_node_id` stay null. T079,
+    T082 and Phase 3 must resolve against 004's confirmed graph and re-point. Nothing marks the uuid
+    as a placeholder in the column itself.
+14. Section bound: 4 000 UTF-16 characters; fence-aware; offsets index the original text (CRLF, BOM).
+15. Durations: positive, no leading zeros, at most 366 days, safe integer; stored as milliseconds.
+16. Constraint finder returns only rows of the document's current version; old rows stay (history).
+17. stable_key take-over (rename/move): a document takes a key from another iff the owner's current
+    version no longer declares it or the owner is not `available`; two live files declaring one id
+    is a conflict. **Nothing sets `deleted_at_source` yet** (the sync job's duty), so a plain rename
+    stays in conflict until then. An expectation dropped from a file stays `draft`/current (retire is
+    a lifecycle action, FR-009). The commit-time security review flagged the take-over as weakening
+    ownership: anyone who can commit a file under the configured prefix can claim a key its owner
+    dropped. The source repository's merge-request review is the gate (C-06), and adoption of the
+    taken-over version still needs a human (T026), so a taken-over key yields only an unadopted draft.
+18. **Needs Pavlo before T026:** every new document version appends a new `expected_behavior_version`
+    for each declared expectation, even when the text is unchanged — it is the only record that a
+    document version still declares the key and the take-over rule reads it. Cost: a prose-only edit
+    yields unadopted new versions (the adopted version keeps its grant and stays the anchor, FR-012,
+    so this is noise, not a safety loss). Alternative: a small "declaration" table and
+    `ownerReleased` reading it. Not built (needs a migration prefix beyond the three allotted).
+19. Ingest transaction timeout is a distinct `IngestTimeoutError` (the shared concurrency mapper
+    would have called it a retryable conflict; `packages/prisma-client` untouched).
+
+**Adapters (T003)**
+20. Reader ports are pinned to one resolved ref per logical read (content and commit metadata cannot
+    describe different revisions); `readFile` takes `maxBytes` and the contract requires refusing
+    before/while reading, with a byte post-check as defence in depth. Constructor prefix is
+    validated (unsafe/empty prefix throws); `read` refuses paths outside it; `onSkipped` reports
+    every dropped listing entry.
+21. `externalRef` is a branded `StructuralRef` built from structure only (method + validated path or
+    a hash; test identity = hash of describe-path + name). OpenAPI structural malformation throws
+    `MalformedOpenApiError` rather than returning `[]`. The caller must dereference `$ref` path items.
+22. Git commits map to `document_class = 'design_doc'` (no commit class in the data model;
+    `ponytail:` comment marks it). `authorRef` / `approverRef` stay plain identity strings.
+
+**Evidence (T021)**
+23. Recorded through the `EvidenceRepository` port, not `recordEvidence`, because `recordEvidence`
+    validates against 012's runner boundary and has no `document_excerpt` kind; validation is this
+    feature's strict Zod schema (caps on lengths, tier, span). A shared boundary kind would need
+    001's and 012's files (another session owns them). `DocumentResult` is a local minimal type;
+    T058 must adopt or replace it. Span offsets index the section text.
+24. Idempotency key = tenant, issue, step, version, section, span and a hash of the snapshot (minus
+    `recordedAt`): identical snapshot → same row; changed freshness/tier/rule set → a new row.
+    Link ids are random; the `(evidence, conclusion, relation)` unique index is the dedupe.
+25. `unwrapUntrusted` allowlist pins `(file, reason)` pairs: the ingest store `indexing`, the
+    excerpt command `evidence`. The reason scanner is a regex heuristic (anything it cannot read as
+    a literal-reason call counts as `<indirect>` and fails).
+
+**Found in review, not fixed here (other owners)**
+26. `scripts/lib/strip-comments.mjs` mis-tokenises regex literals (no `reScanSlashToken`): a `/*`
+    inside a regex literal opens a fake comment that hides real code up to the next `*/`. Reproduced
+    (`s.replace(/\/*$/, '')`). The repo gates that share it (isolation, architecture-agnostic,
+    graph-confirm-capability) can miss code after such a line. The 005 scans use their own
+    parser-based stripper (`packages/domain/knowledge/src/testing/repo-scan.ts`).
+27. The append-only/privileged-write bypass is `current_setting('healer.privileged_write') = 'on'`,
+    which **any session can `SET`** (reproduced with a DML-only role: DELETE on `anchor_grant` and
+    `adoption_record` succeeded). Pre-existing, repo-wide; the new 005 tables inherit it. Proper fix:
+    gate on role membership (`pg_has_role`) instead of a settable setting.
+28. `scripts/gates/deps-check.mjs` satisfies "a new dependency carries an ADR" by substring
+    (`content.includes(name)`), weak for short names like `yaml`. ADR 0017 exists, so it is honest here.
+29. `knowledge_constraint.anchor_grant_id` can point at any grant of the tenant, including a revoked
+    one, and is not tied to the constraint's scope or `document_version_id`; the invariant is carried
+    by the writer (T030) and the reader (T089's resolver must check `revoked_at` and scope). The
+    reader is named; no DB-level tie exists.
+30. The `knowledge:adopt` scan is textual (code, schema, migrations, scripts, generated OpenAPI). The
+    only runtime capability list, `RUNNER_CAPABILITIES`, is a free-form env var accepting any string;
+    there is no credential registry yet (002).
+31. The ingest e2e (~65 s, mostly container start) is not in HEAVY_E2E; it runs in the `e2e` project.
+32. Error messages from front-matter parsing carry no document text: path segments print only when
+    they are integers or keys the schema itself declares (else `<key>`), zod's own text is never
+    forwarded, and constraint errors name an index. Constraint names are limited to
+    `^[a-z][a-z0-9_]{0,63}$` and expectation ids to `^[a-z0-9][a-z0-9._-]{0,63}$` (uppercase or
+    underscore ids are now `FRONT_MATTER_INVALID`; nothing in the repository uses them).
+33. Ingest carries its own resource bounds, not only the adapter's: a 1 MiB UTF-8 byte cap
+    (`MAX_DOCUMENT_BYTES`, paired by comment with the adapter's `MAX_MARKDOWN_BYTES`; change both
+    together) and 5 000 sections per version. Both are fatal for that file (the file must change, so
+    not retryable) and write nothing. The heading scan was quadratic on a 1 MiB line of alternating
+    ` #`; it is now linear.
+34. The 005 repo-wide scans (`unwrapUntrusted` callers, `knowledge:adopt`, event-name clashes) prefilter
+    on raw text needles before running the AST comment stripper, and share one directory walk per
+    test file. A needle list must cover every alternative of the scan's regex.
+
+### Decisions waiting on Pavlo — 005 Phases 1–2 (index; detail in "005 Phases 1–2 (T001–T021) — judgment calls" above)
+
+- #18: new unadopted expectation versions on every document version (before T026) vs a declaration table.
+- #27: the SET-able privileged-write bypass (affects every append-only table, not only 005).
+- #29: where the constraint↔grant tie is enforced (writer T030 plus reader T089, or a DB constraint).
+- #17: nothing marks a document `deleted_at_source` yet, so file renames stay in conflict.

@@ -1879,3 +1879,25 @@ stage 1 is the `/investigate` MVP and `make intake-smoke`.
   verification — Proposed, no dependency added); C-96 and C-97 Proposed; glossary gains the intake terms.
 - 012 FR-001 and plan gain `packages/domain/intake`; 012 T098/T102/T103/T104 are marked superseded.
 - Open items that need a human before stage 1 ships: QUESTIONS.md "014" and research U-01..U-08.
+
+## 0.58.0 — 2026-10-10
+
+005 phases 1–2 (T001–T021): the foundations the knowledge feature's six stories stand on.
+
+- Schema `knowledge` (migrations `20261006000000`, `…010000`, `…020000`, each reversible): sources,
+  documents, append-only versions, sections with a generated `simple` full-text vector, expectations,
+  `anchor_grant` (one set-once revocation record; a grant must cite an adoption of its own version),
+  human-only `adoption_record`, constraints with no unique index, and `section_embedding`
+  list-partitioned on `tenant_id` (HNSW propagated from the parent, no default partition, loud
+  failure for an unprovisioned tenant). Append-only is enforced by database triggers, not by
+  repositories.
+- Repository-markdown ingest: `IngestDocumentVersion` (one transaction, outbox event inside it,
+  `FRONT_MATTER_INVALID` leaves the previous version standing), stable-key matching, authorship and
+  freshness from the host's commit data, never self-reported. Tenant-scoped finders.
+- `UntrustedText`, `HumanActorRef`, the `knowledge:adopt` capability (declared, served by nothing),
+  five namespaced outbox events, `document_excerpt` evidence recording.
+- Read-only GitLab (markdown, history, merge requests, issues) and OpenAPI/test-name adapter ports.
+- ADR 0017 (`yaml` for front matter), ADR 0004 amended (`simple` text-search configuration),
+  `make knowledge-corpus` (the disagreement corpus).
+- Not built: phase 3 onwards (anchor resolution, adoption writers T025/T026, retrieval).
+  Judgment calls and four decisions for Pavlo are in QUESTIONS.md, "005 Phases 1–2".
